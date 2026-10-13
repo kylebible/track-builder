@@ -34,6 +34,37 @@ Live site: https://kylebible.github.io/track-builder/
 Joints are never stored. Two ends count as joined whenever they mate within
 the joint play, so a loop that closes in the app closes on the floor.
 
+## Running trains
+
+Open **Trains** in the toolbar (Y). Tap engines and cars to build a train
+(the first one is the front), turn any of them round with ⇄, then **Put on
+track** and tap the track. ▶ and ◀ switch the engines on forward or in
+reverse. Tap a switch's yellow knob to change which way it sends trains;
+the yellow stripe shows the way it is set.
+
+Each vehicle has a north magnet at the front and a south one at the back
+(red and blue on the models), so a car turned the wrong way pushes away
+instead of coupling, like the real ones.
+
+The simulation (`src/trains/sim.ts`) keeps every axle on the track
+centreline, since the grooves do, and works out each vehicle's motion
+along the track from its motor, rolling drag, flange drag on curves (worse
+for a long rigid wheelbase on a tight curve), the pull and push through
+each magnet, and wheels climbing over gaps and rough joints. It flags a
+train, with a red ring where it happened, when it:
+
+- runs off an open end, or comes off at a gap or a badly lined-up joint,
+- stops against a buffer stop,
+- stalls: the motor is on but the drag is more than it can pull, with the
+  numbers and the main cause (a tight curve, a gap, or just too much load),
+- spins its wheels, or its engines push against each other,
+- crashes into another train or its own tail.
+
+It also says when a coupling comes apart, pulled too hard or with the
+magnets slid off each other on a bend. Every force figure in `PHYSICS` and
+every vehicle size in `src/trains/stock.ts` is an estimate to tune against
+real trains, not a measurement.
+
 ## Development
 
 ```sh

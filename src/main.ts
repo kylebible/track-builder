@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Editor } from './builder/editor';
+import { Trains } from './trains/trains';
 import './style.css';
 
 const container = document.getElementById('app')!;
@@ -72,6 +73,8 @@ const editor = new Editor(scene, camera, orbit, {
   onFit: fitView,
 });
 
+const trains = new Trains(scene, camera, editor, container, document.getElementById('toolbar')!);
+
 scene.add(new THREE.HemisphereLight(0xffffff, 0xcfc4b0, 1.5));
 const sun = new THREE.DirectionalLight(0xfff8ee, 2.0);
 sun.position.set(700, 1800, 900);
@@ -116,8 +119,9 @@ renderer.setAnimationLoop((time) => {
   }
   orbit.update();
   editor.tick(time);
+  trains.tick(time);
   renderer.render(scene, camera);
 });
 
 // Handy for poking at the layout from the browser console.
-Object.assign(window, { editor, fitView });
+Object.assign(window, { editor, trains, fitView });

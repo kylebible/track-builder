@@ -1,0 +1,49 @@
+/* The Trains panel, floating over the right of the view. */
+#trains { position: absolute; top: 64px; right: 12px; width: 320px; max-height: calc(100% - 140px); overflow-y: auto; box-sizing: border-box; padding: 12px 14px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 10px 40px rgba(60, 40, 10, 0.18); font-size: 13px; z-index: 3; }
+#trains[hidden] { display: none; }
+#trains header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+#trains h2 { font-size: 16px; margin: 0; }
+#trains h3 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 14px 0 6px; }
+#trains button { font: inherit; cursor: pointer; }
+#trains button:disabled { opacity: 0.4; cursor: default; }
+.tr-close { border: 0; background: transparent; font-size: 22px !important; line-height: 1; padding: 0 4px; color: var(--muted); }
+.tr-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.tr-row .seg { flex: none; }
+.tr-row .seg button { padding: 5px 9px; }
+.tr-btn { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font-weight: 600 !important; }
+.tr-btn:hover:not(:disabled) { border-color: var(--line-strong); }
+.tr-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tr-btn.primary.active { background: #fff; color: var(--accent); }
+.tr-btn.danger:hover { color: var(--danger); }
+.tr-stock { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.tr-tile { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 4px; background: #fff; border: 1px solid var(--line); border-radius: 10px; font-size: 12px !important; font-weight: 600 !important; }
+.tr-tile:hover { border-color: var(--line-strong); box-shadow: var(--shadow); }
+.tr-tile svg { height: 30px; width: auto; }
+.tr-consist { margin-top: 10px; }
+.tr-chain { display: flex; flex-direction: row-reverse; align-items: center; gap: 2px; overflow-x: auto; padding: 8px; background: #f1eadd; border-radius: 10px; }
+.tr-chip { flex: none; display: flex; flex-direction: column; align-items: center; }
+.tr-chip svg { height: 28px; width: auto; }
+.tr-chip-actions { display: flex; gap: 2px; }
+.tr-chip-actions button { border: 0; background: #fff; border-radius: 6px; padding: 0 5px; font-size: 12px !important; line-height: 18px; }
+.tr-link { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #1f9d55; margin-bottom: 18px; }
+.tr-link.bad { width: auto; height: auto; padding: 0 4px; border-radius: 6px; background: var(--danger); color: #fff; font-weight: 700; font-size: 11px; }
+.tr-note { margin: 6px 0 8px; color: var(--muted); font-size: 12px; }
+.tr-note.warn { color: var(--danger); font-weight: 600; }
+.tr-empty { color: var(--muted); font-size: 12px; margin: 4px 0; list-style: none; }
+.tr-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.tr-train { padding: 8px 10px; background: #fff; border: 1px solid var(--line); border-radius: 10px; }
+.tr-train.stuck { border-color: #f2b2a8; background: #fdf1ef; }
+.tr-train-head { display: flex; justify-content: space-between; align-items: baseline; }
+.tr-cars { color: var(--muted); font-size: 12px; }
+.tr-status { margin: 4px 0 8px; line-height: 1.35; }
+.tr-train.stuck .tr-status { color: #a8281c; font-weight: 600; }
+.seg.drive button.on { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(60, 40, 10, 0.15); }
+.tr-hint { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.tr-toast { position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%); max-width: min(520px, calc(100% - 32px)); padding: 8px 14px; background: #fff4e5; border: 1px solid #f2c894; border-radius: 12px; box-shadow: var(--shadow); font-size: 13px; font-weight: 600; text-align: center; pointer-events: none; z-index: 3; }
+.tr-toast[hidden] { display: none; }
+#trains-button[aria-pressed='true'] { background: var(--accent-soft, #e3f3ea); }
+#app.placing-train canvas { cursor: crosshair; }
+
+@media (max-width: 700px) {
+  #trains { top: auto; bottom: 0; right: 0; left: 0; width: auto; max-height: 55%; border-radius: 16px 16px 0 0; }
+}
