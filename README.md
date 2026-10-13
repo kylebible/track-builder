@@ -31,6 +31,25 @@ Live site: https://kylebible.github.io/track-builder/
   (Delete), fit the layout in view (V), undo and redo (Ctrl+Z,
   Ctrl+Shift+Z). The ? button lists them all.
 
+## Planning tools
+
+- **Parts** lists how many of each piece the layout uses, with every peg and
+  hole version on its own line (left and right curves are the same piece
+  turned over, so they count together). Copy puts the list on the
+  clipboard as text.
+- **Check** looks for what would go wrong on the floor: ends that nearly
+  meet but sit outside the joint play (a loop that doesn't quite close),
+  two pegs or two holes meeting, track running into other track, and open
+  ends. Tap an item to fly to it; problems show as red rings while the
+  check is open. Thresholds live in `src/planning/check.ts`.
+- **Save & share**: the layout saves in the browser as you build. Download
+  a layout file, open one, start afresh (undo brings the old layout back),
+  or copy a share link. The link carries the whole layout in its `#layout=`
+  part, so nothing is uploaded anywhere.
+
+Layout files are JSON (`src/planning/file.ts`): each piece's catalog id,
+position in mm and heading in degrees.
+
 Joints are never stored. Two ends count as joined whenever they mate within
 the joint play, so a loop that closes in the app closes on the floor.
 

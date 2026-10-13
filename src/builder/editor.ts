@@ -68,10 +68,21 @@ export interface EditorDom {
   buttons: Record<'undo' | 'redo' | 'rotateLeft' | 'rotateRight' | 'flip' | 'swap' | 'section' | 'remove' | 'fit', HTMLButtonElement>;
   /** Frame the whole layout in the view. */
   onFit: () => void;
+  /** The layout to start with, such as the one saved last time. */
+  initial?: Layout;
+  /** Called whenever the layout itself changes: an edit, undo or redo, or a layout loaded. */
+  onChange?: (layout: Layout) => void;
+}
+
+/** A spot the layout check wants looked at. */
+export interface Mark {
+  at: Vec2;
+  /** Highlighted, because it is the one being looked at. */
+  focused: boolean;
 }
 
 export class Editor {
-  private readonly history = new History(EMPTY_LAYOUT);
+  private readonly history: History;
   private selection: Selection = NONE;
   private drag: Drag | null = null;
   private readonly view: LayoutView;
@@ -85,6 +96,7 @@ export class Editor {
     private readonly controls: { enabled: boolean; target: THREE.Vector3 },
     private readonly dom: EditorDom,
   ) {
+    this.history = new History(dom.initial ?? EMPTY_LAYOUT);
     this.view = new LayoutView(scene);
     this.palette = new Palette(dom.palette, (shape) => this.pick(shape), () => this.refresh());
     // Capture phase on the canvas's container, so a press on a piece is
@@ -120,6 +132,39 @@ export class Editor {
   /** The placed pieces' three.js objects, for framing the view. */
   get pieceObjects(): THREE.Object3D {
     return this.view.pickables[1];
+  }
+
+  /** Replace the whole layout, as one step that undo can take back. */
+  load(layout: Layout): void {
+    this.commit(layout, NONE);
+  }
+
+  /** Frame the whole layout in the view. */
+  fit(): void {
+    this.dom.onFit();
+  }
+
+  /** Select some pieces, as if they had been clicked. */
+  selectPieces(uids: Iterable<string>): void {
+    const exists = new Set(this.layout.pieces.map((p) => p.uid));
+    const set = new Set([...uids].filter((u) => exists.has(u)));
+    this.selection = set.size ? { kind: 'pieces', uids: set } : NONE;
+    this.refresh();
+  }
+
+  /** Select an open end to build from. */
+  selectEnd(end: EndRef): void {
+    this.selection = { kind: 'end', end };
+    this.selection = this.validSelection();
+    this.refresh();
+  }
+
+  private marks: Mark[] = [];
+
+  /** Show rings where the layout check found problems. */
+  setMarks(marks: Mark[]): void {
+    this.marks = marks;
+    this.refresh();
   }
 
   // ---- edits -------------------------------------------------------------
@@ -289,7 +334,7 @@ export class Editor {
     const [markers, pieces] = this.view.pickables;
     // Objects added since the last frame have no world matrix yet.
     this.view.root.updateMatrixWorld();
-    const m = this.raycaster.intersectObject(markers, true)[0];
+    const m = this.raycaster.intersectObject(markers, true).find((i) => i.object.userData.end);
     if (m) return { end: m.object.userData.end as EndRef };
     const p = this.raycaster.intersectObject(pieces, true)[0];
     if (p) return { uid: p.object.userData.uid as string };
@@ -447,7 +492,8 @@ export class Editor {
   private flashTimer = 0;
   private flashText = '';
 
-  private flash(text: string): void {
+  /** Show a message in the status bar for a few seconds. */
+  flash(text: string): void {
     this.flashText = text;
     window.clearTimeout(this.flashTimer);
     this.flashTimer = window.setTimeout(() => {
@@ -456,6 +502,8 @@ export class Editor {
     }, 3000);
     this.refresh();
   }
+
+  private notified: Layout | null = null;
 
   private refresh(): void {
     const drag = this.drag?.active ? this.drag : null;
@@ -470,7 +518,12 @@ export class Editor {
       selectedPieces: s.kind === 'pieces' ? s.uids : new Set(),
       selectedEnd: s.kind === 'end' ? s.end : null,
       snapAt,
+      marks: drag ? [] : this.marks,
     });
+    if (this.layout !== this.notified) {
+      this.notified = this.layout;
+      this.dom.onChange?.(this.layout);
+    }
 
     const end = s.kind === 'end' ? s.end : null;
     const target = end && this.genderOf(end);
