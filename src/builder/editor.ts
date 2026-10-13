@@ -6,6 +6,7 @@ import { History } from '../layout/history';
 import {
   addPiece,
   canExtend,
+  centerOf,
   dragContext,
   EMPTY_LAYOUT,
   extendFrom,
@@ -59,6 +60,29 @@ interface Drag {
   flexed: FlexResult | null;
 }
 
+/** A piece being dragged out of the palette, and where it would go if let go now. */
+interface PaletteDrag {
+  pointerId: number;
+  shape: Shape;
+  /** Null while the pointer is off the floor (over the palette or a panel). */
+  drop: Drop | null;
+}
+
+interface Drop {
+  layout: Layout;
+  uid: string;
+  /** What to select once it's down: the end to keep building from. */
+  after: Selection;
+  /** The open end it joins, if it was brought near one. */
+  joins: EndRef | null;
+}
+
+/**
+ * A piece dragged from the palette joins an open end when the pointer is
+ * this close to where the joined piece's middle would be, or to the end itself.
+ */
+const DROP_CAPTURE_MM = { middle: 110, end: 70 };
+
 export interface EditorDom {
   canvas: HTMLElement;
   palette: HTMLElement;
@@ -85,6 +109,7 @@ export class Editor {
   private readonly history: History;
   private selection: Selection = NONE;
   private drag: Drag | null = null;
+  private paletteDrag: PaletteDrag | null = null;
   private readonly view: LayoutView;
   private readonly palette: Palette;
   private readonly raycaster = new THREE.Raycaster();
@@ -98,7 +123,12 @@ export class Editor {
   ) {
     this.history = new History(dom.initial ?? EMPTY_LAYOUT);
     this.view = new LayoutView(scene);
-    this.palette = new Palette(dom.palette, (shape) => this.pick(shape), () => this.refresh());
+    this.palette = new Palette(
+      dom.palette,
+      (shape) => this.pick(shape),
+      () => this.refresh(),
+      (shape, e) => this.startPaletteDrag(shape, e),
+    );
     // Capture phase on the canvas's container, so a press on a piece is
     // claimed before the orbit controls on the canvas start turning the camera.
     dom.canvas.addEventListener('pointerdown', (e) => this.pointerDown(e), { capture: true });
@@ -201,6 +231,42 @@ export class Editor {
     const { layout, uid } = addPiece(this.layout, pieceId, { ...spot, angle: 0 }, flipFor(pieceId, ends[0].id, hand));
     const next = ends[1] ?? ends[0];
     this.commit(layout, { kind: 'end', end: { uid, connectorId: next.id } });
+  }
+
+  /**
+   * Where a palette piece would go if let go at `at`: onto the nearest open
+   * end it fits, placed exactly as a tap on that end would, or loose with
+   * its middle under the pointer.
+   */
+  private dropAt(shape: Shape, at: Vec2): Drop {
+    const hand = this.palette.hand;
+    let best: (Drop & { distance: number }) | null = null;
+    for (const end of openEnds(this.layout)) {
+      const target = end.connector.gender;
+      const pieceId = variantFor(shape, this.palette.ends, target);
+      if (!canExtend(this.layout, end, pieceId)) continue;
+      const attach = attachEnd(pieceId, target);
+      const ext = extendFrom(this.layout, end, pieceId, flipFor(pieceId, attach, hand), attach);
+      if (!ext) continue;
+      const middle = centerOf(ext.layout, new Set([ext.uid]));
+      const distance = Math.hypot(middle.x - at.x, middle.y - at.y);
+      const toEnd = Math.hypot(end.connector.pose.x - at.x, end.connector.pose.y - at.y);
+      if (distance > DROP_CAPTURE_MM.middle && toEnd > DROP_CAPTURE_MM.end) continue;
+      if (best && distance >= best.distance) continue;
+      const joins = { uid: end.uid, connectorId: end.connectorId };
+      const after: Selection = ext.next ? { kind: 'end', end: ext.next } : { kind: 'pieces', uids: new Set([ext.uid]) };
+      best = { layout: ext.layout, uid: ext.uid, after, joins, distance };
+    }
+    if (best) return best;
+
+    const pieceId = variantFor(shape, this.palette.ends, null);
+    const ends = getPiece(pieceId).connectors;
+    const flipped = flipFor(pieceId, ends[0].id, hand);
+    const placed = addPiece(this.layout, pieceId, IDENTITY, flipped);
+    const middle = centerOf(placed.layout, new Set([placed.uid]));
+    const { layout, uid } = addPiece(this.layout, pieceId, { x: at.x - middle.x, y: at.y - middle.y, angle: 0 }, flipped);
+    const next = ends[1] ?? ends[0];
+    return { layout, uid, after: { kind: 'end', end: { uid, connectorId: next.id } }, joins: null };
   }
 
   /** The pieces the toolbar acts on: the selection, or the piece with the selected end. */
@@ -350,6 +416,37 @@ export class Editor {
 
   private pressStart: Vec2 | null = null;
 
+  /** Whether the pointer is over the 3D view itself, not the palette or a panel on top. */
+  private overFloor(e: PointerEvent): boolean {
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    return under instanceof HTMLCanvasElement && this.dom.canvas.contains(under);
+  }
+
+  private startPaletteDrag(shape: Shape, e: PointerEvent): void {
+    if (this.drag || this.paletteDrag) return;
+    this.paletteDrag = { pointerId: e.pointerId, shape, drop: null };
+    document.body.classList.add('dragging-piece');
+    this.movePaletteDrag(e);
+  }
+
+  private movePaletteDrag(e: PointerEvent): void {
+    const drag = this.paletteDrag!;
+    const at = this.overFloor(e) ? this.floorPoint(e) : null;
+    drag.drop = at && this.dropAt(drag.shape, at);
+    this.refresh();
+  }
+
+  private endPaletteDrag(e: PointerEvent): void {
+    const drag = this.paletteDrag!;
+    this.paletteDrag = null;
+    document.body.classList.remove('dragging-piece');
+    // Let go over the palette or a panel, or cancelled: put it back.
+    const at = e.type === 'pointerup' && this.overFloor(e) ? this.floorPoint(e) : null;
+    const drop = at && this.dropAt(drag.shape, at);
+    if (drop) this.commit(drop.layout, drop.after);
+    else this.refresh();
+  }
+
   private pointerDown(e: PointerEvent): void {
     if (e.button !== 0) return;
     this.pressStart = { x: e.clientX, y: e.clientY };
@@ -387,6 +484,10 @@ export class Editor {
   }
 
   private pointerMove(e: PointerEvent): void {
+    if (this.paletteDrag?.pointerId === e.pointerId) {
+      this.movePaletteDrag(e);
+      return;
+    }
     const drag = this.drag;
     if (!drag || e.pointerId !== drag.pointerId) return;
     if (!drag.active) {
@@ -406,6 +507,10 @@ export class Editor {
   }
 
   private pointerUp(e: PointerEvent): void {
+    if (this.paletteDrag?.pointerId === e.pointerId) {
+      this.endPaletteDrag(e);
+      return;
+    }
     const drag = this.drag;
     const press = this.pressStart;
     this.pressStart = null;
@@ -507,18 +612,25 @@ export class Editor {
 
   private refresh(): void {
     const drag = this.drag?.active ? this.drag : null;
-    const layout = drag ? this.dragged(drag) : this.layout;
+    const drop = this.paletteDrag?.drop ?? null;
+    const layout = drop ? drop.layout : drag ? this.dragged(drag) : this.layout;
     const joints = findJoints(layout);
     const open = openEnds(layout, joints);
     const s = this.selection;
-    const snapAt = drag?.snap ? this.snapPoint(drag) : drag?.flexed?.closed ? worldEnd(layout, drag.flexed.closed.b).connector.pose : null;
+    const snapAt = drop
+      ? drop.joins && worldEnd(layout, drop.joins).connector.pose
+      : drag?.snap
+        ? this.snapPoint(drag)
+        : drag?.flexed?.closed
+          ? worldEnd(layout, drag.flexed.closed.b).connector.pose
+          : null;
     this.view.update({
       layout,
       openEnds: open,
-      selectedPieces: s.kind === 'pieces' ? s.uids : new Set(),
-      selectedEnd: s.kind === 'end' ? s.end : null,
+      selectedPieces: drop ? new Set([drop.uid]) : s.kind === 'pieces' ? s.uids : new Set(),
+      selectedEnd: drop ? null : s.kind === 'end' ? s.end : null,
       snapAt,
-      marks: drag ? [] : this.marks,
+      marks: drag || drop ? [] : this.marks,
     });
     if (this.layout !== this.notified) {
       this.notified = this.layout;
@@ -566,6 +678,11 @@ export class Editor {
     const counts = layout.pieces.length
       ? [plural(layout.pieces.length, 'piece'), plural(joints, 'joint'), plural(open, 'open end')].join(' · ')
       : '';
+    if (this.paletteDrag) {
+      const drop = this.paletteDrag.drop;
+      if (!drop) return ['Drag it onto the floor, or near an open end to join it on.', counts];
+      return [drop.joins ? 'Let go to join.' : 'Let go to put it down, or bring it near an open end.', counts];
+    }
     const drag = this.drag?.active ? this.drag : null;
     if (drag?.flexed) {
       if (drag.flexed.closed) return ['The joints give enough to close it: let go to join.', counts];
