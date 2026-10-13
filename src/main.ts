@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Editor } from './builder/editor';
+import type { Vec2 } from './geometry/pose';
+import { codeFromHash, decodeLayout, LayoutFileError } from './planning/file';
+import { PlanningPanel } from './planning/panel';
+import { autosave, loadAutosave } from './planning/storage';
 import { Trains } from './trains/trains';
 import './style.css';
 
@@ -54,6 +58,23 @@ function fitView(): void {
   };
 }
 
+/** Bring a spot on the floor to the middle of the view, close enough to see a joint. */
+function focusOn(at: Vec2): void {
+  const target = new THREE.Vector3(at.x, 0, -at.y);
+  const offset = camera.position.clone().sub(orbit.target);
+  offset.setLength(Math.min(offset.length(), 900));
+  flight = {
+    fromTarget: orbit.target.clone(),
+    toTarget: target,
+    fromCamera: camera.position.clone(),
+    toCamera: target.clone().add(offset),
+    start: performance.now(),
+  };
+}
+
+let saved = true;
+let planning: PlanningPanel | null = null;
+
 const editor = new Editor(scene, camera, orbit, {
   canvas: container,
   palette: document.getElementById('palette')!,
@@ -71,7 +92,39 @@ const editor = new Editor(scene, camera, orbit, {
     fit: button('fit'),
   },
   onFit: fitView,
+  initial: loadAutosave() ?? undefined,
+  onChange: (layout) => {
+    saved = autosave(layout);
+    planning?.update(layout);
+  },
 });
+
+planning = new PlanningPanel(editor, {
+  partsButton: button('parts-button'),
+  partsPanel: document.getElementById('parts-panel')!,
+  checkButton: button('check-button'),
+  checkPanel: document.getElementById('check-panel')!,
+  sharePanel: document.getElementById('share-panel')!,
+  onFocus: focusOn,
+  saved: () => saved,
+});
+planning.update(editor.layout);
+
+/** Open the layout a share link carries, then tidy the address so a reload keeps later edits. */
+async function openSharedLayout(): Promise<void> {
+  const code = codeFromHash(location.hash);
+  if (!code) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  try {
+    const hadOwn = editor.layout.pieces.length > 0;
+    editor.load(await decodeLayout(code));
+    editor.flash(hadOwn ? 'Opened a shared layout. Undo brings back yours.' : 'Opened a shared layout.');
+    fitView();
+  } catch (e) {
+    editor.flash(e instanceof LayoutFileError ? e.message : "Couldn't open that share link.");
+  }
+}
+window.addEventListener('hashchange', openSharedLayout);
 
 const trains = new Trains(scene, camera, editor, container, document.getElementById('toolbar')!);
 
@@ -122,6 +175,9 @@ renderer.setAnimationLoop((time) => {
   trains.tick(time);
   renderer.render(scene, camera);
 });
+
+if (codeFromHash(location.hash)) openSharedLayout();
+else if (editor.layout.pieces.length) fitView();
 
 // Handy for poking at the layout from the browser console.
 Object.assign(window, { editor, trains, fitView });
