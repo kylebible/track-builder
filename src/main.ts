@@ -5,6 +5,7 @@ import type { Vec2 } from './geometry/pose';
 import { codeFromHash, decodeLayout, LayoutFileError } from './planning/file';
 import { PlanningPanel } from './planning/panel';
 import { autosave, loadAutosave } from './planning/storage';
+import { Trains } from './trains/trains';
 import './style.css';
 
 const container = document.getElementById('app')!;
@@ -125,6 +126,8 @@ async function openSharedLayout(): Promise<void> {
 }
 window.addEventListener('hashchange', openSharedLayout);
 
+const trains = new Trains(scene, camera, editor, container, document.getElementById('toolbar')!);
+
 scene.add(new THREE.HemisphereLight(0xffffff, 0xcfc4b0, 1.5));
 const sun = new THREE.DirectionalLight(0xfff8ee, 2.0);
 sun.position.set(700, 1800, 900);
@@ -169,6 +172,7 @@ renderer.setAnimationLoop((time) => {
   }
   orbit.update();
   editor.tick(time);
+  trains.tick(time);
   renderer.render(scene, camera);
 });
 
@@ -176,4 +180,4 @@ if (codeFromHash(location.hash)) openSharedLayout();
 else if (editor.layout.pieces.length) fitView();
 
 // Handy for poking at the layout from the browser console.
-Object.assign(window, { editor, fitView });
+Object.assign(window, { editor, trains, fitView });
