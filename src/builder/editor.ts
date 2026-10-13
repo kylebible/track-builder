@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { deg, IDENTITY, type Pose, type Vec2 } from '../geometry/pose';
 import { getPiece } from '../pieces/catalog';
+import type { Gender } from '../pieces/types';
 import { History } from '../layout/history';
 import {
   addPiece,
@@ -9,6 +10,7 @@ import {
   EMPTY_LAYOUT,
   extendFrom,
   findJoints,
+  findPiece,
   findSnap,
   flipPiece,
   mirrorPieces,
@@ -19,6 +21,7 @@ import {
   sectionOf,
   swapEnd,
   transformPieces,
+  worldEnd,
   worldEnds,
   type DragContext,
   type EndRef,
@@ -26,6 +29,7 @@ import {
   type Snap,
 } from '../layout/layout';
 import { Palette } from './palette';
+import { attachEnd, flipFor, hasEndsChoice, SHAPES, variantFor, type Shape } from './variants';
 import { LayoutView } from './view';
 
 // Turns pointer, keyboard and toolbar input into layout edits. Every edit
@@ -54,15 +58,17 @@ export interface EditorDom {
   canvas: HTMLElement;
   palette: HTMLElement;
   status: HTMLElement;
-  buttons: Record<'undo' | 'redo' | 'rotateLeft' | 'rotateRight' | 'flip' | 'swap' | 'section' | 'remove', HTMLButtonElement>;
+  /** Shown while the layout is empty. */
+  empty: HTMLElement;
+  buttons: Record<'undo' | 'redo' | 'rotateLeft' | 'rotateRight' | 'flip' | 'swap' | 'section' | 'remove' | 'fit', HTMLButtonElement>;
+  /** Frame the whole layout in the view. */
+  onFit: () => void;
 }
 
 export class Editor {
   private readonly history = new History(EMPTY_LAYOUT);
   private selection: Selection = NONE;
   private drag: Drag | null = null;
-  /** Remember flips per piece, so a run of right-hand curves stays right-handed. */
-  private readonly flipPreference = new Map<string, boolean>();
   private readonly view: LayoutView;
   private readonly palette: Palette;
   private readonly raycaster = new THREE.Raycaster();
@@ -75,7 +81,7 @@ export class Editor {
     private readonly dom: EditorDom,
   ) {
     this.view = new LayoutView(scene);
-    this.palette = new Palette(dom.palette, (id) => this.pick(id));
+    this.palette = new Palette(dom.palette, (shape) => this.pick(shape), () => this.refresh());
     // Capture phase on the canvas's container, so a press on a piece is
     // claimed before the orbit controls on the canvas start turning the camera.
     dom.canvas.addEventListener('pointerdown', (e) => this.pointerDown(e), { capture: true });
@@ -93,11 +99,22 @@ export class Editor {
     b.swap.onclick = () => this.swap();
     b.section.onclick = () => this.selectSection();
     b.remove.onclick = () => this.remove();
+    b.fit.onclick = () => dom.onFit();
     this.refresh();
   }
 
   get layout(): Layout {
     return this.history.current;
+  }
+
+  /** Per-frame animation; `time` in ms. */
+  tick(time: number): void {
+    this.view.tick(time);
+  }
+
+  /** The placed pieces' three.js objects, for framing the view. */
+  get pieceObjects(): THREE.Object3D {
+    return this.view.pickables[1];
   }
 
   // ---- edits -------------------------------------------------------------
@@ -109,21 +126,29 @@ export class Editor {
     this.refresh();
   }
 
-  /** A palette tile was tapped: add onto the selected end, or drop the piece loose. */
-  pick(pieceId: string): void {
+  /**
+   * A palette tile was tapped: add onto the selected end, or drop the piece
+   * loose. The palette's Turn and Ends settings pick the exact version.
+   */
+  pick(shape: Shape): void {
+    const hand = this.palette.hand;
     if (this.selection.kind === 'end') {
       const end = this.selection.end;
+      const target = this.genderOf(end);
+      const pieceId = variantFor(shape, this.palette.ends, target);
       if (!canExtend(this.layout, end, pieceId)) {
-        this.flash(`A ${getPiece(pieceId).name.toLowerCase()} has no end that fits this ${this.genderOf(end)}.`);
+        this.flash(`A ${getPiece(pieceId).name.toLowerCase()} has no end that fits this ${target ?? 'end'}.`);
         return;
       }
-      const ext = extendFrom(this.layout, end, pieceId, this.flipPreference.get(pieceId) ?? false)!;
+      const attach = attachEnd(pieceId, target);
+      const ext = extendFrom(this.layout, end, pieceId, flipFor(pieceId, attach, hand), attach)!;
       this.commit(ext.layout, ext.next ? { kind: 'end', end: ext.next } : { kind: 'pieces', uids: new Set([ext.uid]) });
       return;
     }
-    const spot = this.freeSpot();
-    const { layout, uid } = addPiece(this.layout, pieceId, { ...spot, angle: 0 }, this.flipPreference.get(pieceId) ?? false);
+    const pieceId = variantFor(shape, this.palette.ends, null);
     const ends = getPiece(pieceId).connectors;
+    const spot = this.freeSpot();
+    const { layout, uid } = addPiece(this.layout, pieceId, { ...spot, angle: 0 }, flipFor(pieceId, ends[0].id, hand));
     const next = ends[1] ?? ends[0];
     this.commit(layout, { kind: 'end', end: { uid, connectorId: next.id } });
   }
@@ -145,10 +170,7 @@ export class Editor {
     if (!uids.size) return;
     if (uids.size === 1) {
       const [uid] = uids;
-      const next = flipPiece(this.layout, uid);
-      const piece = next.pieces.find((p) => p.uid === uid)!;
-      this.flipPreference.set(piece.pieceId, piece.flipped);
-      this.commit(next);
+      this.commit(flipPiece(this.layout, uid));
     } else {
       this.commit(mirrorPieces(this.layout, uids));
     }
@@ -158,14 +180,40 @@ export class Editor {
     const uids = this.targets();
     if (uids.size !== 1) return;
     const [uid] = uids;
-    const next = swapEnd(this.layout, uid);
-    if (!next) {
+    const swapped = swapEnd(this.layout, uid);
+    const result = swapped ? { layout: swapped, uid } : this.swapVariant(uid);
+    if (!result) {
       this.flash('This piece only fits one way round here.');
       return;
     }
+    const next = result.layout;
     // Keep building from the new piece's open end.
-    const open = openEnds(next).find((e) => e.uid === uid);
+    const open = openEnds(next).find((e) => e.uid === result.uid);
     this.commit(next, open ? { kind: 'end', end: open } : this.selection);
+  }
+
+  /**
+   * Turn a switch round where its own pegs and holes won't allow it, by
+   * swapping it for its twin with the pegs the other way round.
+   */
+  private swapVariant(uid: string): { layout: Layout; uid: string } | null {
+    const piece = findPiece(this.layout, uid);
+    const shape = SHAPES.find((s) => s.ids.includes(piece.pieceId));
+    if (!shape || hasEndsChoice(shape)) return null;
+    const joints = findJoints(this.layout);
+    const joined = worldEnds(piece).filter((e) => partnerOf(joints, e));
+    if (joined.length !== 1) return null;
+    const partner = partnerOf(joints, joined[0])!;
+    const rest = removePieces(this.layout, new Set([uid]));
+    const target = worldEnd(rest, partner).connector.gender;
+    for (const id of shape.ids.filter((i) => i !== piece.pieceId)) {
+      for (const c of getPiece(id).connectors) {
+        if (c.gender === target || c.id === joined[0].connectorId) continue;
+        const ext = extendFrom(rest, partner, id, flipFor(id, c.id, this.palette.hand), c.id);
+        if (ext) return { layout: ext.layout, uid: ext.uid };
+      }
+    }
+    return null;
   }
 
   remove(): void {
@@ -351,6 +399,10 @@ export class Editor {
       this.swap();
     } else if (k === 'a') {
       this.selectSection();
+    } else if (k === 't') {
+      this.palette.setHand(this.palette.hand === 'left' ? 'right' : 'left');
+    } else if (k === 'v') {
+      this.dom.onFit();
     } else if (k === 'delete' || k === 'backspace') {
       this.remove();
     } else if (k === 'escape') {
@@ -364,8 +416,8 @@ export class Editor {
 
   // ---- helpers -----------------------------------------------------------
 
-  private genderOf(end: EndRef): string {
-    return openEnds(this.layout).find((e) => e.uid === end.uid && e.connectorId === end.connectorId)?.connector.gender ?? 'end';
+  private genderOf(end: EndRef): Gender | null {
+    return openEnds(this.layout).find((e) => e.uid === end.uid && e.connectorId === end.connectorId)?.connector.gender ?? null;
   }
 
   /** A spot near the middle of the view that no piece is sitting on. */
@@ -411,7 +463,9 @@ export class Editor {
     });
 
     const end = s.kind === 'end' ? s.end : null;
-    this.palette.setEnabled((id) => !end || canExtend(this.layout, end, id));
+    const target = end && this.genderOf(end);
+    this.palette.setEnabled((shape) => !end || canExtend(this.layout, end, variantFor(shape, this.palette.ends, target)));
+    this.dom.empty.hidden = layout.pieces.length > 0;
 
     const has = this.targets().size > 0;
     const b = this.dom.buttons;
@@ -419,8 +473,17 @@ export class Editor {
     b.redo.disabled = !this.history.canRedo;
     for (const button of [b.rotateLeft, b.rotateRight, b.flip, b.section, b.remove]) button.disabled = !has;
     b.swap.disabled = this.targets().size !== 1;
+    b.fit.disabled = layout.pieces.length === 0;
 
-    this.dom.status.textContent = this.flashText || this.describe(layout, open.length, joints.length);
+    const [hint, counts] = this.flashText ? [this.flashText, ''] : this.describe(layout, open.length, joints.length);
+    const hintEl = document.createElement('span');
+    hintEl.textContent = hint;
+    const countsEl = document.createElement('span');
+    countsEl.className = 'counts';
+    countsEl.textContent = counts;
+    this.dom.status.replaceChildren(hintEl, countsEl);
+    this.dom.status.classList.toggle('flash', !!this.flashText);
+    this.dom.status.hidden = !hint;
   }
 
   private snapPoint(drag: Drag): Vec2 {
@@ -428,13 +491,22 @@ export class Editor {
     return fixed.connector.pose;
   }
 
-  private describe(layout: Layout, open: number, joints: number): string {
+  /** A hint for what to do next, and the layout's counts. */
+  private describe(layout: Layout, open: number, joints: number): [string, string] {
     const s = this.selection;
-    const count = `${layout.pieces.length} piece${layout.pieces.length === 1 ? '' : 's'}, ${joints} joint${joints === 1 ? '' : 's'}, ${open} open end${open === 1 ? '' : 's'}.`;
-    if (this.drag?.active) return this.drag.snap ? 'Snapping on. Let go to join.' : 'Drag near an open end to snap on.';
-    if (s.kind === 'end') return `${this.genderOf(s.end) === 'peg' ? 'Peg' : 'Hole'} end selected: tap a piece to add it. ${count}`;
-    if (s.kind === 'pieces') return `${s.uids.size} selected: drag to move, or rotate, flip, delete. ${count}`;
-    if (!layout.pieces.length) return 'Tap a piece in the palette to start.';
-    return `Tap an open end to build from it. ${count}`;
+    const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+    const counts = layout.pieces.length
+      ? [plural(layout.pieces.length, 'piece'), plural(joints, 'joint'), plural(open, 'open end')].join(' · ')
+      : '';
+    if (this.drag?.active) return [this.drag.snap ? 'Let go to join.' : 'Drag near an open end to snap on.', counts];
+    if (s.kind === 'end') {
+      const what = this.genderOf(s.end) === 'peg' ? 'peg' : 'hole';
+      return [`Building from this ${what}: tap a piece to add it.`, counts];
+    }
+    if (s.kind === 'pieces') {
+      return [`${plural(s.uids.size, 'piece')} selected: drag to move, or use the toolbar.`, counts];
+    }
+    if (!layout.pieces.length) return ['', ''];
+    return ['Tap a dot on an open end to build from it.', counts];
   }
 }

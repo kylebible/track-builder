@@ -1,0 +1,99 @@
+import { normalizeAngle } from '../geometry/pose';
+import { CATALOG, getPiece, mirrorPiece } from '../pieces/catalog';
+import type { Gender, PieceCategory, PieceDef } from '../pieces/types';
+
+// The palette shows one tile per shape. Which catalog variant a tap places
+// (peg and hole pattern, flipped or not) is worked out here from the
+// palette's Turn and Ends settings and the end being built from.
+
+export type Hand = 'left' | 'right';
+/** Ends of a two-ended straight or curve: one of each, or two the same. */
+export type Ends = 'mixed' | 'pegs' | 'holes';
+
+export interface Shape {
+  key: string;
+  name: string;
+  category: PieceCategory;
+  /** Every catalog variant of this shape; the first is the usual one. */
+  ids: string[];
+}
+
+const VARIANT_SUFFIX = /-(pp|hh|peg)$/;
+
+/** Catalog pieces grouped by shape, in catalog order. */
+export const SHAPES: readonly Shape[] = (() => {
+  const shapes = new Map<string, Shape>();
+  for (const piece of CATALOG) {
+    const key = piece.id.replace(VARIANT_SUFFIX, '');
+    let shape = shapes.get(key);
+    if (!shape) {
+      // Variant names add ", two pegs" and the like; the first is the plain shape.
+      const name = piece.name.split(',')[0];
+      shapes.set(key, (shape = { key, name, category: piece.category, ids: [] }));
+    }
+    shape.ids.push(piece.id);
+  }
+  return [...shapes.values()];
+})();
+
+export function endsOf(piece: PieceDef): Ends {
+  const genders = new Set(piece.connectors.map((c) => c.gender));
+  if (genders.size === 2) return 'mixed';
+  return genders.has('peg') ? 'pegs' : 'holes';
+}
+
+/** Whether a shape comes in two-peg and two-hole versions. */
+export const hasEndsChoice = (shape: Shape): boolean => shape.category === 'straight' || shape.category === 'curve';
+
+/**
+ * The catalog piece a palette tap should place. `target` is the gender of
+ * the end being built from, if any. Switches go on trunk first and buffer
+ * stops take whichever version fits; straights and curves follow `ends`.
+ */
+export function variantFor(shape: Shape, ends: Ends, target: Gender | null): string {
+  if (hasEndsChoice(shape)) {
+    return shape.ids.find((id) => endsOf(getPiece(id)) === ends) ?? shape.ids[0];
+  }
+  if (target && (shape.category === 'switch' || shape.category === 'buffer')) {
+    const first = shape.ids.find((id) => getPiece(id).connectors[0].gender !== target);
+    if (first) return first;
+  }
+  return shape.ids[0];
+}
+
+/**
+ * How far the piece turns, summed over its other ends, when a train enters
+ * by `attachId`. Positive is left. Zero for straights, crossings and
+ * three-way switches.
+ */
+export function turnFrom(piece: PieceDef, attachId: string): number {
+  const attach = piece.connectors.find((c) => c.id === attachId)!;
+  const heading = attach.pose.angle + Math.PI;
+  return piece.connectors
+    .filter((c) => c !== attach)
+    .reduce((sum, c) => sum + normalizeAngle(c.pose.angle - heading), 0);
+}
+
+/** Whether to flip `pieceId`, entered by `attachId`, so it turns towards `hand`. */
+export function flipFor(pieceId: string, attachId: string, hand: Hand): boolean {
+  const turn = turnFrom(getPiece(pieceId), attachId);
+  if (Math.abs(turn) < 1e-6) return false;
+  return hand === 'left' ? turn < 0 : turn > 0;
+}
+
+/** The end a piece goes on by: the first one that mates with `target`, else its first end. */
+export function attachEnd(pieceId: string, target: Gender | null): string {
+  const connectors = getPiece(pieceId).connectors;
+  return (target ? connectors.find((c) => c.gender !== target) : undefined)?.id ?? connectors[0].id;
+}
+
+const mirrored = new Map<string, PieceDef>();
+
+/** The piece as the palette should draw it for `hand`, entered by its first end. */
+export function iconPiece(pieceId: string, hand: Hand): PieceDef {
+  const piece = getPiece(pieceId);
+  if (!flipFor(pieceId, piece.connectors[0].id, hand)) return piece;
+  let m = mirrored.get(pieceId);
+  if (!m) mirrored.set(pieceId, (m = mirrorPiece(piece)));
+  return m;
+}

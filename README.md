@@ -8,16 +8,22 @@ Live site: https://kylebible.github.io/track-builder/
 ## Building a layout
 
 - Tap a piece in the palette to put it down. Open ends show as dots: blue
-  for pegs, orange for holes.
+  for pegs, orange for holes, green for the end you're building from.
 - Tap an open end, then palette pieces, to keep extending from it. Pieces
   that have no end that fits are greyed out.
+- **Curves turn** (Left / Right, or T) sets which way new curves and
+  switches turn as you build outward. Mirror (F) flips one already placed.
+- **Ends** picks the peg and hole pattern for straights and curves: one of
+  each, two pegs or two holes. Switches go on trunk first and buffer stops
+  pick whichever version fits; Reverse (S) turns a switch round, swapping it
+  for its twin with the pegs the other way if it has to.
 - Drag a piece to move it. Bring an end within 30 mm and 25 degrees of an
   open end of the other gender and it snaps on (`DEFAULT_SNAP_RANGE` in
   `src/layout/layout.ts`). Shift-drag, or double-click then drag, moves the
   whole connected section.
-- Toolbar and keys: rotate 45° (R, Shift+R), flip so curves and switches turn
-  the other way (F), attach by a different end (S), select the whole section
-  (A), delete (Delete), undo and redo (Ctrl+Z, Ctrl+Shift+Z).
+- Toolbar and keys: rotate 45° (R, Shift+R), select connected (A), delete
+  (Delete), fit the layout in view (V), undo and redo (Ctrl+Z,
+  Ctrl+Shift+Z). The ? button lists them all.
 
 Joints are never stored. Two ends count as joined whenever they mate within
 the joint play, so a loop that closes in the app closes on the floor.
