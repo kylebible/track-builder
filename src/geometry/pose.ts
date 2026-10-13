@@ -43,3 +43,15 @@ export function applyPose(frame: Pose, local: Pose): Pose {
 export function distance(a: Vec2, b: Vec2): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
+
+/** The pose that undoes `p`: applyPose(invertPose(p), p) is the identity. */
+export function invertPose(p: Pose): Pose {
+  const back = rotate({ x: -p.x, y: -p.y }, -p.angle);
+  return { x: back.x, y: back.y, angle: normalizeAngle(-p.angle) };
+}
+
+/** Rotation by `angle` about the point `pivot`, as a pose transform. */
+export function rotationAbout(pivot: Vec2, angle: number): Pose {
+  const r = rotate(pivot, angle);
+  return { x: pivot.x - r.x, y: pivot.y - r.y, angle: normalizeAngle(angle) };
+}

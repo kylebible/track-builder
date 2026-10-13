@@ -5,12 +5,29 @@ building them on the floor.
 
 Live site: https://kylebible.github.io/track-builder/
 
+## Building a layout
+
+- Tap a piece in the palette to put it down. Open ends show as dots: blue
+  for pegs, orange for holes.
+- Tap an open end, then palette pieces, to keep extending from it. Pieces
+  that have no end that fits are greyed out.
+- Drag a piece to move it. Bring an end within 30 mm and 25 degrees of an
+  open end of the other gender and it snaps on (`DEFAULT_SNAP_RANGE` in
+  `src/layout/layout.ts`). Shift-drag, or double-click then drag, moves the
+  whole connected section.
+- Toolbar and keys: rotate 45° (R, Shift+R), flip so curves and switches turn
+  the other way (F), attach by a different end (S), select the whole section
+  (A), delete (Delete), undo and redo (Ctrl+Z, Ctrl+Shift+Z).
+
+Joints are never stored. Two ends count as joined whenever they mate within
+the joint play, so a loop that closes in the app closes on the floor.
+
 ## Development
 
 ```sh
 npm install
 npm run dev     # local dev server
-npm test        # geometry tests
+npm test        # geometry and layout tests
 npm run build   # type-check and build to dist/
 ```
 

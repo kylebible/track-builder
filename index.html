@@ -4,15 +4,36 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Track Builder</title>
-    
   </head>
   <body>
-    <div id="app"></div>
-    <div id="hud">
+    <aside id="sidebar">
       <h1>Track Builder</h1>
-      <p>Phase 1 piece catalog. Every piece is drawn at true size in millimetres; the grid squares are 100&nbsp;mm.</p>
-      <p class="hint">Drag to orbit, scroll to zoom, right-drag to pan.</p>
-    </div>
+      <div id="palette"></div>
+    </aside>
+    <main id="app">
+      <div id="toolbar">
+        <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
+        <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
+        <span class="sep"></span>
+        <button id="rotate-left" title="Rotate 45° left (R)">⟲ Rotate</button>
+        <button id="rotate-right" title="Rotate 45° right (Shift+R)">Rotate ⟳</button>
+        <button id="flip" title="Flip over, so left turns go right (F)">Flip</button>
+        <button id="swap" title="Attach by a different end (S)">Swap end</button>
+        <button id="section" title="Select everything joined to this (A, or double-click)">Whole section</button>
+        <button id="remove" title="Delete (Delete)">Delete</button>
+      </div>
+      <div id="status" role="status"></div>
+      <details id="help">
+        <summary>How to build</summary>
+        <ul>
+          <li>Tap a piece in the palette to put it down. Its open ends show as dots: <b class="peg">blue</b> pegs, <b class="hole">orange</b> holes.</li>
+          <li>Tap an open end, then palette pieces, to keep extending the track from it.</li>
+          <li>Drag a piece to move it; drag near an open end and it snaps on. Shift-drag, or double-click then drag, moves a whole section.</li>
+          <li>Flip turns a curve or switch the other way. Swap end attaches a piece by its other end.</li>
+          <li>Drag empty floor to orbit, scroll or pinch to zoom, right-drag to pan.</li>
+        </ul>
+      </details>
+    </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
