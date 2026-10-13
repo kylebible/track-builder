@@ -55,11 +55,22 @@ the joint play, so a loop that closes in the app closes on the floor.
 
 ## Running trains
 
-Open **Trains** in the toolbar (Y). Tap engines and cars to build a train
-(the first one is the front), turn any of them round with ⇄, then **Put on
-track** and tap the track. ▶ and ◀ switch the engines on forward or in
-reverse. Tap a switch's yellow knob to change which way it sends trains;
-the yellow stripe shows the way it is set.
+Open **Trains** in the toolbar (Y) and drag engines and cars onto the
+track. Drop one by the end of a train (a green ring shows where) and it
+couples on; drop it anywhere else on the track and it starts a new train.
+On the track, tap a car to turn it round, or drag it to lift it off and put
+it somewhere else; drop it off the track to take it away. Trains that run
+into each other nose to tail couple up.
+
+Each train carries its own controls, floating over it: ◀ ■ ▶ for the
+engines, ⇄ to turn the whole train round and ✕ to take it off. The panel
+keeps Pause, the speed and Reset. Tap a switch's yellow knob to change
+which way it sends trains; the yellow stripe shows the way it is set.
+
+The models (`src/trains/trainMesh.ts`) are built in code to look like
+wooden Brio trains: painted beech bodies, red plastic wheels and magnet
+couplers. No 3D scans are used, since none could be found with a licence
+that allows it.
 
 Each vehicle has a north magnet at the front and a south one at the back
 (red and blue on the models), so a car turned the wrong way pushes away

@@ -43,6 +43,16 @@ export class Route {
     this.segments = [{ edge, reversed, u0 }];
   }
 
+  /** An independent copy, to lay a rebuilt train on the same track. */
+  clone(): Route {
+    const copy = new Route(this.segments[0].edge, this.segments[0].reversed, this.segments[0].u0);
+    copy.segments = this.segments.map((seg) => ({ ...seg }));
+    copy.crossings = this.crossings.map((c) => ({ ...c }));
+    copy.front = this.front && { ...this.front };
+    copy.back = this.back && { ...this.back };
+    return copy;
+  }
+
   get start(): number {
     return this.segments[0].u0;
   }

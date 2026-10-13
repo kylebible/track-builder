@@ -180,4 +180,4 @@ if (codeFromHash(location.hash)) openSharedLayout();
 else if (editor.layout.pieces.length) fitView();
 
 // Handy for poking at the layout from the browser console.
-Object.assign(window, { editor, trains, fitView });
+Object.assign(window, { editor, trains, fitView, orbit });

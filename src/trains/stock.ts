@@ -33,8 +33,6 @@ export interface StockDef {
 }
 
 export const WHEEL_RADIUS = 7.5;
-/** Magnets stand this far proud of the body at each end. */
-export const MAGNET_DEPTH = 5;
 
 const BATTERY_MOTOR: Motor = { stallForceN: 0.6, freeSpeedMm: 180, grip: 0.5 };
 

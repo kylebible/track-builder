@@ -56,9 +56,12 @@ function grainTexture(): THREE.Texture | null {
   return texture;
 }
 
+/** The beech grain, shared with anything else made of wood. */
+export const WOOD_GRAIN = grainTexture();
+
 const woodMaterial = new THREE.MeshStandardMaterial({
   color: 0xe8c590,
-  map: grainTexture(),
+  map: WOOD_GRAIN,
   vertexColors: true,
   roughness: 0.68,
   flatShading: true,

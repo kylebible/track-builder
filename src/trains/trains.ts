@@ -4,20 +4,23 @@ import type { Vec2 } from '../geometry/pose';
 import type { Layout } from '../layout/layout';
 import * as D from '../pieces/dimensions';
 import { toWorld } from '../render/pieceMesh';
-import { attracts, getStock, polesOf, STOCK, type ConsistEntry, type StockDef } from './stock';
-import { TrainSim, type Train } from './sim';
-import { AXLE_HEIGHT, buildVehicle, POLE_COLOR } from './trainMesh';
+import { getStock, STOCK, type StockDef } from './stock';
+import { TrainSim, type StuckKind, type Train, type VehicleGeometry } from './sim';
+import { AXLE_HEIGHT, buildVehicle } from './trainMesh';
 import './trains.css';
 
-// The Trains panel: build a train from engines and cars, put it on the
-// track, and run it. Owns the simulation and keeps its three.js objects in
-// step with it. Clicks meant for trains (placing one, throwing a switch
-// lever) are caught before the track editor sees them.
+// Trains on the layout. Drag engines and cars from the Trains panel onto the
+// track: dropped by the end of a train they couple on, anywhere else they
+// start a new train. On the track, drag a vehicle to lift it off (into
+// another spot, or off the track to remove it) and tap one to turn it round.
+// Each train carries its own controls. Owns the simulation and keeps its
+// three.js objects in step with it; presses meant for trains are caught
+// before the track editor sees them.
 
 export interface TrainsHost {
   /** The layout as it stands now. */
   readonly layout: Layout;
-  /** The placed pieces' objects, to find where a click lands on the track. */
+  /** The placed pieces' objects, to find where a drop lands on the track. */
   readonly pieceObjects: THREE.Object3D;
 }
 
@@ -25,6 +28,10 @@ const SPEEDS = [1, 2, 4] as const;
 const LEVER_REACH = 24;
 /** How far down the chosen way the lever's stripe runs. */
 const STRIPE_MM = 110;
+/** A vehicle dropped this close to a train's end couples on. */
+const ATTACH_REACH_MM = 70;
+/** Pointer travel, in pixels, before a press on a vehicle becomes a drag. */
+const DRAG_THRESHOLD_PX = 6;
 
 const leverMaterial = new THREE.MeshStandardMaterial({ color: 0xf2c230, roughness: 0.4, emissive: 0x6b4f00, emissiveIntensity: 0.25 });
 const leverStem = new THREE.MeshStandardMaterial({ color: 0x5a4026, roughness: 0.8 });
@@ -32,6 +39,19 @@ const stuckMaterial = new THREE.MeshStandardMaterial({ color: 0xd33a2c, emissive
 const stuckGeometry = new THREE.TorusGeometry(26, 3, 10, 48);
 const knobGeometry = new THREE.SphereGeometry(9, 24, 16);
 const stemGeometry = new THREE.CylinderGeometry(2, 2, 22, 10);
+const attachMaterial = new THREE.MeshBasicMaterial({ color: 0x1f9d55, transparent: true, opacity: 0.85 });
+const attachGeometry = new THREE.TorusGeometry(10, 2.2, 10, 40);
+
+const SHORT: Record<StuckKind, string> = {
+  'ran-off': 'Ran off the end',
+  buffer: 'At the buffer stop',
+  stalled: 'Stalled',
+  slipping: 'Wheels spinning',
+  fighting: 'Engines fighting',
+  crashed: 'Crashed',
+  derailed: 'Derailed',
+  tipped: 'Tipped over',
+};
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> & { class?: string } = {}, ...children: (Node | string)[]) => {
   const node = document.createElement(tag);
@@ -42,30 +62,61 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLEl
   return node;
 };
 
-/** A little side view of a vehicle, magnets coloured by pole. */
-function stockIcon(def: StockDef, reversed = false): SVGSVGElement {
-  const ns = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(ns, 'svg');
-  const w = def.length * 0.42;
-  svg.setAttribute('viewBox', `-2 0 ${w + 4} 34`);
-  svg.setAttribute('width', String(w + 4));
-  svg.setAttribute('height', '34');
-  const add = (tag: string, attrs: Record<string, string | number>) => {
-    const n = document.createElementNS(ns, tag);
-    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, String(v));
-    svg.append(n);
-  };
-  const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
-  const h = Math.min(22, def.height * 0.38);
-  add('rect', { x: 2, y: 26 - h, width: w - 4, height: h, rx: 3, fill: hex(def.color) });
-  if (def.motor) add('rect', { x: w * 0.55, y: 26 - h - 5, width: 4, height: 6, fill: '#2b2622' });
-  const half = def.wheelbase * 0.21;
-  for (const x of [w / 2 - half, w / 2 + half]) add('circle', { cx: x, cy: 28, r: 4, fill: '#a3262a' });
-  const poles = polesOf({ reversed });
-  // The vehicle's front is drawn on the right, the way the train runs.
-  add('rect', { x: w - 2, y: 18, width: 3, height: 6, fill: hex(POLE_COLOR[poles.front]) });
-  add('rect', { x: -1, y: 18, width: 3, height: 6, fill: hex(POLE_COLOR[poles.back]) });
-  return svg;
+/** Pictures of each vehicle for the panel, rendered from the 3D models once. */
+function renderThumbnails(): Map<string, string> {
+  const out = new Map<string, string>();
+  try {
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(2);
+    renderer.setSize(132, 72);
+    const scene = new THREE.Scene();
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xcfc4b0, 1.6));
+    const sun = new THREE.DirectionalLight(0xfff8ee, 2);
+    sun.position.set(200, 400, 300);
+    scene.add(sun);
+    const camera = new THREE.PerspectiveCamera(22, 132 / 72, 10, 3000);
+    for (const def of STOCK) {
+      const model = buildVehicle(def);
+      scene.add(model);
+      // Three-quarter view from the front left, framed on the model.
+      const box = new THREE.Box3().setFromObject(model);
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const reach = Math.max(size.x, size.y * 1.6) * 1.55;
+      camera.position.set(center.x + reach * 0.62, center.y + reach * 0.42, center.z + reach * 0.95);
+      camera.lookAt(center);
+      renderer.render(scene, camera);
+      out.set(def.id, renderer.domElement.toDataURL('image/png'));
+      scene.remove(model);
+    }
+    renderer.dispose();
+    renderer.forceContextLoss();
+  } catch {
+    // No WebGL to spare: the tiles show names only.
+  }
+  return out;
+}
+
+type DropTarget =
+  | { kind: 'attach'; trainId: number; end: 'front' | 'back'; geo: VehicleGeometry }
+  | { kind: 'track'; edgeKey: string; s: number; geo: { center: Vec2; heading: number } }
+  | { kind: 'none'; at: Vec2 | null };
+
+interface Carry {
+  pointerId: number;
+  stockId: string;
+  ghost: THREE.Group;
+  target: DropTarget;
+  /** Lifted off the track rather than taken from the panel. */
+  lifted: boolean;
+}
+
+interface Press {
+  pointerId: number;
+  trainId: number;
+  index: number;
+  x: number;
+  y: number;
 }
 
 export class Trains {
@@ -76,27 +127,29 @@ export class Trains {
   private readonly markersRoot = new THREE.Group();
   private readonly meshes = new Map<string, THREE.Group>();
   private readonly raycaster = new THREE.Raycaster();
-  private readonly ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), -D.TRACK_HEIGHT);
+  /** The track top, where dragged vehicles are carried. */
+  private readonly trackTop = new THREE.Plane(new THREE.Vector3(0, 1, 0), -D.TRACK_HEIGHT);
 
   private open = false;
   private paused = false;
   private speed: (typeof SPEEDS)[number] = 1;
-  private placing = false;
-  private consist: ConsistEntry[] = [{ stockId: 'battery-engine', reversed: false }];
   private layout: Layout;
   private lastTime: number | null = null;
-  private lastPanel = 0;
   private toastUntil = 0;
   private noticesSeen = 0;
+  private carry: Carry | null = null;
+  private press: Press | null = null;
+  private thumbnails: Map<string, string> | null = null;
 
   private readonly panel: HTMLElement;
   private readonly toggle: HTMLButtonElement;
-  private readonly consistEl: HTMLElement;
-  private readonly listEl: HTMLElement;
-  private readonly placeButton: HTMLButtonElement;
+  private readonly tiles: HTMLElement;
   private readonly pauseButton: HTMLButtonElement;
   private readonly speedButtons: HTMLButtonElement[];
   private readonly toast: HTMLElement;
+  /** Each train's own controls, floating over it. */
+  private readonly hud: HTMLElement;
+  private readonly cards = new Map<number, { card: HTMLElement; key: string }>();
 
   constructor(
     scene: THREE.Scene,
@@ -110,60 +163,58 @@ export class Trains {
     this.root.add(this.vehiclesRoot, this.leversRoot, this.markersRoot);
     scene.add(this.root);
 
-    this.toggle = el('button', { id: 'trains-button', title: 'Run trains on the layout (Y)', type: 'button' });
+    this.toggle = el('button', { id: 'trains-button', title: 'Trains: drag engines and cars onto the track (Y)', type: 'button' });
     this.toggle.innerHTML =
-      '<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="14" rx="3"/><path d="M4 11h16"/><path d="M8 21l-2 0"/><path d="M18 21l-2 0"/><circle cx="8.5" cy="14" r=".5"/><circle cx="15.5" cy="14" r=".5"/><path d="m8 17-2 4"/><path d="m16 17 2 4"/></svg><span>Trains</span>';
+      '<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="14" rx="3"/><path d="M4 11h16"/><circle cx="8.5" cy="14" r=".5"/><circle cx="15.5" cy="14" r=".5"/><path d="m8 17-2 4"/><path d="m16 17 2 4"/></svg><span>Trains</span>';
     this.toggle.onclick = () => this.setOpen(!this.open);
     // Beside the view buttons, which stay pushed to the right.
     toolbar.insertBefore(el('div', { class: 'group' }, this.toggle), toolbar.lastElementChild);
 
     this.pauseButton = el('button', { class: 'tr-btn', type: 'button', onclick: () => this.setPaused(!this.paused) });
-    this.speedButtons = SPEEDS.map((s) =>
-      el('button', { type: 'button', textContent: `${s}×`, title: `Run at ${s}× speed`, onclick: () => this.setSpeed(s) }),
-    );
-    this.consistEl = el('div', { class: 'tr-consist' });
-    this.listEl = el('ul', { class: 'tr-list' });
-    this.placeButton = el('button', { class: 'tr-btn primary', type: 'button', textContent: 'Put on track', onclick: () => this.setPlacing(!this.placing) });
+    this.speedButtons = SPEEDS.map((s) => el('button', { type: 'button', textContent: `${s}×`, title: `Run at ${s}× speed`, onclick: () => this.setSpeed(s) }));
     this.toast = el('div', { class: 'tr-toast', hidden: true });
-
-    const tiles = el(
+    this.hud = el('div', { class: 'tr-hud' });
+    this.tiles = el(
       'div',
       { class: 'tr-stock' },
-      ...STOCK.map((def) =>
-        el('button', { class: 'tr-tile', type: 'button', title: `Add a ${def.name.toLowerCase()} to the back`, onclick: () => this.addStock(def.id) }, stockIcon(def), el('span', { textContent: def.name })),
-      ),
+      ...STOCK.map((def) => {
+        const tile = el('button', { class: 'tr-tile', type: 'button', title: `Drag a ${def.name.toLowerCase()} onto the track` }, el('span', { class: 'tr-thumb' }), el('span', { textContent: def.name }));
+        tile.dataset.stock = def.id;
+        tile.addEventListener('pointerdown', (e) => this.pickUp(e, def));
+        return tile;
+      }),
     );
-
     this.panel = el(
       'section',
       { id: 'trains', hidden: true, ariaLabel: 'Trains' },
       el('header', {}, el('h2', { textContent: 'Trains' }), el('button', { class: 'tr-close', type: 'button', title: 'Close', textContent: '×', onclick: () => this.setOpen(false) })),
-      el('div', { class: 'tr-row' }, this.pauseButton, el('div', { class: 'seg' }, ...this.speedButtons), el('button', { class: 'tr-btn', type: 'button', textContent: 'Reset', title: 'Put every train back where it started', onclick: () => this.reset() })),
-      el('h3', { textContent: 'Build a train' }),
-      tiles,
-      this.consistEl,
-      el('div', { class: 'tr-row' }, this.placeButton, el('button', { class: 'tr-btn', type: 'button', textContent: 'Clear', onclick: () => this.setConsist([]) })),
-      el('h3', { textContent: 'On the track' }),
-      this.listEl,
-      el('p', { class: 'tr-hint', innerHTML: 'Tap a switch’s <b>yellow knob</b> to change which way it sends trains. Red and blue ends are the magnets: red pulls blue.' }),
+      el('p', { class: 'tr-lead', textContent: 'Drag engines and cars onto the track. Drop one by the end of a train to couple it on.' }),
+      this.tiles,
+      el('div', { class: 'tr-row' }, this.pauseButton, el('div', { class: 'seg' }, ...this.speedButtons), el('button', { class: 'tr-btn', type: 'button', textContent: 'Reset', title: 'Put every train back where it was built, stopped', onclick: () => this.reset() })),
+      el('ul', { class: 'tr-hint' },
+        el('li', { innerHTML: '<b>Tap a car</b> on the track to turn it round. Red and blue ends are the magnets: red pulls blue.' }),
+        el('li', { innerHTML: '<b>Drag a car</b> to lift it off. Drop it off the track to take it away.' }),
+        el('li', { innerHTML: 'Each train has its own controls. Tap a switch’s <b>yellow knob</b> to change its way.' }),
+      ),
     );
-    container.append(this.panel, this.toast);
+    container.append(this.hud, this.panel, this.toast);
 
     // Window capture runs before the editor's handlers on the canvas.
     window.addEventListener('pointerdown', (e) => this.pointerDown(e), { capture: true });
+    window.addEventListener('pointermove', (e) => this.pointerMove(e));
+    window.addEventListener('pointerup', (e) => this.pointerUp(e));
+    window.addEventListener('pointercancel', (e) => this.cancel(e));
     window.addEventListener('keydown', (e) => {
       if (e.target instanceof HTMLInputElement || e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === 'y' || e.key === 'Y') this.setOpen(!this.open);
-      else if (e.key === 'Escape' && this.placing) this.setPlacing(false);
-      else if (e.key === ' ' && this.open) {
+      else if (e.key === 'Escape' && this.carry) this.drop(false);
+      else if (e.key === ' ' && this.sim.trains.length) {
         e.preventDefault();
         this.setPaused(!this.paused);
       }
     });
     this.setSpeed(1);
     this.setPaused(false);
-    this.renderConsist();
-    this.renderList();
     this.drawLevers();
     this.setOpen(false);
   }
@@ -174,8 +225,14 @@ export class Trains {
     this.open = open;
     this.panel.hidden = !open;
     this.toggle.setAttribute('aria-pressed', String(open));
-    this.leversRoot.visible = open;
-    if (!open) this.setPlacing(false);
+    if (open && !this.thumbnails) {
+      this.thumbnails = renderThumbnails();
+      for (const tile of this.tiles.querySelectorAll<HTMLElement>('.tr-tile')) {
+        const url = this.thumbnails.get(tile.dataset.stock!);
+        if (url) tile.querySelector('.tr-thumb')!.replaceChildren(el('img', { src: url, alt: '', draggable: false }));
+      }
+    }
+    this.updateLeverVisibility();
   }
 
   private setPaused(paused: boolean): void {
@@ -189,92 +246,31 @@ export class Trains {
     this.speedButtons.forEach((b, i) => b.setAttribute('aria-pressed', String(SPEEDS[i] === speed)));
   }
 
-  private setPlacing(placing: boolean): void {
-    this.placing = placing && this.consist.length > 0;
-    this.placeButton.textContent = this.placing ? 'Tap the track…' : 'Put on track';
-    this.placeButton.classList.toggle('active', this.placing);
-    this.container.classList.toggle('placing-train', this.placing);
-    if (this.placing) this.say('Tap a piece of track to put the train there. It will face along the piece.');
+  private reset(): void {
+    this.sim.reset();
+    this.noticesSeen = 0;
   }
 
-  private addStock(id: string): void {
-    this.setConsist([...this.consist, { stockId: id, reversed: false }]);
+  private say(message: string): void {
+    this.toast.textContent = message;
+    this.toast.hidden = false;
+    this.toastUntil = performance.now() + 4500;
   }
 
-  private setConsist(consist: ConsistEntry[]): void {
-    this.consist = consist;
-    if (!consist.length) this.setPlacing(false);
-    this.renderConsist();
+  private updateLeverVisibility(): void {
+    this.leversRoot.visible = this.open || this.sim.trains.length > 0;
   }
 
-  private renderConsist(): void {
-    this.consistEl.replaceChildren();
-    if (!this.consist.length) {
-      this.consistEl.append(el('p', { class: 'tr-empty', textContent: 'Tap an engine or car above to start a train.' }));
-      return;
-    }
-    // The first vehicle is the front, drawn on the right (the row runs right to left).
-    const row = el('div', { class: 'tr-chain' });
-    this.consist.forEach((entry, i) => {
-      const def = getStock(entry.stockId);
-      if (i > 0) {
-        const ok = attracts(this.consist[i - 1], entry);
-        row.append(el('span', { class: `tr-link ${ok ? 'ok' : 'bad'}`, title: ok ? 'Magnets hold' : 'Same poles: these push apart. Turn one round.', textContent: ok ? '' : '!' }));
-      }
-      const chip = el(
-        'div',
-        { class: 'tr-chip', title: def.name },
-        stockIcon(def, entry.reversed),
-        el('div', { class: 'tr-chip-actions' },
-          el('button', { type: 'button', title: 'Turn round', textContent: '⇄', onclick: () => this.setConsist(this.consist.map((c, j) => (j === i ? { ...c, reversed: !c.reversed } : c))) }),
-          el('button', { type: 'button', title: 'Take off', textContent: '×', onclick: () => this.setConsist(this.consist.filter((_, j) => j !== i)) }),
-        ),
-      );
-      row.append(chip);
-    });
-    const bad = this.consist.some((c, i) => i > 0 && !attracts(this.consist[i - 1], c));
-    const engines = this.consist.filter((c) => getStock(c.stockId).motor).length;
-    const note = bad
-      ? 'Some magnets face the same way and will push apart.'
-      : !engines
-        ? 'No engine: this train will only move if pushed.'
-        : `${this.consist.length} vehicle${this.consist.length > 1 ? 's' : ''}, ${Math.round(this.consist.reduce((s, c) => s + getStock(c.stockId).length, 0))} mm long. Front on the right.`;
-    this.consistEl.append(row, el('p', { class: `tr-note${bad ? ' warn' : ''}`, textContent: note }));
-  }
-
-  /** What the train list shows apart from status text; the list is rebuilt only when this changes. */
-  private listKey = '';
-
-  private renderList(): void {
-    const trains = this.sim.trains;
-    const key = trains.map((t) => `${t.id}/${t.throttle}/${t.wrecked}/${t.vehicles.length}/${t.couplings.filter((c) => !c.coupled).length}`).join(',');
-    if (key === this.listKey && trains.length) {
-      trains.forEach((t, i) => {
-        const row = this.listEl.children[i] as HTMLElement;
-        row.className = `tr-train ${t.status.kind}`;
-        row.querySelector('.tr-status')!.textContent = this.statusText(t);
-      });
-      return;
-    }
-    this.listKey = key;
-    if (!trains.length) {
-      this.listEl.replaceChildren(el('li', { class: 'tr-empty', textContent: 'No trains yet.' }));
-      return;
-    }
-    this.listEl.replaceChildren(...trains.map((t) => this.trainRow(t)));
-  }
+  // ---- each train's controls -----------------------------------------------
 
   private statusText(t: Train): string {
     const status = t.status;
-    if (status.kind === 'stuck') return status.message;
-    if (status.kind === 'running') return `Running at ${Math.round(status.speed)} mm/s`;
-    return t.throttle ? 'Starting…' : 'Stopped';
+    if (status.kind === 'stuck') return SHORT[status.stuck];
+    if (status.kind === 'running') return `${Math.round(status.speed)} mm/s`;
+    return t.throttle ? 'Starting' : 'Stopped';
   }
 
-  private trainRow(t: Train): HTMLElement {
-    const status = t.status;
-    const text = this.statusText(t);
-    const loose = t.couplings.filter((c) => !c.coupled).length;
+  private makeCard(t: Train): HTMLElement {
     const drive = (label: string, title: string, throttle: 1 | 0 | -1) =>
       el('button', {
         type: 'button',
@@ -285,80 +281,78 @@ export class Trains {
         onclick: () => {
           this.sim.setThrottle(t.id, throttle);
           if (throttle) this.setPaused(false);
-          this.renderList();
         },
       });
+    const act = (label: string, title: string, onclick: () => void, cls = '') => el('button', { type: 'button', class: cls, textContent: label, title, onclick });
     return el(
-      'li',
-      { class: `tr-train ${status.kind}` },
-      el('div', { class: 'tr-train-head' }, el('b', { textContent: t.name }), el('span', { class: 'tr-cars', textContent: `${t.vehicles.length} vehicle${t.vehicles.length > 1 ? 's' : ''}${loose ? `, ${loose} uncoupled` : ''}` })),
-      el('p', { class: 'tr-status', textContent: text }),
-      el('div', { class: 'tr-row' },
-        el('div', { class: 'seg drive' }, drive('◀', 'Engines in reverse', -1), drive('■', 'Engines off', 0), drive('▶', 'Engines forward', 1)),
-        el('button', { class: 'tr-btn', type: 'button', textContent: t.wrecked ? 'Put back' : 'Turn round', title: t.wrecked ? 'Put it back where it started' : 'Lift it off and put it back facing the other way', onclick: () => this.turnOrRestore(t) }),
-        el('button', { class: 'tr-btn danger', type: 'button', title: 'Take it off the track', textContent: 'Remove', onclick: () => { this.sim.removeTrain(t.id); this.renderList(); } }),
+      'div',
+      { class: 'tr-card' },
+      el('div', { class: 'tr-card-head' }, el('b', { textContent: t.name }), el('span', { class: 'tr-card-status' })),
+      el('div', { class: 'tr-card-row' },
+        t.wrecked
+          ? act('Put back on the rails', 'Put it back where it was built', () => this.restore(t), 'wide')
+          : el('div', { class: 'seg drive' }, drive('◀', 'Engines in reverse', -1), drive('■', 'Engines off', 0), drive('▶', 'Engines forward', 1)),
+        t.wrecked ? '' : act('⇄', 'Turn the whole train round', () => this.turnTrain(t)),
+        act('✕', 'Take the train off the track', () => this.sim.removeTrain(t.id), 'danger'),
       ),
     );
   }
 
-  private turnOrRestore(t: Train): void {
-    const error = t.wrecked ? this.restore(t) : this.sim.turnAround(t.id);
+  private turnTrain(t: Train): void {
+    const error = this.sim.turnAround(t.id);
     if (error) this.say(error);
-    this.renderList();
   }
 
-  private restore(t: Train): string | null {
-    const consist = t.consist;
-    const placement = t.placement;
+  private restore(t: Train): void {
+    const { consist, placement, name } = t;
     this.sim.removeTrain(t.id);
-    const again = this.sim.addTrain(consist, placement, t.name);
-    return typeof again === 'string' ? again : null;
+    const again = this.sim.addTrain(consist, placement, name);
+    if (typeof again === 'string') this.say(again);
   }
 
-  private reset(): void {
-    this.sim.reset();
-    this.noticesSeen = 0;
-    this.renderList();
-  }
-
-  private say(message: string): void {
-    this.toast.textContent = message;
-    this.toast.hidden = false;
-    this.toastUntil = performance.now() + 4500;
-  }
-
-  // ---- pointer ---------------------------------------------------------------
-
-  private pointerDown(e: PointerEvent): void {
-    if (e.button !== 0 || !(e.target instanceof HTMLCanvasElement) || !this.container.contains(e.target)) return;
-    this.raycaster.setFromCamera(this.ndc(e), this.camera);
-    this.root.updateMatrixWorld();
-    if (this.open) {
-      const lever = this.raycaster.intersectObject(this.leversRoot, true)[0];
-      if (lever) {
-        this.sim.toggleLever(lever.object.userData.uid as string);
-        this.drawLevers();
-        return this.swallow(e);
+  /** Keep a card floating over each train, and its buttons current. */
+  private drawCards(): void {
+    const rect = this.container.getBoundingClientRect();
+    const seen = new Set<number>();
+    for (const t of this.sim.trains) {
+      seen.add(t.id);
+      const key = `${t.throttle}/${t.wrecked}/${t.name}`;
+      let entry = this.cards.get(t.id);
+      if (!entry || entry.key !== key) {
+        const card = this.makeCard(t);
+        if (entry) entry.card.replaceWith(card);
+        else this.hud.append(card);
+        entry = { card, key };
+        this.cards.set(t.id, entry);
+      }
+      const { card } = entry;
+      // Over the middle of the train, above its tallest roof.
+      const xs = t.vehicles.map((v) => v.geo.center.x);
+      const ys = t.vehicles.map((v) => v.geo.center.y);
+      const mid = toWorld((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...t.vehicles.map((v) => v.def.height)) + AXLE_HEIGHT + 14);
+      const p = mid.project(this.camera);
+      const visible = p.z < 1 && Math.abs(p.x) < 1.1 && Math.abs(p.y) < 1.1;
+      card.hidden = !visible;
+      if (visible) card.style.transform = `translate(${((p.x + 1) / 2) * rect.width}px, ${((1 - p.y) / 2) * rect.height}px) translate(-50%, -100%)`;
+      card.classList.toggle('stuck', t.status.kind === 'stuck');
+      const status = card.querySelector<HTMLElement>('.tr-card-status')!;
+      status.textContent = this.statusText(t);
+      status.title = t.status.kind === 'stuck' ? t.status.message : '';
+      card.title = t.status.kind === 'stuck' ? t.status.message : '';
+    }
+    for (const [id, entry] of this.cards) {
+      if (!seen.has(id)) {
+        entry.card.remove();
+        this.cards.delete(id);
       }
     }
-    if (!this.placing) return;
-    this.swallow(e);
-    const hit = this.raycaster.intersectObject(this.host.pieceObjects, true)[0];
-    const point = hit ? hit.point : this.raycaster.ray.intersectPlane(this.ground, new THREE.Vector3());
-    if (!point) return;
-    const at = this.sim.nearestTrack({ x: point.x, y: -point.z });
-    if (!at) {
-      this.say('That isn’t on the track. Tap a piece of track.');
-      return;
-    }
-    const train = this.sim.addTrain(this.consist, { edgeKey: at.edge.key, s: at.s, reversed: false });
-    if (typeof train === 'string') {
-      this.say(train);
-      return;
-    }
-    this.setPlacing(false);
-    this.say(`${train.name} is on the track. Press ▶ to start it.`);
-    this.renderList();
+  }
+
+  // ---- picking up and dropping vehicles ----------------------------------
+
+  private ndc(e: { clientX: number; clientY: number }): THREE.Vector2 {
+    const rect = this.container.getBoundingClientRect();
+    return new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
   }
 
   private swallow(e: Event): void {
@@ -366,9 +360,162 @@ export class Trains {
     e.preventDefault();
   }
 
-  private ndc(e: PointerEvent): THREE.Vector2 {
-    const rect = this.container.getBoundingClientRect();
-    return new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+  /** Start carrying a vehicle from the panel. */
+  private pickUp(e: PointerEvent, def: StockDef): void {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    this.startCarry(e.pointerId, def.id, false);
+    this.pointerMove(e);
+  }
+
+  private startCarry(pointerId: number, stockId: string, lifted: boolean): void {
+    const ghost = buildVehicle(getStock(stockId));
+    ghost.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        const m = (o.material as THREE.Material).clone();
+        m.transparent = true;
+        m.opacity = 0.8;
+        o.material = m;
+        o.castShadow = false;
+      }
+    });
+    this.root.add(ghost);
+    this.carry = { pointerId, stockId, ghost, target: { kind: 'none', at: null }, lifted };
+    document.body.classList.add('carrying-train');
+  }
+
+  /** What's under the pointer: a lever, or a vehicle (train and its place in it). */
+  private hit(e: PointerEvent): { lever: string } | { trainId: number; index: number } | null {
+    this.raycaster.setFromCamera(this.ndc(e), this.camera);
+    this.root.updateMatrixWorld();
+    if (this.leversRoot.visible) {
+      const lever = this.raycaster.intersectObject(this.leversRoot, true)[0];
+      if (lever) return { lever: lever.object.userData.uid as string };
+    }
+    const vehicle = this.raycaster.intersectObject(this.vehiclesRoot, true)[0];
+    if (vehicle) {
+      let o: THREE.Object3D | null = vehicle.object;
+      while (o && o.userData.trainId === undefined) o = o.parent;
+      if (o) return { trainId: o.userData.trainId as number, index: o.userData.index as number };
+    }
+    return null;
+  }
+
+  private pointerDown(e: PointerEvent): void {
+    if (e.button !== 0 || this.carry || !(e.target instanceof HTMLCanvasElement) || !this.container.contains(e.target)) return;
+    const hit = this.hit(e);
+    if (!hit) return;
+    this.swallow(e);
+    if ('lever' in hit) {
+      this.sim.toggleLever(hit.lever);
+      this.drawLevers();
+      return;
+    }
+    this.press = { pointerId: e.pointerId, ...hit, x: e.clientX, y: e.clientY };
+  }
+
+  private pointerMove(e: PointerEvent): void {
+    const press = this.press;
+    if (press && e.pointerId === press.pointerId && Math.hypot(e.clientX - press.x, e.clientY - press.y) > DRAG_THRESHOLD_PX) {
+      // Lifting a vehicle off the track.
+      this.press = null;
+      const entry = this.sim.detach(press.trainId, press.index);
+      if (entry) this.startCarry(e.pointerId, entry.stockId, true);
+    }
+    const carry = this.carry;
+    if (!carry || e.pointerId !== carry.pointerId) return;
+    carry.target = this.targetAt(e, carry.stockId);
+    this.placeGhost(carry);
+  }
+
+  private pointerUp(e: PointerEvent): void {
+    const press = this.press;
+    if (press && e.pointerId === press.pointerId) {
+      // A tap on a vehicle turns it round.
+      this.press = null;
+      const error = this.sim.turnVehicle(press.trainId, press.index);
+      if (error) this.say(error);
+      return;
+    }
+    const carry = this.carry;
+    if (!carry || e.pointerId !== carry.pointerId) return;
+    // Let go over the panel or off the canvas: put it away.
+    // Touch keeps the press on the tile it began on, so look at what's under the finger.
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    const overCanvas = under instanceof HTMLCanvasElement && this.container.contains(under);
+    this.drop(overCanvas);
+  }
+
+  private cancel(e: PointerEvent): void {
+    if (this.press?.pointerId === e.pointerId) this.press = null;
+    if (this.carry?.pointerId === e.pointerId) this.drop(false);
+  }
+
+  private drop(place: boolean): void {
+    const carry = this.carry!;
+    this.carry = null;
+    this.root.remove(carry.ghost);
+    document.body.classList.remove('carrying-train');
+    const target = carry.target;
+    if (!place || target.kind === 'none') {
+      if (carry.lifted) this.say(`Took the ${getStock(carry.stockId).name.toLowerCase()} off the track.`);
+      return;
+    }
+    if (target.kind === 'attach') {
+      const error = this.sim.attach(target.trainId, target.end, carry.stockId);
+      if (error) this.say(error);
+      return;
+    }
+    const train = this.sim.addTrain([{ stockId: carry.stockId, reversed: false }], { edgeKey: target.edgeKey, s: target.s, reversed: false });
+    if (typeof train === 'string') this.say(train);
+    else if (getStock(carry.stockId).motor && !carry.lifted) this.say(`${train.name} is on the track. Drag cars next to it to couple them on, then press ▶.`);
+  }
+
+  /** Where a vehicle carried to the pointer would go. */
+  private targetAt(e: PointerEvent, stockId: string): DropTarget {
+    this.raycaster.setFromCamera(this.ndc(e), this.camera);
+    const hit = this.raycaster.intersectObject(this.host.pieceObjects, true)[0];
+    const point = hit?.point ?? this.raycaster.ray.intersectPlane(this.trackTop, new THREE.Vector3());
+    if (!point) return { kind: 'none', at: null };
+    const at = { x: point.x, y: -point.z };
+    // By the end of a train: couple on.
+    let best: { trainId: number; end: 'front' | 'back'; d: number } | null = null;
+    for (const t of this.sim.trains) {
+      if (t.wrecked) continue;
+      const ends = [
+        { end: 'front' as const, face: t.vehicles[0].geo.aheadFace },
+        { end: 'back' as const, face: t.vehicles[t.vehicles.length - 1].geo.behindFace },
+      ];
+      for (const { end, face } of ends) {
+        const d = Math.hypot(face.x - at.x, face.y - at.y);
+        if (d < ATTACH_REACH_MM && (!best || d < best.d)) best = { trainId: t.id, end, d };
+      }
+    }
+    if (best) {
+      const geo = this.sim.attachPreview(best.trainId, best.end, stockId);
+      if (geo) return { kind: 'attach', trainId: best.trainId, end: best.end, geo };
+    }
+    const track = this.sim.nearestTrack(at, 45);
+    if (track) {
+      const pose = poseAt(track.edge.path, track.s);
+      return { kind: 'track', edgeKey: track.edge.key, s: track.s, geo: { center: pose, heading: pose.angle } };
+    }
+    return { kind: 'none', at };
+  }
+
+  private placeGhost(carry: Carry): void {
+    const { ghost, target } = carry;
+    ghost.visible = target.kind !== 'none' || target.at !== null;
+    if (target.kind === 'none') {
+      if (target.at) {
+        // Held up off the track.
+        ghost.position.copy(toWorld(target.at.x, target.at.y, 30));
+        ghost.rotation.set(0, ghost.rotation.y, 0);
+      }
+      return;
+    }
+    ghost.position.copy(toWorld(target.geo.center.x, target.geo.center.y, 0));
+    ghost.rotation.set(0, target.geo.heading, 0);
   }
 
   // ---- every frame ---------------------------------------------------------
@@ -381,18 +528,15 @@ export class Trains {
       const removed = this.sim.setLayout(this.layout);
       if (removed.length) this.say(`${removed.join(' and ')} ${removed.length > 1 ? 'were' : 'was'} taken off: the track under it changed.`);
       this.drawLevers();
-      this.renderList();
     }
     if (!this.paused && dt > 0) this.sim.advance(Math.min(dt, 0.05) * this.speed);
     this.drawTrains(time);
+    this.drawCards();
+    this.updateLeverVisibility();
     const notices = this.sim.notices;
     if (notices.length && notices[notices.length - 1].time !== this.noticesSeen) {
       this.noticesSeen = notices[notices.length - 1].time;
       this.say(notices[notices.length - 1].message);
-    }
-    if (time - this.lastPanel > 250) {
-      this.lastPanel = time;
-      if (this.open) this.renderList();
     }
     if (!this.toast.hidden && performance.now() > this.toastUntil) this.toast.hidden = true;
   }
@@ -400,6 +544,7 @@ export class Trains {
   private drawTrains(time: number): void {
     const seen = new Set<string>();
     this.markersRoot.clear();
+    const carry = this.carry;
     for (const train of this.sim.trains) {
       train.vehicles.forEach((v, i) => {
         const key = `${train.id}:${i}:${v.def.id}`;
@@ -410,6 +555,8 @@ export class Trains {
           this.meshes.set(key, mesh);
           this.vehiclesRoot.add(mesh);
         }
+        mesh.userData.trainId = train.id;
+        mesh.userData.index = i;
         const { center, heading } = v.geo;
         mesh.position.copy(toWorld(center.x, center.y, 0));
         mesh.rotation.set(0, heading, 0);
@@ -426,6 +573,19 @@ export class Trains {
       if (!seen.has(key)) {
         this.vehiclesRoot.remove(mesh);
         this.meshes.delete(key);
+      }
+    }
+    // Where a carried vehicle would couple on.
+    if (carry?.target.kind === 'attach') {
+      const train = this.sim.train(carry.target.trainId);
+      if (train) {
+        const v = carry.target.end === 'front' ? train.vehicles[0] : train.vehicles[train.vehicles.length - 1];
+        const face = carry.target.end === 'front' ? v.geo.aheadFace : v.geo.behindFace;
+        const ring = new THREE.Mesh(attachGeometry, attachMaterial);
+        ring.position.copy(toWorld(face.x, face.y, AXLE_HEIGHT + 2));
+        ring.rotation.y = v.geo.heading + Math.PI / 2;
+        ring.scale.setScalar(1 + 0.12 * Math.sin(time / 150));
+        this.markersRoot.add(ring);
       }
     }
   }

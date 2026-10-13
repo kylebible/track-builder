@@ -207,44 +207,59 @@ export class TrainSim {
 
   /** Put a train on the track with its middle at `placement`. Returns an error message if it won't fit. */
   addTrain(consist: ConsistEntry[], placement: Placement, name?: string): Train | string {
-    if (!consist.length) return 'Add an engine or a car first.';
-    const laid = this.lay(consist, placement);
+    const edge = this.network.edge(placement.edgeKey);
+    if (!edge) return 'That track has gone.';
+    const mid = placement.reversed ? edge.length - placement.s : placement.s;
+    return this.spawn(new Route(edge, placement.reversed, 0), consist, mid, { name });
+  }
+
+  /** A new train laid on `route` with its middle at `mid`. */
+  private spawn(route: Route, consist: ConsistEntry[], mid: number, options: { name?: string; speeds?: number[]; throttle?: Train['throttle'] } = {}): Train | string {
+    const laid = this.layOn(route, consist, mid);
     if (typeof laid === 'string') return laid;
-    const { vehicles } = laid;
-    for (let a = 0; a < vehicles.length; a++) {
-      for (let b = a + 2; b < vehicles.length; b++) {
-        if (overlaps(vehicles[a], vehicles[b])) return 'This train is longer than the loop it is on.';
-      }
-    }
     const id = this.nextId++;
     const train: Train = {
       id,
-      name: name ?? `Train ${id}`,
+      name: options.name ?? `Train ${id}`,
       consist: consist.map((c) => ({ ...c })),
-      placement,
       ...laid,
-      throttle: 0,
+      throttle: options.throttle ?? 0,
       status: { kind: 'stopped' },
       wrecked: false,
       stillFor: 0,
     };
+    options.speeds?.forEach((v, i) => (train.vehicles[i].v = v));
     this.trains.push(train);
-    this.measure(train);
     return train;
   }
 
-  private lay(consist: ConsistEntry[], placement: Placement): Pick<Train, 'route' | 'vehicles' | 'couplings'> | string {
+  /** Lay `consist` on the same track again, with its middle at `mid` along the train's route. */
+  private rebuild(train: Train, consist: ConsistEntry[], mid: number, speeds?: number[]): string | null {
+    const laid = this.layOn(train.route.clone(), consist, mid);
+    if (typeof laid === 'string') return laid;
+    Object.assign(train, laid, { consist: consist.map((c) => ({ ...c })), status: { kind: 'stopped' }, wrecked: false, stillFor: 0 });
+    speeds?.forEach((v, i) => (train.vehicles[i].v = v));
+    return null;
+  }
+
+  private lay(consist: ConsistEntry[], placement: Placement): ReturnType<TrainSim['layOn']> {
     const edge = this.network.edge(placement.edgeKey);
     if (!edge) return 'That track has gone.';
-    const route = new Route(edge, placement.reversed, 0);
-    let mid = placement.reversed ? edge.length - placement.s : placement.s;
+    return this.layOn(new Route(edge, placement.reversed, 0), consist, placement.reversed ? edge.length - placement.s : placement.s);
+  }
+
+  /** Lay vehicles nose to tail along `route`, the train's middle at `mid`. */
+  private layOn(route: Route, consist: ConsistEntry[], mid: number): Pick<Train, 'route' | 'vehicles' | 'couplings' | 'placement'> | string {
+    if (!consist.length) return 'Add an engine or a car first.';
     const defs = consist.map((c) => getStock(c.stockId));
-    const total = defs.reduce((sum, d) => sum + d.length, 0) + PHYSICS.repelReachMm * consist.length;
-    route.extend(this.network, this.choose, mid - total / 2 - 60, mid + total / 2 + 60);
+    const length = defs.reduce((sum, d) => sum + d.length, 0);
+    // Room for magnets that push apart, too.
+    const room = length + PHYSICS.repelReachMm * consist.length;
+    route.extend(this.network, this.choose, mid - room / 2 - 60, mid + room / 2 + 60);
     // Slide the train back on from a dead end, if it hangs over one.
-    if (route.front) mid = Math.min(mid, route.front.u - total / 2 - 2);
-    if (route.back) mid = Math.max(mid, route.back.u + total / 2 + 2);
-    if ((route.front && mid + total / 2 > route.front.u) || (route.back && mid - total / 2 < route.back.u)) {
+    if (route.front) mid = Math.min(mid, route.front.u - room / 2 - 2);
+    if (route.back) mid = Math.max(mid, route.back.u + room / 2 + 2);
+    if ((route.front && mid + room / 2 > route.front.u) || (route.back && mid - room / 2 < route.back.u)) {
       return 'There is not enough track here for this train.';
     }
     const couplings: Coupling[] = consist.slice(1).map((c, i) => {
@@ -252,7 +267,7 @@ export class TrainSim {
       return { attract, coupled: attract, force: 0 };
     });
     const vehicles: Vehicle[] = [];
-    let front = mid + total / 2;
+    let front = mid + length / 2;
     consist.forEach((entry, i) => {
       const def = defs[i];
       const vehicle: Vehicle = {
@@ -280,7 +295,12 @@ export class TrainSim {
       vehicles.push(vehicle);
       front = vehicle.u - def.length / 2;
     });
-    return { route, vehicles, couplings };
+    for (let a = 0; a < vehicles.length; a++) {
+      for (let b = a + 2; b < vehicles.length; b++) {
+        if (overlaps(vehicles[a], vehicles[b])) return 'This train is longer than the loop it is on.';
+      }
+    }
+    return { route, vehicles, couplings, placement: placementAt(route, mid) };
   }
 
   removeTrain(id: number): void {
@@ -288,25 +308,149 @@ export class TrainSim {
     if (i >= 0) this.trains.splice(i, 1);
   }
 
-  /** Lift a train off and put it back the other way round, in the same spot. */
-  turnAround(id: number): string | null {
-    const train = this.trains.find((t) => t.id === id);
-    if (!train) return null;
-    return this.replace(train, { ...train.placement, reversed: !train.placement.reversed });
+  train(id: number): Train | undefined {
+    return this.trains.find((t) => t.id === id);
   }
 
-  /** Put every train back where it was placed, stopped. */
+  /** Lift a train off and put it back the other way round, in the same spot. */
+  turnAround(id: number): string | null {
+    const train = this.train(id);
+    if (!train) return null;
+    const { front, back } = span(train);
+    return this.replace(train, placementAt(train.route, (front + back) / 2), true);
+  }
+
+  /** Put every train back where it was last placed or built, stopped. */
   reset(): void {
-    for (const train of [...this.trains]) this.replace(train, train.placement);
+    for (const train of [...this.trains]) this.replace(train, train.placement, false);
     this.notices.length = 0;
   }
 
-  private replace(train: Train, placement: Placement): string | null {
-    const laid = this.lay(train.consist, placement);
+  private replace(train: Train, placement: Placement, turn: boolean): string | null {
+    const laid = this.lay(train.consist, turn ? { ...placement, reversed: !placement.reversed } : placement);
     if (typeof laid === 'string') return laid;
-    Object.assign(train, laid, { placement, throttle: 0, status: { kind: 'stopped' }, wrecked: false, stillFor: 0 });
-    this.measure(train);
+    Object.assign(train, laid, { throttle: 0, status: { kind: 'stopped' }, wrecked: false, stillFor: 0 });
     return null;
+  }
+
+  // ---- coupling and uncoupling by hand ------------------------------------
+
+  /** Where a vehicle added to one end of a train would sit, for a preview. */
+  attachPreview(id: number, end: 'front' | 'back', stockId: string): VehicleGeometry | null {
+    const train = this.train(id);
+    if (!train || train.wrecked) return null;
+    const def = getStock(stockId);
+    const neighbour = end === 'front' ? train.vehicles[0] : train.vehicles[train.vehicles.length - 1];
+    const { front, back } = span(train);
+    const u = end === 'front' ? front + def.length / 2 : back - def.length / 2;
+    train.route.extend(this.network, this.choose, u - def.length, u + def.length);
+    if ((train.route.front && u + def.length / 2 > train.route.front.u) || (train.route.back && u - def.length / 2 < train.route.back.u)) return null;
+    const ghost = { def, facing: neighbour.facing, u } as Vehicle;
+    return this.geometry(train.route, ghost);
+  }
+
+  /** Add a vehicle to one end of a train, turned to couple with its neighbour. */
+  attach(id: number, end: 'front' | 'back', stockId: string): string | null {
+    const train = this.train(id);
+    if (!train) return 'That train has gone.';
+    if (train.wrecked) return `Put ${train.name} back on the rails first.`;
+    const def = getStock(stockId);
+    const neighbour = end === 'front' ? train.consist[0] : train.consist[train.consist.length - 1];
+    const entry: ConsistEntry = { stockId, reversed: neighbour.reversed };
+    const { front, back } = span(train);
+    const speeds = train.vehicles.map((v) => v.v);
+    const mean = speeds.reduce((a, b) => a + b, 0) / speeds.length;
+    return end === 'front'
+      ? this.rebuild(train, [entry, ...train.consist], (front + def.length + back) / 2, [mean, ...speeds])
+      : this.rebuild(train, [...train.consist, entry], (front + back - def.length) / 2, [...speeds, mean]);
+  }
+
+  /**
+   * Lift one vehicle off a train. What was in front of it and what was
+   * behind it carry on as two trains. Returns the vehicle lifted off.
+   */
+  detach(id: number, index: number): ConsistEntry | null {
+    const train = this.train(id);
+    if (!train) return null;
+    const entry = train.consist[index];
+    const parts = [
+      { from: 0, to: index },
+      { from: index + 1, to: train.consist.length },
+    ].filter((p) => p.to > p.from);
+    const route = train.route;
+    const plans = parts.map(({ from, to }) => {
+      const vs = train.vehicles.slice(from, to);
+      const { front, back } = span({ vehicles: vs });
+      return { consist: train.consist.slice(from, to), mid: (front + back) / 2, speeds: vs.map((v) => v.v) };
+    });
+    this.removeTrain(id);
+    plans.forEach((plan, i) => {
+      if (i === 0) {
+        // The first part keeps the train's name and place in the list.
+        if (this.rebuild(train, plan.consist, plan.mid, plan.speeds) === null) this.trains.push(train);
+      } else {
+        this.spawn(route.clone(), plan.consist, plan.mid, { speeds: plan.speeds, throttle: train.throttle });
+      }
+    });
+    return entry;
+  }
+
+  /** Turn one vehicle round where it stands, so its magnets face the other way. */
+  turnVehicle(id: number, index: number): string | null {
+    const train = this.train(id);
+    if (!train) return null;
+    const consist = train.consist.map((c, i) => (i === index ? { ...c, reversed: !c.reversed } : c));
+    const { front, back } = span(train);
+    return this.rebuild(train, consist, (front + back) / 2);
+  }
+
+  /**
+   * Trains whose ends have run together, nose to tail on the same track,
+   * become one train, as magnets snap together. (Same poles join the list
+   * too, and then push apart.)
+   */
+  private coupleTouching(): void {
+    for (const a of this.trains) {
+      for (const b of this.trains) {
+        if (a === b || a.wrecked || b.wrecked) continue;
+        for (const endA of ['front', 'back'] as const) {
+          for (const endB of ['front', 'back'] as const) {
+            const va = endA === 'front' ? a.vehicles[0] : a.vehicles[a.vehicles.length - 1];
+            const vb = endB === 'front' ? b.vehicles[0] : b.vehicles[b.vehicles.length - 1];
+            const faceA = endA === 'front' ? va.geo.aheadFace : va.geo.behindFace;
+            const faceB = endB === 'front' ? vb.geo.aheadFace : vb.geo.behindFace;
+            const outA = routeHeading(va) + (endA === 'front' ? 0 : Math.PI);
+            const outB = routeHeading(vb) + (endB === 'front' ? 0 : Math.PI);
+            // Facing each other within 25 degrees.
+            if (Math.cos(outA - outB) > -0.9) continue;
+            const dir = { x: Math.cos(outA), y: Math.sin(outA) };
+            const d = sub(faceB, faceA);
+            const along = dot(d, dir);
+            const across = Math.abs(d.x * dir.y - d.y * dir.x);
+            if (along > 1.5 || along < -25 || across > 8) continue;
+            this.merge(a, endA, b, Math.cos(routeHeading(va) - routeHeading(vb)) > 0);
+            return;
+          }
+        }
+      }
+    }
+  }
+
+  private merge(a: Train, endA: 'front' | 'back', b: Train, sameWay: boolean): void {
+    // B in A's running order.
+    const order = sameWay ? b.consist.map((c) => ({ ...c })) : [...b.consist].reverse().map((c) => ({ ...c, reversed: !c.reversed }));
+    const speedsB = sameWay ? b.vehicles.map((v) => v.v) : [...b.vehicles].reverse().map((v) => -v.v);
+    const lengthB = b.vehicles.reduce((s, v) => s + v.def.length, 0);
+    const { front, back } = span(a);
+    const speedsA = a.vehicles.map((v) => v.v);
+    const throttle = a.throttle || b.throttle;
+    const result =
+      endA === 'front'
+        ? this.rebuild(a, [...order, ...a.consist], (front + lengthB + back) / 2, [...speedsB, ...speedsA])
+        : this.rebuild(a, [...a.consist, ...order], (front + back - lengthB) / 2, [...speedsA, ...speedsB]);
+    if (result !== null) return;
+    a.throttle = throttle;
+    this.removeTrain(b.id);
   }
 
   setThrottle(id: number, throttle: 1 | 0 | -1): void {
@@ -364,6 +508,7 @@ export class TrainSim {
   advance(seconds: number): void {
     const steps = Math.round(Math.min(seconds, 0.1) / PHYSICS.dt);
     for (let i = 0; i < steps; i++) this.step(PHYSICS.dt);
+    this.coupleTouching();
     for (const train of this.trains) {
       const lo = Math.min(...train.vehicles.map((v) => v.u));
       const hi = Math.max(...train.vehicles.map((v) => v.u));
@@ -667,6 +812,21 @@ export class TrainSim {
       }
     }
   }
+}
+
+/** How far a run of vehicles reaches along its route, magnet face to magnet face. */
+function span(train: Pick<Train, 'vehicles'>): { front: number; back: number } {
+  return {
+    front: Math.max(...train.vehicles.map((v) => v.u + v.def.length / 2)),
+    back: Math.min(...train.vehicles.map((v) => v.u - v.def.length / 2)),
+  };
+}
+
+/** The placement that puts a train's middle at `u` on `route`. */
+function placementAt(route: Route, u: number): Placement {
+  const seg = route.segmentAt(u);
+  const along = Math.min(Math.max(u - seg.u0, 0), seg.edge.length);
+  return { edgeKey: seg.edge.key, s: seg.reversed ? seg.edge.length - along : along, reversed: seg.reversed };
 }
 
 /** Whether two vehicles' footprints overlap (separating axis test on two rectangles). */
