@@ -7,6 +7,7 @@ import { hasEndsChoice, iconPiece, SHAPES, variantFor, type Ends, type Hand, typ
 // The parts palette: one tile per piece shape, with a plan-view drawing
 // made from the same path and connector data the 3D pieces use, plus the
 // Turn and Ends settings that decide which version a tap puts down.
+// A tile can also be dragged out onto the floor.
 
 const CATEGORY_NAMES: Record<PieceCategory, string> = {
   straight: 'Straights',
@@ -17,6 +18,9 @@ const CATEGORY_NAMES: Record<PieceCategory, string> = {
 };
 
 const ENDS_LABELS: Record<Ends, string> = { mixed: 'Peg + hole', pegs: '2 pegs', holes: '2 holes' };
+
+/** Pointer travel, in pixels, before a press on a tile becomes a drag. */
+const DRAG_THRESHOLD_PX = 6;
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -113,6 +117,8 @@ export class Palette {
     container: HTMLElement,
     private readonly onPick: (shape: Shape) => void,
     private readonly onChange: () => void,
+    /** A tile was dragged out: the move that started it, to keep following that pointer. */
+    private readonly onDrag: (shape: Shape, e: PointerEvent) => void = () => {},
   ) {
     const settings = document.createElement('div');
     settings.className = 'settings';
@@ -147,7 +153,12 @@ export class Palette {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'tile';
-        button.addEventListener('click', () => this.onPick(shape));
+        button.addEventListener('click', () => {
+          // A drag that ends back on its tile still clicks it; it isn't a tap.
+          if (this.dragged) this.dragged = false;
+          else this.onPick(shape);
+        });
+        button.addEventListener('pointerdown', (e) => this.press(e, shape));
         this.tiles.set(shape.key, { button, shape });
         grid.appendChild(button);
       }
@@ -156,6 +167,47 @@ export class Palette {
     }
     container.appendChild(pieces);
     this.render();
+  }
+
+  private dragged = false;
+
+  /**
+   * Follow a press on a tile until it moves far enough to be a drag. Touch
+   * scrolls the palette along its own length (see style.css), and the
+   * browser cancels the press when it does.
+   */
+  private press(down: PointerEvent, shape: Shape): void {
+    if (down.button !== 0) return;
+    this.dragged = false;
+    // Stops a mouse drag selecting text on the way out.
+    if (down.pointerType === 'mouse') down.preventDefault();
+    const move = (e: PointerEvent) => {
+      if (e.pointerId !== down.pointerId) return;
+      if (Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY) < DRAG_THRESHOLD_PX) return;
+      stop();
+      this.dragged = true;
+      // Forget the drag once its click, if any, has gone by.
+      const clear = (up: PointerEvent) => {
+        if (up.pointerId !== down.pointerId) return;
+        window.removeEventListener('pointerup', clear);
+        window.removeEventListener('pointercancel', clear);
+        setTimeout(() => (this.dragged = false));
+      };
+      window.addEventListener('pointerup', clear);
+      window.addEventListener('pointercancel', clear);
+      this.onDrag(shape, e);
+    };
+    const stop = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+    };
+    const end = (e: PointerEvent) => {
+      if (e.pointerId === down.pointerId) stop();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
   }
 
   setHand(hand: Hand): void {

@@ -52,6 +52,9 @@ button { font: inherit; color: inherit; }
 .tile-detail { font-size: 11px; color: var(--muted); line-height: 1.2; }
 .tile.disabled { opacity: 0.32; }
 .tile.disabled:hover { transform: none; box-shadow: none; border-color: var(--line); }
+/* Touch scrolls the palette up and down; a sideways drag pulls a piece out. */
+.tile { touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+body.dragging-piece, body.dragging-piece * { cursor: grabbing !important; }
 .icon-edge { fill: none; stroke: var(--wood-edge); stroke-linecap: butt; }
 .icon-wood { fill: none; stroke: var(--wood); stroke-linecap: butt; }
 .icon-groove { fill: none; stroke: var(--groove); stroke-linecap: butt; }
@@ -174,7 +177,8 @@ button { font: inherit; color: inherit; }
   .pieces section { display: contents; }
   .pieces h2 { display: none; }
   .palette-grid { display: contents; }
-  .tile { width: 78px; flex: none; padding: 4px 4px 6px; }
+  /* Along the bottom it scrolls sideways, so an upward drag pulls a piece out. */
+  .tile { width: 78px; flex: none; padding: 4px 4px 6px; touch-action: pan-x; }
   .tile svg { aspect-ratio: 1.15; }
   .tile-name { font-size: 11px; }
   .tile-detail { display: none; }
