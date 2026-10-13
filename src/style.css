@@ -1,0 +1,8 @@
+html, body { margin: 0; height: 100%; background: #f4f1ea; font-family: system-ui, sans-serif; color: #2b2620; }
+#app { position: fixed; inset: 0; }
+#hud { position: fixed; top: 12px; left: 12px; max-width: 320px; padding: 10px 14px; background: rgba(255,255,255,0.85); border-radius: 8px; font-size: 13px; }
+#hud h1 { font-size: 16px; margin: 0 0 4px; }
+#hud p { margin: 4px 0; }
+#hud .hint { color: #6b6257; }
+.piece-label { font-size: 11px; line-height: 1.25; background: rgba(255,255,255,0.8); padding: 2px 6px; border-radius: 4px; max-width: 110px; pointer-events: none; text-align: center; }
+.piece-label small { display: block; color: #6b6257; }
