@@ -171,3 +171,47 @@ describe('running', () => {
     expect(sim.trains).toHaveLength(0);
   });
 });
+
+describe('building trains on the track', () => {
+  const straight = () => build('straight-long', ['straight-long', 'straight-long', 'straight-long']);
+
+  it('a car added to an end turns to couple and sits nose to tail', () => {
+    const { sim, train } = start(straight(), [car('battery-engine', true)], 'p2:0', 100);
+    expect(sim.attach(train.id, 'back', 'wagon')).toBeNull();
+    expect(train.consist).toEqual([car('battery-engine', true), car('wagon', true)]);
+    expect(train.couplings[0].coupled).toBe(true);
+    const gap = train.vehicles[0].u - train.vehicles[0].def.length / 2 - (train.vehicles[1].u + train.vehicles[1].def.length / 2);
+    expect(Math.abs(gap)).toBeLessThan(0.5);
+  });
+
+  it('lifting a car out of the middle leaves two trains where they stood', () => {
+    const { sim, train } = start(straight(), [car('battery-engine'), car('wagon'), car('coach'), car('wagon')], 'p2:0', 150);
+    const before = train.vehicles.map((v) => v.geo.center);
+    expect(sim.detach(train.id, 1)).toEqual(car('wagon'));
+    expect(sim.trains).toHaveLength(2);
+    const [front, back] = sim.trains;
+    expect(front.consist.map((c) => c.stockId)).toEqual(['battery-engine']);
+    expect(back.consist.map((c) => c.stockId)).toEqual(['coach', 'wagon']);
+    expect(front.vehicles[0].geo.center.x).toBeCloseTo(before[0].x, 3);
+    expect(back.vehicles[1].geo.center.x).toBeCloseTo(before[3].x, 3);
+  });
+
+  it('an engine running into a parked car picks it up', () => {
+    const sim = new TrainSim(straight());
+    const engine = sim.addTrain([car('battery-engine')], { edgeKey: 'p1:0', s: 100, reversed: false }) as Train;
+    sim.addTrain([car('wagon')], { edgeKey: 'p3:0', s: 100, reversed: false });
+    sim.setThrottle(engine.id, 1);
+    run(sim, engine, 6);
+    expect(sim.trains).toHaveLength(1);
+    expect(engine.consist.map((c) => c.stockId)).toEqual(['wagon', 'battery-engine']);
+    // The engine's north nose met the wagon's south tail: they hold.
+    expect(engine.couplings[0].coupled).toBe(true);
+  });
+
+  it('turning a car round where it stands flips its magnets', () => {
+    const { sim, train } = start(straight(), [car('battery-engine'), car('wagon')], 'p2:0', 100);
+    sim.turnVehicle(train.id, 1);
+    expect(train.consist[1].reversed).toBe(true);
+    expect(train.couplings[0].attract).toBe(false);
+  });
+});
