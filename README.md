@@ -21,6 +21,12 @@ Live site: https://kylebible.github.io/track-builder/
   open end of the other gender and it snaps on (`DEFAULT_SNAP_RANGE` in
   `src/layout/layout.ts`). Shift-drag, or double-click then drag, moves the
   whole connected section.
+- Dragging a piece that's joined into track flexes its joints instead, the
+  way you nudge real track: each joint gives up to its play, the far end of
+  the track holds still, and the piece stops once the joints run out. If
+  that brings an open end within snap range of another and the joints can
+  give enough to reach it, a loop that nearly meets closes. Pull 25 mm past
+  the limit and the piece unclips and moves freely (`src/layout/flex.ts`).
 - Toolbar and keys: rotate 45° (R, Shift+R), select connected (A), delete
   (Delete), fit the layout in view (V), undo and redo (Ctrl+Z,
   Ctrl+Shift+Z). The ? button lists them all.

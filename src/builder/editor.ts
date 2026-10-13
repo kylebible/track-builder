@@ -28,6 +28,7 @@ import {
   type Layout,
   type Snap,
 } from '../layout/layout';
+import { flexContext, flexDrag, type FlexContext, type FlexResult } from '../layout/flex';
 import { Palette } from './palette';
 import { attachEnd, flipFor, hasEndsChoice, SHAPES, variantFor, type Shape } from './variants';
 import { LayoutView } from './view';
@@ -52,6 +53,10 @@ interface Drag {
   active: boolean;
   transform: Pose;
   snap: Snap | null;
+  /** Set when the dragged pieces are joined into track, whose joints flex. */
+  flex: FlexContext | null;
+  /** The flexed track, while the drag is held by its joints. */
+  flexed: FlexResult | null;
 }
 
 export interface EditorDom {
@@ -331,6 +336,8 @@ export class Editor {
       active: false,
       transform: IDENTITY,
       snap: null,
+      flex: flexContext(this.layout, uids, grab),
+      flexed: null,
     };
   }
 
@@ -344,8 +351,11 @@ export class Editor {
     }
     const at = this.floorPoint(e);
     if (!at) return;
+    // Joined track flexes within its joint play; pulled well past that,
+    // the pieces unclip and move freely.
+    drag.flexed = drag.flex && flexDrag(drag.flex, at);
     const moved: Pose = { x: at.x - drag.grab.x, y: at.y - drag.grab.y, angle: 0 };
-    drag.snap = findSnap(drag.context, moved);
+    drag.snap = drag.flexed ? null : findSnap(drag.context, moved);
     drag.transform = drag.snap?.transform ?? moved;
     this.refresh();
   }
@@ -358,7 +368,7 @@ export class Editor {
     if (drag && e.pointerId === drag.pointerId) {
       this.drag = null;
       if (drag.active) {
-        this.commit(transformPieces(drag.start, drag.uids, drag.transform), { kind: 'pieces', uids: drag.uids });
+        this.commit(this.dragged(drag), { kind: 'pieces', uids: drag.uids });
       } else {
         // A click on a piece selects it.
         this.selection = { kind: 'pieces', uids: drag.uids };
@@ -449,11 +459,11 @@ export class Editor {
 
   private refresh(): void {
     const drag = this.drag?.active ? this.drag : null;
-    const layout = drag ? transformPieces(drag.start, drag.uids, drag.transform) : this.layout;
+    const layout = drag ? this.dragged(drag) : this.layout;
     const joints = findJoints(layout);
     const open = openEnds(layout, joints);
     const s = this.selection;
-    const snapAt = drag?.snap ? this.snapPoint(drag) : null;
+    const snapAt = drag?.snap ? this.snapPoint(drag) : drag?.flexed?.closed ? worldEnd(layout, drag.flexed.closed.b).connector.pose : null;
     this.view.update({
       layout,
       openEnds: open,
@@ -486,6 +496,11 @@ export class Editor {
     this.dom.status.hidden = !hint;
   }
 
+  /** The layout as the drag has it now: flexed, or with the pieces moved. */
+  private dragged(drag: Drag): Layout {
+    return drag.flexed?.layout ?? transformPieces(drag.start, drag.uids, drag.transform);
+  }
+
   private snapPoint(drag: Drag): Vec2 {
     const fixed = drag.context.fixedEnds.find((e) => e.uid === drag.snap!.fixed.uid && e.connectorId === drag.snap!.fixed.connectorId)!;
     return fixed.connector.pose;
@@ -498,7 +513,13 @@ export class Editor {
     const counts = layout.pieces.length
       ? [plural(layout.pieces.length, 'piece'), plural(joints, 'joint'), plural(open, 'open end')].join(' · ')
       : '';
-    if (this.drag?.active) return [this.drag.snap ? 'Let go to join.' : 'Drag near an open end to snap on.', counts];
+    const drag = this.drag?.active ? this.drag : null;
+    if (drag?.flexed) {
+      if (drag.flexed.closed) return ['The joints give enough to close it: let go to join.', counts];
+      const stuck = drag.flexed.atLimit.length;
+      return [stuck ? `Flexing: ${plural(stuck, 'joint')} at the limit. Pull harder to unclip.` : 'Flexing the joints.', counts];
+    }
+    if (drag) return [drag.snap ? 'Let go to join.' : 'Drag near an open end to snap on.', counts];
     if (s.kind === 'end') {
       const what = this.genderOf(s.end) === 'peg' ? 'peg' : 'hole';
       return [`Building from this ${what}: tap a piece to add it.`, counts];
