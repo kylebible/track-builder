@@ -21,7 +21,7 @@ const ENDS_LABELS: Record<Ends, string> = { mixed: 'Peg + hole', pegs: '2 pegs',
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /** Plan-view drawing of a piece, plan y up, entered from the left. */
-function pieceIcon(piece: PieceDef): SVGSVGElement {
+export function pieceIcon(piece: PieceDef): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('aria-hidden', 'true');
   const points: [number, number][] = [];

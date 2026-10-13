@@ -13,6 +13,8 @@ export interface ViewState {
   selectedEnd: EndRef | null;
   /** Where a dragged piece is snapping on, shown as a ring. */
   snapAt: { x: number; y: number } | null;
+  /** Problems the layout check found, shown as red rings on the track. */
+  marks: { at: { x: number; y: number }; focused: boolean }[];
 }
 
 const MARKER_RADIUS = 11;
@@ -21,12 +23,14 @@ const MARKER_LIFT = 6;
 const markerGeometry = new THREE.CylinderGeometry(MARKER_RADIUS, MARKER_RADIUS, 4, 40);
 const rimGeometry = new THREE.TorusGeometry(MARKER_RADIUS, 1.8, 10, 40);
 const ringGeometry = new THREE.TorusGeometry(MARKER_RADIUS + 6, 2.2, 10, 48);
+const markGeometry = new THREE.TorusGeometry(34, 3, 10, 64);
 const rimMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 });
 const markerMaterial = {
   peg: new THREE.MeshStandardMaterial({ color: 0x2f6fd6, roughness: 0.45 }),
   hole: new THREE.MeshStandardMaterial({ color: 0xe0832b, roughness: 0.45 }),
   selected: new THREE.MeshStandardMaterial({ color: 0x1f9d55, emissive: 0x1f9d55, emissiveIntensity: 0.4 }),
   snap: new THREE.MeshStandardMaterial({ color: 0x1f9d55, emissive: 0x1f9d55, emissiveIntensity: 0.8 }),
+  problem: new THREE.MeshStandardMaterial({ color: 0xc8352b, emissive: 0xc8352b, emissiveIntensity: 0.5 }),
 };
 
 /** Highlighted copies of piece materials, made once per material. */
@@ -141,6 +145,16 @@ export class LayoutView {
       rim.userData.end = marker.userData.end;
       this.markersRoot.add(marker, rim);
       if (isSelected) this.addRing(marker.position, material, 1, marker.userData.end);
+    }
+    for (const mark of state.marks) {
+      const at = toWorld(mark.at.x, mark.at.y, D.TRACK_HEIGHT + 2);
+      const ring = new THREE.Mesh(markGeometry, markerMaterial.problem);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.copy(at);
+      ring.userData.baseScale = 1;
+      this.markersRoot.add(ring);
+      // Only the one being looked at pulses, so a busy layout stays calm.
+      if (mark.focused) this.pulsing.push(ring);
     }
     if (state.snapAt) {
       this.addRing(toWorld(state.snapAt.x, state.snapAt.y, D.TRACK_HEIGHT + MARKER_LIFT), markerMaterial.snap, 1.4);
