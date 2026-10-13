@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { deg, IDENTITY } from '../geometry/pose';
-import { addPiece, EMPTY_LAYOUT, extendFrom, findJoints, openEnds, transformPieces, type EndRef, type Layout } from '../layout/layout';
+import { flexContext, flexDrag } from '../layout/flex';
+import { addPiece, EMPTY_LAYOUT, extendFrom, findJoints, openEnds, transformPieces, worldEnds, type EndRef, type Layout } from '../layout/layout';
 import { checkLayout, summarize } from './check';
 import { codeFromHash, decodeLayout, encodeLayout, layoutFromJson, layoutToJson, LayoutFileError, shareUrl } from './file';
 import { partsList, partsText } from './parts';
@@ -116,6 +117,21 @@ describe('layout check', () => {
       }
       expect(kinds(layout), id).not.toContain('overlap');
     }
+  });
+});
+
+describe('with joints flexed', () => {
+  it('a loop closed by flexing passes the check, and stays closed once saved', async () => {
+    // The oval from the flex tests whose sides come up 18 mm short.
+    const { layout } = build('straight-long', [...curves(4), 'straight-medium', 'straight-mini', ...curves(4)]);
+    expect(kinds(layout)).toEqual(['near-miss']);
+    const grab = worldEnds(layout.pieces.at(-1)!).map((e) => e.connector.pose)[0];
+    const flexed = flexDrag(flexContext(layout, new Set(['p11']), grab)!, { x: grab.x - 15, y: grab.y })!;
+    expect(flexed.closed).not.toBeNull();
+    expect(checkLayout(flexed.layout)).toEqual([]);
+    // Saving rounds positions; every flexed joint is left with room to spare.
+    expect(checkLayout(layoutFromJson(layoutToJson(flexed.layout)))).toEqual([]);
+    expect(checkLayout(await decodeLayout((await encodeLayout(flexed.layout))))).toEqual([]);
   });
 });
 
