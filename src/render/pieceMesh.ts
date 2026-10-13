@@ -23,8 +23,48 @@ const PROFILE: [number, number][] = (() => {
 
 const SAMPLE_STEP_MM = 3;
 
-const woodMaterial = new THREE.MeshStandardMaterial({ color: 0xd9b47c, roughness: 0.75, flatShading: true });
-const holeMaterial = new THREE.MeshStandardMaterial({ color: 0x3a2a1a, roughness: 1 });
+/** Faint beech grain, running along the track. Multiplied by the wood colour. */
+function grainTexture(): THREE.Texture | null {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+  const g = canvas.getContext('2d');
+  if (!g) return null;
+  g.fillStyle = '#fff';
+  g.fillRect(0, 0, canvas.width, canvas.height);
+  // A fixed seed keeps every load looking the same.
+  let seed = 7;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 70; i++) {
+    const y = rand() * canvas.height;
+    const wobble = 1 + rand() * 3;
+    const phase = rand() * Math.PI * 2;
+    g.strokeStyle = `rgba(120, 80, 30, ${0.04 + rand() * 0.08})`;
+    g.lineWidth = 0.6 + rand() * 1.6;
+    g.beginPath();
+    for (let x = 0; x <= canvas.width; x += 8) {
+      const yy = y + Math.sin((x / canvas.width) * Math.PI * 2 * 2 + phase) * wobble;
+      x ? g.lineTo(x, yy) : g.moveTo(x, yy);
+    }
+    g.stroke();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+const woodMaterial = new THREE.MeshStandardMaterial({
+  color: 0xe8c590,
+  map: grainTexture(),
+  vertexColors: true,
+  roughness: 0.68,
+  flatShading: true,
+});
+const pegMaterial = new THREE.MeshStandardMaterial({ color: 0xe0bb83, map: woodMaterial.map, roughness: 0.68 });
+const holeMaterial = new THREE.MeshStandardMaterial({ color: 0x5a4026, roughness: 1 });
 const bufferMaterial = new THREE.MeshStandardMaterial({ color: 0xc8352b, roughness: 0.6 });
 const stripeMaterial = new THREE.MeshStandardMaterial({ color: 0xf5f1e8, roughness: 0.6 });
 
@@ -35,10 +75,31 @@ function profileAt(pose: Pose): THREE.Vector3[] {
   });
 }
 
-function capTriangles(ring: THREE.Vector3[], out: number[]): void {
+/** Profile edges that are groove walls or floors, shaded darker like worn grooves. */
+const GROOVE_EDGES = new Set([3, 4, 5, 7, 8, 9]);
+const GROOVE_SHADE = 0.8;
+const END_GRAIN_SHADE = 0.86;
+/** Grain texture repeat, in mm along and across the track. */
+const GRAIN_ALONG = 160;
+const GRAIN_ACROSS = 40;
+
+interface Buffers {
+  positions: number[];
+  uvs: number[];
+  colors: number[];
+}
+
+function push(out: Buffers, v: THREE.Vector3, u: number, w: number, shade: number): void {
+  out.positions.push(v.x, v.y, v.z);
+  out.uvs.push(u, w);
+  out.colors.push(shade, shade, shade);
+}
+
+/** An end face. The far end faces forward, the start faces back. */
+function capTriangles(ring: THREE.Vector3[], out: Buffers, facingBack: boolean): void {
   const shape = PROFILE.map(([u, h]) => new THREE.Vector2(u, h));
   for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(shape, [])) {
-    for (const i of [a, b, c]) out.push(ring[i].x, ring[i].y, ring[i].z);
+    for (const i of facingBack ? [a, c, b] : [a, b, c]) push(out, ring[i], PROFILE[i][0] / GRAIN_ACROSS, PROFILE[i][1] / GRAIN_ACROSS, END_GRAIN_SHADE);
   }
 }
 
@@ -47,20 +108,33 @@ function sweepGeometry(path: TrackPath): THREE.BufferGeometry {
   const length = pathLength(path);
   const steps = path.kind === 'straight' ? 1 : Math.max(2, Math.ceil(length / SAMPLE_STEP_MM));
   const rings = Array.from({ length: steps + 1 }, (_, i) => profileAt(poseAt(path, (length * i) / steps)));
-  const positions: number[] = [];
-  const push = (v: THREE.Vector3) => positions.push(v.x, v.y, v.z);
+  const out: Buffers = { positions: [], uvs: [], colors: [] };
+  // Across-the-track texture coordinate: sideways offset plus height, so
+  // both the top and the sides get grain.
+  const across = PROFILE.map(([u, h]) => (u + h) / GRAIN_ACROSS);
   for (let i = 0; i < steps; i++) {
     const r0 = rings[i];
     const r1 = rings[i + 1];
+    const s0 = (length * i) / steps / GRAIN_ALONG;
+    const s1 = (length * (i + 1)) / steps / GRAIN_ALONG;
     for (let j = 0; j < PROFILE.length; j++) {
       const k = (j + 1) % PROFILE.length;
-      [r0[j], r1[j], r1[k], r0[j], r1[k], r0[k]].forEach(push);
+      const shade = GROOVE_EDGES.has(j) ? GROOVE_SHADE : 1;
+      // Wound so faces point out of the wood; the profile runs anticlockwise.
+      push(out, r0[j], s0, across[j], shade);
+      push(out, r1[k], s1, across[k], shade);
+      push(out, r1[j], s1, across[j], shade);
+      push(out, r0[j], s0, across[j], shade);
+      push(out, r0[k], s0, across[k], shade);
+      push(out, r1[k], s1, across[k], shade);
     }
   }
-  capTriangles(rings[0], positions);
-  capTriangles(rings[steps], positions);
+  capTriangles(rings[0], out, true);
+  capTriangles(rings[steps], out, false);
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(out.positions, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(out.uvs, 2));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(out.colors, 3));
   geometry.computeVertexNormals();
   return geometry;
 }
@@ -72,9 +146,9 @@ function connectorMesh(c: Connector): THREE.Object3D {
   group.position.copy(toWorld(x, y));
   group.rotation.y = angle;
   if (c.gender === 'peg') {
-    const neck = new THREE.Mesh(new THREE.BoxGeometry(D.PEG_NECK_LENGTH, D.TRACK_HEIGHT - 2, D.PEG_NECK_WIDTH), woodMaterial);
+    const neck = new THREE.Mesh(new THREE.BoxGeometry(D.PEG_NECK_LENGTH, D.TRACK_HEIGHT - 2, D.PEG_NECK_WIDTH), pegMaterial);
     neck.position.set(D.PEG_NECK_LENGTH / 2, (D.TRACK_HEIGHT - 2) / 2, 0);
-    const head = new THREE.Mesh(new THREE.CylinderGeometry(D.PEG_DIAMETER / 2, D.PEG_DIAMETER / 2, D.TRACK_HEIGHT - 2, 32), woodMaterial);
+    const head = new THREE.Mesh(new THREE.CylinderGeometry(D.PEG_DIAMETER / 2, D.PEG_DIAMETER / 2, D.TRACK_HEIGHT - 2, 32), pegMaterial);
     head.position.set(D.PEG_NECK_LENGTH + D.PEG_DIAMETER / 2, (D.TRACK_HEIGHT - 2) / 2, 0);
     group.add(neck, head);
   } else {
