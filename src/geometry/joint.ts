@@ -45,3 +45,8 @@ export function canMate(a: Connector, b: Connector, play: Play = DEFAULT_PLAY): 
   return e.gapMm <= play.mm && e.angleDeg <= play.deg + 1e-9;
 }
 
+
+/** Where to place `piece` so its connector `connectorId` sits exactly at `world`. */
+export function placeConnectorAt(world: Pose, piece: PieceDef, connectorId: string): Pose {
+  return placeToMate({ ...world, angle: normalizeAngle(world.angle + Math.PI) }, piece, connectorId);
+}
