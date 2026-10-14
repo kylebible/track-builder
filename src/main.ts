@@ -98,11 +98,13 @@ const editor = new Editor(scene, camera, orbit, {
     lower: button('lower'),
     section: button('section'),
     fill: button('fill'),
+    generate: button('generate'),
     remove: button('remove'),
     fit: button('fit'),
   },
   onFit: fitView,
   fillPanel: document.getElementById('fill-panel')!,
+  generatePanel: document.getElementById('generate-panel')!,
   blocked: (layout) => {
     const env = getEnvironment(environment);
     return [...(offArea(layout, env)?.uids ?? []), ...(inWater(layout, env)?.uids ?? [])];
