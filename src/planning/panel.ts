@@ -50,6 +50,7 @@ const CATEGORY_NAMES: Record<PieceCategory, string> = {
   crossing: 'Crossings',
   buffer: 'Buffer stops',
   scenery: 'Scenery',
+  trackside: 'Trackside stops',
 };
 
 const ICONS = {

@@ -163,7 +163,8 @@ Trains with their engines on brake for them and set off again on their own:
   coming toward its lamps, a little short of it; turn the signal round (R)
   to face the other way. It works the track within 90 mm of it.
 - **Station**: trains stop with their middle at the platform for 3 seconds,
-  once each time round.
+  once each time round. Some passengers get off each coach and some get on,
+  and the train waits until they have.
 - **Cargo loader**: sits over the track like a station. A train stops each
   empty open wagon under its chute and a crate drops in.
 - **Magnetic crane**: put it beside the track, 5 to 15 cm from it. A train
@@ -178,6 +179,39 @@ Signals and the bridge's knob take taps whenever the Trains panel is open or
 trains are on the track. Stopping distances and waiting times are in
 `ACCESSORY`. The lifting bridge and the loader are our own designs, not
 measured pieces.
+
+### Cars, cargo and trackside stops
+
+Besides the open wagon, coach and timber car there are a coal hopper, water
+tank car, milk car, cattle car, mail van, flat car, car carrier and brake
+van. Each car that carries something shows it on the model as it fills:
+passengers at the windows, logs, coal, cows, crates and toy cars.
+
+Steam engines burn water and coal and battery engines use charge as they
+run (`SUPPLIES` in `src/trains/sim.ts`). A tender's coal is burned before
+the engine's own, and a water tank car tops up the boiler when it gets low.
+An engine that runs dry stops and says what it needs. The Trains panel has a
+switch to turn this off, and Reset puts every train back with full stores
+and empty cars.
+
+The **Trackside stops** section of the palette has places that sit over a
+straight like the station (`src/trains/stops.ts`). A train with its engines
+on stops at one only when there's work for it there, lines up the cars that
+need it, waits while the work is done, and carries on:
+
+- **Water tower**, **coaling stage**, **charging post**: top up engines (and
+  tenders and water tank cars).
+- **Coal mine** fills coal hoppers; the **power station** empties them.
+- **Farm** loads cows and milk; the **market** unloads them.
+- **Post office** swaps the mail van's bags.
+- **Lumber camp** loads logs; the **sawmill** takes them and loads crates of
+  planks; the **toy factory** loads toy cars and crates; the **goods shed**
+  unloads crates and toy cars.
+- **Whistle board**: engines whistle as they pass. **Slow board**: trains
+  slow down past it.
+
+The train's controls show what's happening while it waits, and the panel
+keeps a tally of what has been delivered. Work rates are in `WORK`.
 
 The eye button on a train's controls (or C) rides along: the view moves to
 the front of the train, over an engine's cab or over the leading car when

@@ -30,7 +30,7 @@ export type TrackPath =
 /** How a bridge span is built, for its model. */
 export type BridgeStyle = 'viaduct' | 'suspension' | 'truss' | 'covered';
 
-export type PieceCategory = 'straight' | 'curve' | 'double' | 'ramp' | 'switch' | 'crossing' | 'buffer' | 'scenery';
+export type PieceCategory = 'straight' | 'curve' | 'double' | 'ramp' | 'switch' | 'crossing' | 'buffer' | 'scenery' | 'trackside';
 
 export interface PieceDef {
   /** Stable catalog id, used in saved layouts. */
@@ -61,6 +61,11 @@ export interface PieceDef {
    * needs no support blocks, and nor does track joined to its ends.
    */
   bridge?: BridgeStyle;
+  /**
+   * Left out of auto-fill: an uncommon or generic piece. Every shape fill can
+   * use multiplies its search, which has to finish in a fraction of a second.
+   */
+  noFill?: boolean;
   /** How far a bendy track is bent, degrees, before any flip. */
   bend?: number;
   /** A lifting bridge: the stretch of its first path, from and to (mm along it), that rises. */
