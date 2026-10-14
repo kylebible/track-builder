@@ -10,6 +10,8 @@ import { edgeGrade, edgeHeight } from './network';
 import { TrainSim, type StuckKind, type Train, type VehicleGeometry } from './sim';
 import { AXLE_HEIGHT, buildVehicle, showLoad } from './trainMesh';
 import { AccessoryView } from './accessoryView';
+import { EconomyView } from './economyView';
+import { freshAboard, getJob, JOBS, tiredAboard, type JobId } from './jobs';
 import { Synth } from '../sound/synth';
 import { TrainSounds } from '../sound/trainSounds';
 import './trains.css';
@@ -202,6 +204,9 @@ export class Trains {
   private readonly bubbles: { el: HTMLElement; at: THREE.Vector3; until: number }[] = [];
   private eventsSeen = 0;
   private readonly deliveries: HTMLElement;
+  private readonly economyView: EconomyView;
+  /** The lever setting last drawn, to redraw when job trains throw them. */
+  private leversDrawn = -1;
 
   constructor(
     scene: THREE.Scene,
@@ -247,6 +252,7 @@ export class Trains {
     );
     const supplies = el('input', { type: 'checkbox', checked: this.sim.useSupplies, onchange: () => (this.sim.useSupplies = supplies.checked) });
     this.deliveries = el('p', { class: 'tr-deliveries' });
+    this.economyView = new EconomyView(this.sim, this.hud, camera, container, { addJobTrain: (job) => this.addJobTrain(job) });
     this.panel = el(
       'section',
       { id: 'trains', hidden: true, ariaLabel: 'Trains' },
@@ -256,13 +262,15 @@ export class Trains {
       el('div', { class: 'tr-row' }, this.pauseButton, el('div', { class: 'seg' }, ...this.speedButtons), el('button', { class: 'tr-btn', type: 'button', textContent: 'Reset', title: 'Put every train back where it was built, stopped', onclick: () => this.reset() })),
       el('label', { class: 'tr-check', title: 'Steam engines burn water and coal and battery engines use charge. Top them up at a water tower, coaling stage or charging post.' }, supplies, ' Engines use up water, coal and charge'),
       this.deliveries,
+      this.economyView.section,
+      el('h3', { textContent: 'Tips' }),
       el('ul', { class: 'tr-hint' },
         el('li', { innerHTML: '<b>Tap a car</b> on the track to turn it round. Red and blue ends are the magnets: red pulls blue.' }),
         el('li', { innerHTML: '<b>Drag a car</b> to lift it off. Drop it off the track to take it away.' }),
         el('li', { innerHTML: 'Each train has its own controls. Tap a switch’s <b>yellow knob</b> to change its way.' }),
         el('li', { innerHTML: '<b>Tap a signal</b> to turn it red or green. Trains stop at stations, and under the cargo loader and by the crane to load and unload open wagons. The lifting bridge’s knob raises it.' }),
         el('li', { innerHTML: '<b>Ride along</b> (C) watches from the cab. Drag to look around; Esc gets off.' }),
-        el('li', { innerHTML: 'Put <b>trackside</b> places from the parts palette over a straight: trains stop at water towers, mines and more when there’s work for them.' }),
+        el('li', { innerHTML: 'Put <b>trackside</b> places from the parts palette over a straight: trains stop at water towers, mines and more when there’s work for them. <b>Jobs</b> above says what each place needs.' }),
       ),
     );
     container.append(this.hud, this.panel, this.toast);
@@ -334,6 +342,16 @@ export class Trains {
     this.eventsSeen = 0;
   }
 
+  private addJobTrain(job: JobId): void {
+    const train = this.sim.addJobTrain(job);
+    if (typeof train === 'string') {
+      this.say(train);
+      return;
+    }
+    this.setPaused(false);
+    this.say(`${train.name} is on its way. ${getJob(job).blurb}`);
+  }
+
   private say(message: string): void {
     this.toast.textContent = message;
     this.toast.hidden = false;
@@ -373,6 +391,7 @@ export class Trains {
       { class: 'tr-card' },
       el('div', { class: 'tr-card-head' }, el('b', { textContent: t.name }), el('span', { class: 'tr-card-status' })),
       el('div', { class: 'tr-card-load' }),
+      t.vehicles.some((v) => v.def.motor) ? this.jobRow(t) : '',
       el('div', { class: 'tr-card-work', hidden: true }, el('span'), el('i', {}, el('i'))),
       el('div', { class: 'tr-card-row' },
         t.wrecked
@@ -386,6 +405,25 @@ export class Trains {
         act('✕', 'Take the train off the track', () => this.sim.removeTrain(t.id), 'danger'),
       ),
     );
+  }
+
+  /** The job picker, and where the train is heading for it. */
+  private jobRow(t: Train): HTMLElement {
+    const select = el(
+      'select',
+      { class: 'tr-job', title: 'What this train is for. With a job it picks its own stops and sets the switches.', onchange: () => this.sim.setJob(t.id, select.value as JobId) },
+      ...JOBS.map((j) => el('option', { value: j.id, textContent: `${j.icon} ${j.name}`, selected: j.id === t.job, title: j.blurb })),
+    );
+    return el('div', { class: 'tr-card-job' }, select, el('span', { class: 'tr-card-dest' }));
+  }
+
+  /** Where a job train is heading, for its card. */
+  private destText(t: Train): string {
+    if (t.job === 'free') return '';
+    if (!this.sim.useEconomy) return 'Places need nothing';
+    if (!t.destination) return 'Nothing to do';
+    const site = this.sim.economy.site(t.destination);
+    return site ? `→ ${site.place.name}` : '';
   }
 
   /** Stores and cargo, for the card: "Water 60% · Coal 80% · 5 passengers". */
@@ -408,9 +446,17 @@ export class Trains {
       const kind = getStock(entry.stockId).cargo?.kind;
       if (kind) cargo.set(kind, (cargo.get(kind) ?? 0) + (entry.units ?? 0));
     }
+    if (t.job === 'workers' && cargo.has('passengers')) {
+      // Workers rather than passengers.
+      const fresh = freshAboard(t.consist);
+      const tired = tiredAboard(t.consist);
+      cargo.set('passengers', cargo.get('passengers')! - fresh - tired);
+      if (fresh) parts.push(`${fresh} going to work`);
+      if (tired) parts.push(`${tired} tired, going home`);
+    }
     const carried = [...cargo].filter(([, n]) => n);
     if (carried.length) for (const [kind, n] of carried) parts.push(cargoCount(kind, n));
-    else if (cargo.size) parts.push('Cars empty');
+    else if (cargo.size && parts.every((p) => !/going/.test(p))) parts.push('Cars empty');
     return parts.join(' · ');
   }
 
@@ -559,7 +605,7 @@ export class Trains {
     for (const t of this.sim.trains) {
       seen.add(t.id);
       const riding = this.ride?.trainId === t.id;
-      const key = `${t.throttle}/${t.wrecked}/${t.name}/${t.vehicles.some((v) => v.def.motor)}/${riding}`;
+      const key = `${t.throttle}/${t.wrecked}/${t.name}/${t.vehicles.some((v) => v.def.motor)}/${riding}/${t.job}`;
       let entry = this.cards.get(t.id);
       if (!entry || entry.key !== key) {
         const card = this.makeCard(t);
@@ -597,6 +643,11 @@ export class Trains {
         const span = work.querySelector('span')!;
         if (span.textContent !== doing.summary) span.textContent = doing.summary;
         work.querySelector<HTMLElement>('i i')!.style.width = `${doing.total ? Math.round((100 * doing.done) / doing.total) : 100}%`;
+      }
+      const dest = card.querySelector<HTMLElement>('.tr-card-dest');
+      if (dest) {
+        const text = this.destText(t);
+        if (dest.textContent !== text) dest.textContent = text;
       }
       const status = card.querySelector<HTMLElement>('.tr-card-status')!;
       status.textContent = this.statusText(t);
@@ -832,6 +883,8 @@ export class Trains {
     this.drawPlaces(time);
     this.updateLeverVisibility();
     this.accessories.update(this.layout, time, this.leversRoot.visible);
+    if (this.sim.leverVersion !== this.leversDrawn) this.drawLevers();
+    this.economyView.update(time, !this.ride && (this.open || this.sim.trains.length > 0));
     const notices = this.sim.notices;
     if (notices.length && notices[notices.length - 1].time !== this.noticesSeen) {
       this.noticesSeen = notices[notices.length - 1].time;
@@ -917,6 +970,7 @@ export class Trains {
 
   /** A yellow knob over each switch, and a yellow stripe down the way it is set. */
   private drawLevers(): void {
+    this.leversDrawn = this.sim.leverVersion;
     this.leversRoot.traverse((o) => {
       if (o instanceof THREE.Mesh && o.geometry instanceof THREE.TubeGeometry) o.geometry.dispose();
     });
