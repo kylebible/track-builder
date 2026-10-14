@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { deg, IDENTITY, type Pose, type Vec2 } from '../geometry/pose';
-import { getPiece } from '../pieces/catalog';
+import { BENDY_IDS, getPiece } from '../pieces/catalog';
 import { LEVEL_HEIGHT } from '../pieces/dimensions';
 import type { Gender } from '../pieces/types';
 import { History } from '../layout/history';
@@ -12,6 +12,7 @@ import {
   centerOf,
   clearSpotFor,
   copyPieces,
+  defOf,
   dragContext,
   EMPTY_LAYOUT,
   extendFrom,
@@ -26,6 +27,7 @@ import {
   pastePieces,
   sameEnd,
   raisePieces,
+  reshapePiece,
   removePieces,
   rotatePieces,
   sectionOf,
@@ -40,9 +42,11 @@ import {
   type Snap,
 } from '../layout/layout';
 import { flexContext, flexDrag, type FlexContext, type FlexResult } from '../layout/flex';
-import { describeFill, findFills, MAX_PIECES, type Fill } from '../layout/fill';
+import { describeFill, searchFills, type Fill } from '../layout/fill';
+import { DEFAULT_SECTION, generateSection, type SectionOptions } from '../layout/generate';
+import { renderGeneratePanel, type GeneratePanelState } from './generatePanel';
 import { Palette } from './palette';
-import { attachEnd, flipFor, hasEndsChoice, isLoose, SHAPES, variantFor, type Shape } from './variants';
+import { attachEnd, flipFor, hasEndsChoice, turnFrom, isLoose, SHAPES, variantFor, type Shape } from './variants';
 import { LayoutView } from './view';
 
 // Turns pointer, keyboard and toolbar input into layout edits. Every edit
@@ -122,6 +126,28 @@ interface Filling {
   to: EndRef | null;
   options: Fill[];
   index: number;
+  /** Still looking for more ways, a slice at a time. */
+  searching: boolean;
+}
+
+/** A section being generated: its settings and the one previewed. */
+interface Generating extends GeneratePanelState {
+  /** Where it starts: the selected end, or loose here. */
+  start: EndRef | null;
+  at: Vec2;
+  /** The open end it finishes at, if one was picked. */
+  goal: EndRef | null;
+}
+
+const SECTION_KEY = 'track-builder:generate';
+
+function savedSectionOptions(): SectionOptions {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SECTION_KEY) ?? 'null');
+    return { ...DEFAULT_SECTION, ...(saved && typeof saved === 'object' ? saved : {}), seed: Math.floor(Math.random() * 1e9) };
+  } catch {
+    return { ...DEFAULT_SECTION, seed: Math.floor(Math.random() * 1e9) };
+  }
 }
 
 export interface EditorDom {
@@ -138,6 +164,7 @@ export interface EditorDom {
     | 'rotateRight'
     | 'flip'
     | 'swap'
+    | 'bend'
     | 'raise'
     | 'lower'
     | 'section'
@@ -145,12 +172,15 @@ export interface EditorDom {
     | 'paste'
     | 'duplicate'
     | 'fill'
+    | 'generate'
     | 'remove'
     | 'fit',
     HTMLButtonElement
   >;
   /** Where the auto-fill choices are listed. */
   fillPanel: HTMLElement;
+  /** Where a new section's settings are. */
+  generatePanel: HTMLElement;
   /** Pieces in trouble the layout check can't see, such as off the table or in the water. */
   blocked?: (layout: Layout) => Iterable<string>;
   /** Frame the whole layout in the view. */
@@ -183,6 +213,7 @@ export class Editor {
   /** The floor under the pointer when it last moved over the view, for pasting where it points. */
   private pointerAt: Vec2 | null = null;
   private readonly boxEl = document.createElement('div');
+  private generating: Generating | null = null;
   private readonly view: LayoutView;
   private readonly palette: Palette;
   private readonly raycaster = new THREE.Raycaster();
@@ -221,10 +252,12 @@ export class Editor {
     b.rotateRight.onclick = () => this.rotate(-1);
     b.flip.onclick = () => this.flip();
     b.swap.onclick = () => this.swap();
+    b.bend.onclick = (e) => this.bend(e.shiftKey ? -1 : 1);
     b.raise.onclick = () => this.raise(1);
     b.lower.onclick = () => this.raise(-1);
     b.section.onclick = () => this.selectSection();
     b.fill.onclick = () => this.startFill();
+    b.generate.onclick = () => this.startGenerate();
     b.remove.onclick = () => this.remove();
     b.fit.onclick = () => dom.onFit();
     this.boxEl.className = 'select-box';
@@ -285,6 +318,7 @@ export class Editor {
   private commit(next: Layout | null, selection: Selection = this.selection): void {
     if (!next) return;
     this.filling = null;
+    this.endGenerate();
     this.history.push(next);
     this.selection = selection;
     this.refresh();
@@ -421,6 +455,40 @@ export class Editor {
       }
     }
     return null;
+  }
+
+  /** The one selected piece, if it is a bendy track. */
+  private selectedBendy(): string | null {
+    const uids = this.targets();
+    if (uids.size !== 1) return null;
+    const [uid] = uids;
+    return BENDY_IDS.includes(findPiece(this.layout, uid).pieceId) ? uid : null;
+  }
+
+  /**
+   * Bend a bendy track a step further (or back towards straight), keeping
+   * the end it is joined by in place. It keeps bending the way it already
+   * turns; a straight one starts bending the way the palette's Curves turn
+   * setting says.
+   */
+  bend(direction: 1 | -1): void {
+    const uid = this.selectedBendy();
+    if (!uid) return;
+    const piece = findPiece(this.layout, uid);
+    const step = BENDY_IDS.indexOf(piece.pieceId);
+    const next = step + direction;
+    if (next < 0 || next >= BENDY_IDS.length) {
+      this.flash(next < 0 ? 'That bendy track is already straight.' : 'That bendy track is bent as far as it goes.');
+      return;
+    }
+    const id = BENDY_IDS[next];
+    const layout = reshapePiece(this.layout, uid, id, (anchorId) => {
+      const turn = step ? turnFrom(defOf(piece), anchorId) : 0;
+      const hand = turn ? (turn > 0 ? 'left' : 'right') : this.palette.hand;
+      return flipFor(id, anchorId, hand);
+    });
+    this.commit(layout, this.selection);
+    this.flash(`Bent ${getPiece(id).bend}°.`);
   }
 
   /** Lift the selection a level (onto supports), or lower it a level. */
@@ -596,22 +664,48 @@ export class Editor {
       this.flash('Tap the dot on one open end first, then Fill gap.');
       return;
     }
-    this.filling = { from: s.end, to: null, options: [], index: 0 };
+    this.endGenerate();
+    this.filling = { from: s.end, to: null, options: [], index: 0, searching: false };
     this.refresh();
   }
 
-  /** The other end was tapped: work out the ways to join the two. */
+  /**
+   * The other end was tapped: look for ways to join the two. The search
+   * runs a slice per frame, so runs show up as they're found and a long
+   * way round doesn't freeze the page.
+   */
   private fillTo(to: EndRef): void {
     const filling = this.filling!;
     if (sameEnd(to, filling.from)) return;
-    const options = findFills(this.layout, filling.from, to, { blocked: this.dom.blocked });
-    if (!options.length) {
-      this.filling = { ...filling, to: null, options: [] };
-      this.flash(`No run of up to ${MAX_PIECES} pieces joins those ends without a clash. Try another end.`);
-      return;
-    }
-    this.filling = { ...filling, to, options, index: 0 };
+    const layout = this.layout;
+    const search = searchFills(layout, filling.from, to, { blocked: this.dom.blocked });
+    const current: Filling = { ...filling, to, options: [], index: 0, searching: true };
+    this.filling = current;
+    const step = () => {
+      // Stopped, or another end tapped, or the layout changed under it.
+      if (this.filling !== current || this.layout !== layout) return;
+      const until = performance.now() + 24;
+      let next = search.next();
+      while (!next.done && performance.now() < until) next = search.next();
+      const shown = current.options[current.index];
+      if (next.value.length !== current.options.length) {
+        current.options = next.value;
+        current.index = Math.max(0, shown ? current.options.indexOf(shown) : 0);
+      }
+      if (next.done) {
+        current.searching = false;
+        if (!current.options.length) {
+          this.filling = { ...current, to: null };
+          this.flash('No run of track joins those ends without running into something. Try another end.');
+          return;
+        }
+      } else {
+        window.setTimeout(step, 0);
+      }
+      this.refresh();
+    };
     this.refresh();
+    window.setTimeout(step, 0);
   }
 
   /** Preview another of the ways to fill the gap. */
@@ -637,11 +731,121 @@ export class Editor {
     this.refresh();
   }
 
+  // ---- generate a section ------------------------------------------------
+
+  /** Open the Generate panel, building on from the selected end if there is one. */
+  startGenerate(): void {
+    if (this.generating) {
+      this.cancelGenerate();
+      return;
+    }
+    this.filling = null;
+    const s = this.selection;
+    this.generating = {
+      options: savedSectionOptions(),
+      section: null,
+      busy: false,
+      fromEnd: s.kind === 'end',
+      start: s.kind === 'end' ? s.end : null,
+      at: this.freeSpot(),
+      goal: null,
+      toEnd: false,
+      pickingEnd: false,
+    };
+    this.regenerate();
+  }
+
+  private asks = 0;
+
+  /** Lay the section the settings ask for, then show it. */
+  private regenerate(): void {
+    const g = this.generating;
+    if (!g) return;
+    g.busy = true;
+    const ask = ++this.asks;
+    this.renderGenerate();
+    // Let the panel say it's working before a long one starts; a newer ask supersedes it.
+    window.setTimeout(() => {
+      if (this.generating !== g || ask !== this.asks) return;
+      g.section = generateSection(this.layout, g.options, { start: g.start ?? undefined, at: g.at, goal: g.goal ?? undefined, blocked: this.dom.blocked });
+      g.busy = false;
+      this.renderGenerate();
+      this.refresh();
+    }, 30);
+  }
+
+  private changeGenerate(change: Partial<SectionOptions>): void {
+    const g = this.generating;
+    if (!g) return;
+    g.options = { ...g.options, ...change };
+    try {
+      const { seed: _, ...keep } = g.options;
+      localStorage.setItem(SECTION_KEY, JSON.stringify(keep));
+    } catch {
+      // Private browsing: settings just aren't kept.
+    }
+    this.regenerate();
+  }
+
+  /** Finish the section at the next open end tapped, or anywhere. */
+  private finishAt(end: boolean): void {
+    const g = this.generating;
+    if (!g) return;
+    if (end) {
+      g.pickingEnd = true;
+      this.renderGenerate();
+      this.refresh();
+      return;
+    }
+    Object.assign(g, { goal: null, toEnd: false, pickingEnd: false });
+    this.regenerate();
+  }
+
+  /** Roll another section with the same settings. */
+  anotherSection(): void {
+    if (this.generating) this.changeGenerate({ seed: (this.generating.options.seed + 1) % 1e9 });
+  }
+
+  /** Put the previewed section in. */
+  applyGenerate(): void {
+    const section = this.generating?.section;
+    if (!section || this.generating?.busy) return;
+    const open = openEnds(section.layout).filter((e) => section.uids.includes(e.uid)).length;
+    this.commit(section.layout, { kind: 'pieces', uids: new Set(section.uids) });
+    this.flash(
+      open && this.layout.pieces.length > section.uids.length
+        ? `Added ${section.uids.length} pieces. To join it up, tap one of its open ends, then Fill gap.`
+        : `Added ${section.uids.length} pieces.`,
+    );
+  }
+
+  cancelGenerate(): void {
+    if (!this.generating) return;
+    this.endGenerate();
+    this.refresh();
+  }
+
+  private endGenerate(): void {
+    if (!this.generating) return;
+    this.generating = null;
+    this.renderGenerate();
+  }
+
+  private renderGenerate(): void {
+    renderGeneratePanel(this.dom.generatePanel, this.generating, {
+      change: (c) => this.changeGenerate(c),
+      another: () => this.anotherSection(),
+      finishAt: (end) => this.finishAt(end),
+      use: () => this.applyGenerate(),
+      cancel: () => this.cancelGenerate(),
+    });
+  }
+
   /** List the ways to fill the gap, with the one being previewed picked out. */
   private renderFillPanel(): void {
     const panel = this.dom.fillPanel;
     const f = this.filling;
-    if (!f || !f.options.length) {
+    if (!f || (!f.options.length && !f.searching)) {
       panel.hidden = true;
       panel.replaceChildren();
       return;
@@ -651,8 +855,13 @@ export class Editor {
     head.className = 'panel-head';
     const title = document.createElement('div');
     title.innerHTML = '<h2>Fill the gap</h2><p class="panel-sub"></p>';
-    title.querySelector('p')!.textContent =
-      f.options.length === 1 ? 'One way fits. It is shown on the track.' : `${f.options.length} ways fit. Pick one to see it on the track.`;
+    title.querySelector('p')!.textContent = !f.options.length
+      ? 'Looking for a run of track that joins them…'
+      : f.searching
+        ? `${f.options.length === 1 ? 'One way' : `${f.options.length} ways`} so far, still looking…`
+        : f.options.length === 1
+          ? 'One way fits. It is shown on the track.'
+          : `${f.options.length} ways fit. Pick one to see it on the track.`;
     head.append(title);
     const list = document.createElement('div');
     list.className = 'fills';
@@ -680,6 +889,7 @@ export class Editor {
     use.type = 'button';
     use.className = 'action compact primary';
     use.textContent = 'Use this';
+    use.disabled = !f.options.length;
     use.addEventListener('click', () => this.applyFill());
     const cancel = document.createElement('button');
     cancel.type = 'button';
@@ -692,6 +902,7 @@ export class Editor {
 
   undo(): void {
     this.filling = null;
+    this.endGenerate();
     this.history.undo();
     this.selection = this.validSelection();
     this.refresh();
@@ -699,6 +910,7 @@ export class Editor {
 
   redo(): void {
     this.filling = null;
+    this.endGenerate();
     this.history.redo();
     this.selection = this.validSelection();
     this.refresh();
@@ -801,6 +1013,25 @@ export class Editor {
     this.controls.enabled = false;
     if (this.filling) {
       if ('end' in hit) this.fillTo(hit.end);
+      return;
+    }
+    if (this.generating) {
+      // Tapping an open end builds the section on from there instead, or finishes it there when picking where.
+      const g = this.generating;
+      if ('end' in hit && !g.busy) {
+        if (g.pickingEnd) {
+          if (g.start && sameEnd(g.start, hit.end)) {
+            this.flash('Pick a different end from the one it starts at.');
+            return;
+          }
+          Object.assign(g, { goal: hit.end, toEnd: true, pickingEnd: false });
+        } else {
+          // Starting where it was to finish leaves nowhere to finish.
+          if (g.goal && sameEnd(g.goal, hit.end)) Object.assign(g, { goal: null, toEnd: false });
+          Object.assign(g, { start: hit.end, fromEnd: true });
+        }
+        this.regenerate();
+      }
       return;
     }
     if ('end' in hit) {
@@ -939,6 +1170,8 @@ export class Editor {
       this.flip();
     } else if (k === 's') {
       this.swap();
+    } else if (k === 'b') {
+      this.bend(e.shiftKey ? -1 : 1);
     } else if (k === 'u') {
       this.raise(1);
     } else if (k === 'd') {
@@ -953,13 +1186,23 @@ export class Editor {
       this.remove();
     } else if (k === 'g') {
       this.startFill();
+    } else if (k === 'n') {
+      this.startGenerate();
+    } else if (this.generating && k === 'enter') {
+      this.applyGenerate();
+    } else if (k === 'escape' && this.generating?.pickingEnd) {
+      this.generating.pickingEnd = false;
+      this.renderGenerate();
+      this.refresh();
+    } else if (k === 'escape' && this.generating) {
+      this.cancelGenerate();
     } else if (this.filling?.options.length && k === 'enter') {
       this.applyFill();
     } else if (this.filling?.options.length && (k === 'arrowdown' || k === 'arrowright')) {
       this.showFill(this.filling.index + 1);
     } else if (this.filling?.options.length && (k === 'arrowup' || k === 'arrowleft')) {
       this.showFill(this.filling.index - 1);
-    } else if (k === 'b') {
+    } else if (k === 'e') {
       this.toggleSelectMode();
     } else if (k === 'escape' && this.filling) {
       this.cancelFill();
@@ -1013,7 +1256,8 @@ export class Editor {
     const drag = this.drag?.active ? this.drag : null;
     const drop = this.paletteDrag?.drop ?? null;
     const filling = this.filling;
-    const preview = filling?.options[filling.index] ?? null;
+    const generated = this.generating?.section ?? null;
+    const preview = filling?.options[filling.index] ?? generated;
     const layout = drop ? drop.layout : drag ? this.dragged(drag) : (preview?.layout ?? this.layout);
     const joints = findJoints(layout);
     const open = openEnds(layout, joints);
@@ -1035,7 +1279,7 @@ export class Editor {
       selectedPieces: drop ? new Set([drop.uid]) : preview ? new Set(preview.uids) : s.kind === 'pieces' ? s.uids : new Set(),
       selectedEnd: drop || preview ? null : filling ? filling.from : s.kind === 'end' ? s.end : null,
       snapAt,
-      marks: drag || drop || filling ? [] : this.marks,
+      marks: drag || drop || filling || this.generating ? [] : this.marks,
     });
     if (this.layout !== this.notified) {
       this.notified = this.layout;
@@ -1058,9 +1302,11 @@ export class Editor {
     b.paste.disabled = !this.clip;
     b.select.setAttribute('aria-pressed', String(this.multi));
     b.swap.disabled = this.targets().size !== 1;
+    b.bend.hidden = !this.selectedBendy();
     b.fit.disabled = layout.pieces.length === 0;
     b.fill.disabled = !filling && (s.kind !== 'end' || open.length < 2);
     b.fill.setAttribute('aria-pressed', String(!!filling));
+    b.generate.setAttribute('aria-pressed', String(!!this.generating));
     this.renderFillPanel();
 
     const [hint, counts] = this.flashText ? [this.flashText, ''] : this.describe(layout, open.length, joints.length);
@@ -1101,7 +1347,10 @@ export class Editor {
       const stuck = drag.flexed.atLimit.length;
       return [stuck ? `Flexing: ${plural(stuck, 'joint')} at the limit. Pull harder to unclip.` : 'Flexing the joints.', counts];
     }
+    if (this.generating?.pickingEnd) return ['Tap the open end the new section should finish at. Esc to go back.', counts];
+    if (this.generating) return ['Pick settings for the new section, then Use this. Tap an open end to build on from it. Esc to stop.', counts];
     if (this.filling) {
+      if (this.filling.searching && !this.filling.options.length) return ['Looking for a run of track to join those ends…', counts];
       if (!this.filling.options.length) return ['Now tap the open end to join it to. Esc to stop.', counts];
       return ['Pick a way to fill the gap, then Use this. Esc to stop.', counts];
     }

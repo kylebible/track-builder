@@ -86,21 +86,62 @@ export function worldEnd(layout: Layout, end: EndRef): WorldEnd {
 export const sameEnd = (a: EndRef, b: EndRef): boolean => a.uid === b.uid && a.connectorId === b.connectorId;
 const endKey = (e: EndRef): string => `${e.uid}:${e.connectorId}`;
 
+/** Joints already found, per layout and play. Layouts are never changed in place, so a layout's joints never go stale. */
+const jointCache = new WeakMap<Layout, Map<string, Joint[]>>();
+
 /**
  * Every pair of ends that mate within play. Each end joins at most one
  * other: when several candidates are in range, the closest wins.
  */
 export function findJoints(layout: Layout, play: Play = DEFAULT_PLAY): Joint[] {
+  const playKey = `${play.mm}/${play.deg}`;
+  let cached = jointCache.get(layout);
+  const hit = cached?.get(playKey);
+  if (hit) return hit.map((j) => ({ a: { ...j.a }, b: { ...j.b } }));
+  const joints = matchEnds(layout, play);
+  if (!cached) jointCache.set(layout, (cached = new Map()));
+  cached.set(playKey, joints);
+  return joints.map((j) => ({ a: { ...j.a }, b: { ...j.b } }));
+}
+
+/**
+ * Pairs of ends no further apart than `reach` mm, as indexes into `ends`
+ * with i < j, in the order a check of every pair would find them. Ends are
+ * bucketed on a grid so a big layout doesn't compare every end with every
+ * other.
+ */
+export function nearbyPairs(ends: readonly WorldEnd[], reach: number): [number, number][] {
+  const cell = Math.max(reach, 1);
+  const grid = new Map<string, number[]>();
+  const cellOf = (e: WorldEnd) => [Math.floor(e.connector.pose.x / cell), Math.floor(e.connector.pose.y / cell)];
+  ends.forEach((e, i) => {
+    const [cx, cy] = cellOf(e);
+    const key = `${cx},${cy}`;
+    const list = grid.get(key);
+    if (list) list.push(i);
+    else grid.set(key, [i]);
+  });
+  const pairs: [number, number][] = [];
+  ends.forEach((e, i) => {
+    const [cx, cy] = cellOf(e);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (const j of grid.get(`${cx + dx},${cy + dy}`) ?? []) if (j > i) pairs.push([i, j]);
+      }
+    }
+  });
+  return pairs.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+}
+
+function matchEnds(layout: Layout, play: Play): Joint[] {
   const ends = layout.pieces.flatMap((p) => worldEnds(p));
   const candidates: { a: WorldEnd; b: WorldEnd; gap: number }[] = [];
-  for (let i = 0; i < ends.length; i++) {
-    for (let j = i + 1; j < ends.length; j++) {
-      const a = ends[i];
-      const b = ends[j];
-      if (a.uid === b.uid) continue;
-      if (canMate(a.connector, b.connector, play)) {
-        candidates.push({ a, b, gap: jointError(a.connector.pose, b.connector.pose).gapMm });
-      }
+  for (const [i, j] of nearbyPairs(ends, play.mm)) {
+    const a = ends[i];
+    const b = ends[j];
+    if (a.uid === b.uid) continue;
+    if (canMate(a.connector, b.connector, play)) {
+      candidates.push({ a, b, gap: jointError(a.connector.pose, b.connector.pose).gapMm });
     }
   }
   candidates.sort((x, y) => x.gap - y.gap);
@@ -260,6 +301,21 @@ export function flipPiece(layout: Layout, uid: string): Layout {
   const anchor = ends.find((e) => partnerOf(joints, e)) ?? ends[0];
   const pose = placeConnectorAt(anchor.connector.pose, defOf(flipped), anchor.connectorId);
   return { pieces: layout.pieces.map((p) => (p.uid === uid ? { ...flipped, pose } : p)) };
+}
+
+/**
+ * Swap a piece for another shape of it (a bendy track bent further), keeping
+ * the end it is joined by where it is (or its first end, if it is loose).
+ * `flipped` says whether to turn the new shape over, given that end.
+ */
+export function reshapePiece(layout: Layout, uid: string, pieceId: string, flipped: (anchorId: string) => boolean): Layout {
+  const piece = findPiece(layout, uid);
+  const joints = findJoints(layout);
+  const ends = worldEnds(piece);
+  const anchor = ends.find((e) => partnerOf(joints, e)) ?? ends[0];
+  const next = { ...piece, pieceId, flipped: flipped(anchor.connectorId) };
+  const pose = placeConnectorAt(anchor.connector.pose, defOf(next), anchor.connectorId);
+  return { pieces: layout.pieces.map((p) => (p.uid === uid ? { ...next, pose } : p)) };
 }
 
 /**
@@ -462,7 +518,7 @@ export function findSeat(layout: Layout, uid: string, transform: Pose, range: nu
     const z = baseOf(other) - (def.holdsTrackAt ?? 0);
     if (z < -1e-6) continue;
     for (const path of defOf(other).paths) {
-      if (path.kind !== 'straight' || path.rise) continue;
+      if (path.kind !== 'straight' || path.rise || path.z) continue;
       const mid = applyPose(other.pose, poseAt(path, path.length / 2));
       const gap = Math.hypot(mid.x - moved.x, mid.y - moved.y);
       if (gap > range || (best && gap >= best.gap)) continue;
