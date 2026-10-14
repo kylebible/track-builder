@@ -63,6 +63,8 @@ export interface PieceDef {
   bridge?: BridgeStyle;
   /** How far a bendy track is bent, degrees, before any flip. */
   bend?: number;
+  /** A lifting bridge: the stretch of its first path, from and to (mm along it), that rises. */
+  liftSpan?: [number, number];
   /** Turned over from the catalog piece, see `mirrorPiece`. */
   mirrored?: boolean;
 }

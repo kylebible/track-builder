@@ -130,3 +130,13 @@ export const COVERED_BRIDGE_LENGTH = 2 * MEDIUM_STRAIGHT;
  */
 export const JOINT_PLAY_MM = 2;
 export const JOINT_PLAY_DEG = 2;
+
+/**
+ * Lifting bridge: a D-length piece whose middle span rises straight up
+ * between two towers. The span's ends along the piece, and how high it
+ * lifts, are our own design, not a measured Brio piece.
+ */
+export const LIFT_BRIDGE_LENGTH = LONG_STRAIGHT;
+export const LIFT_SPAN_FROM = 36;
+export const LIFT_SPAN_TO = LIFT_BRIDGE_LENGTH - 36;
+export const LIFT_HEIGHT = 100;
