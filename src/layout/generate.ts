@@ -102,7 +102,8 @@ export const STOPS: readonly StopDef[] = [
   { id: 'lift-bridge', how: 'inline' },
   { id: 'cargo-loader', how: 'seat' },
   { id: 'crane', how: 'beside', offset: (CRANE.minReach + CRANE.maxReach) / 2 },
-  ...PLACES.filter((p) => p.id !== 'station').map((p): StopDef => ({ id: p.id, how: 'seat' })),
+  // Not the pump house: it only works by a river or lake, which the generator can't promise.
+  ...PLACES.filter((p) => p.id !== 'station' && p.id !== 'pump-house').map((p): StopDef => ({ id: p.id, how: 'seat' })),
 ];
 
 /** Random numbers from a seed, the same every time for the same seed. */
