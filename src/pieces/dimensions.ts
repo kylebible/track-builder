@@ -69,6 +69,18 @@ export const SUPPORT_LENGTH = 30;
 export const SUPPORT_WIDTH = 52;
 
 /**
+ * Arch support: where a support block would stand on lower track, two
+ * stacks of blocks stand either side of it instead, with a beam across
+ * their tops that the raised track rests on. Not a Brio piece; the beam
+ * (a thin plank) and the clearances are UNMEASURED guesses. The legs stand
+ * this far from the lower track's centerline, leaving room for a train's
+ * overhang, and the beam spans at most ARCH_MAX_SPAN.
+ */
+export const ARCH_BEAM = 6;
+export const ARCH_CLEARANCE = TRACK_WIDTH / 2 + 8;
+export const ARCH_MAX_SPAN = 300;
+
+/**
  * Track that passes under other track needs this much headroom, from the
  * lower track's bottom to the upper track's bottom: one full level. Half
  * way up a ramp is too low.
