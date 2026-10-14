@@ -12,7 +12,7 @@ import { baseOf, defOf, type Layout, type PlacedPiece } from '../layout/layout';
 // runs off it. Environments with water (a river, a lake) say where it is,
 // so the check can say when track on the ground runs into it.
 
-export type EnvironmentId = 'table' | 'rug' | 'floor' | 'grid' | 'grass' | 'town' | 'river' | 'lake' | 'snow';
+export type EnvironmentId = 'table' | 'rug' | 'playmat' | 'floor' | 'grid' | 'grass' | 'town' | 'river' | 'lake' | 'snow';
 
 export interface Environment {
   id: EnvironmentId;
@@ -43,6 +43,9 @@ export const TABLE = {
 
 /** A 2 x 1.4 m rug, about 10 mm thick. */
 export const RUG = { width: 2000, depth: 1400, thickness: 10 } as const;
+
+/** A printed play mat for children: roads, a river, a farm, a beach. About 4 mm thick. */
+export const PLAYMAT = { width: 2400, depth: 1600, thickness: 4 } as const;
 
 /**
  * A river across the plan, north of the middle so a layout started at the
@@ -86,6 +89,12 @@ export const ENVIRONMENTS: readonly Environment[] = [
     name: 'Living room rug',
     detail: `${RUG.width / 1000} × ${RUG.depth / 1000} m on a wooden floor`,
     area: { width: RUG.width, depth: RUG.depth },
+  },
+  {
+    id: 'playmat',
+    name: 'Kids’ play mat',
+    detail: `${PLAYMAT.width / 1000} × ${PLAYMAT.depth / 1000} m of roads, river, farm and beach`,
+    area: { width: PLAYMAT.width, depth: PLAYMAT.depth },
   },
   { id: 'floor', name: 'Hardwood floor', detail: 'Oak boards, room for anything' },
   { id: 'grid', name: 'Grid mat', detail: '10 cm squares for measuring' },

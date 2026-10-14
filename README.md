@@ -91,12 +91,21 @@ The **Scene** button picks what the track sits on, at real size
 (`src/environments/`):
 
 - Indoors: a play table (1220 × 820 mm with a 20 mm rim, about 400 mm
-  high), a 2 × 1.4 m living room rug on a wooden floor, a hardwood floor,
-  or the original grid mat with 10 cm squares.
-- Outdoors: grass, town streets (200 mm roads in a 1.5 m grid with
-  pavements and zebra crossings, for level crossings), a meadow with a
-  32 cm river winding across it, a lake with a sandy beach, or a snowy
-  field.
+  high), a 2 × 1.4 m living room rug, a 2.4 × 1.6 m children's play mat
+  printed with roads, a roundabout, a river with bridges, a farm, a school,
+  shops, a pond and a beach (`src/environments/playmat.ts`), a hardwood
+  floor, or the original grid mat with 10 cm squares. Toys lie about the
+  floor round them.
+- Outdoors: grass with trees, flowers, sheep and a playground; town streets
+  (200 mm roads in a 1.5 m grid) with parks, houses, shops, flats, car
+  parks and street lamps; a meadow with a 32 cm river, boats, ducks and a
+  windmill; a lake beach with palms, umbrellas, sandcastles, sailing boats
+  and beach huts; or a snowy field with pines, snowmen and cabins.
+
+The props are toy-like models built from simple shapes
+(`src/environments/props.ts`) and laid out from a fixed seed
+(`src/environments/dressing.ts`), always leaving the middle of the scene
+clear for building.
 
 The choice saves with the layout, in files and share links. The check
 reports track that runs past the edge of the table or rug, and track lying on

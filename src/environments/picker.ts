@@ -5,6 +5,7 @@ import { ENVIRONMENTS, type EnvironmentId } from './environments';
 const SWATCHES: Record<EnvironmentId, string> = {
   table: '#e6cfa6',
   rug: 'radial-gradient(circle, #f3e9d6 0 38%, #d8a64a 38% 44%, #2f4a6b 44% 62%, #b8573a 62%)',
+  playmat: 'linear-gradient(90deg, transparent 30%, #686b72 30% 38%, transparent 38%), linear-gradient(transparent 55%, #686b72 55% 63%, transparent 63%), radial-gradient(circle at 80% 25%, #4a93bf 0 14%, transparent 15%), radial-gradient(circle at 15% 80%, #c8352b 0 9%, transparent 10%), #8dc85a',
   floor: 'repeating-linear-gradient(90deg, #c4966a 0 9px, #b4875c 9px 10px, #cfa477 10px 19px, #8a6440 19px 20px)',
   grass: 'radial-gradient(circle at 30% 30%, #9cc070, transparent 50%), radial-gradient(circle at 70% 70%, #5d8a3a, transparent 55%), #6f9a45',
   town: 'linear-gradient(90deg, transparent 40%, #f2efe6 40% 44%, transparent 44%) 0 50% / 100% 2px no-repeat, linear-gradient(#9fc47e, #9fc47e) 50% 0 / 100% 30% no-repeat, linear-gradient(#9fc47e, #9fc47e) 50% 100% / 100% 30% no-repeat, #595c62',

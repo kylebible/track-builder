@@ -1,5 +1,7 @@
 import * as THREE from 'three';
-import { LAKE, lakeShore, RIVER, riverCentre, RUG, TABLE, TOWN, type EnvironmentId } from './environments';
+import { LAKE, lakeShore, PLAYMAT, RIVER, riverCentre, RUG, TABLE, TOWN, type EnvironmentId } from './environments';
+import { dressGrass, dressLake, dressRiver, dressRoom, dressSnow, dressTown, ROOM_KEEP_OUT } from './dressing';
+import { playmatCanvas } from './playmat';
 
 // The three.js side of environments: the surface under the track and
 // everything around it, plus the sky colour and light that suit it. Each
@@ -20,6 +22,7 @@ const FLOOR = 12000;
 
 const LOOKS: Record<EnvironmentId, EnvironmentLook> = {
   table: { background: 0xf3ece0, fog: [2600, 7500], hemisphere: [0xffffff, 0xcfc4b0, 1.5], sun: 2.0 },
+  playmat: { background: 0xf3ece0, fog: [2600, 7500], hemisphere: [0xffffff, 0xcfc4b0, 1.5], sun: 2.0 },
   rug: { background: 0xf3ece0, fog: [2600, 7500], hemisphere: [0xffffff, 0xcfc4b0, 1.5], sun: 2.0 },
   floor: { background: 0xf3ece0, fog: [2600, 7500], hemisphere: [0xffffff, 0xcfc4b0, 1.5], sun: 2.0 },
   grass: { background: 0xcfe5f3, fog: [3000, 9000], hemisphere: [0xe6f3ff, 0x9fb27a, 1.45], sun: 2.3 },
@@ -434,7 +437,7 @@ function buildTable(): THREE.Group {
     }
   }
 
-  group.add(ground(boardsMaterial(), -height));
+  group.add(ground(boardsMaterial(), -height), dressRoom(-height, ROOM_KEEP_OUT.table));
   return group;
 }
 
@@ -445,17 +448,27 @@ function buildRug(): THREE.Group {
   // Box faces: +x, -x, +y (top), -y, +z, -z.
   const rug = receive(new THREE.Mesh(new THREE.BoxGeometry(RUG.width, RUG.thickness, RUG.depth), [side, side, face, side, side, side]));
   rug.position.y = -RUG.thickness / 2;
-  group.add(rug, ground(boardsMaterial(), -RUG.thickness));
+  group.add(rug, ground(boardsMaterial(), -RUG.thickness), dressRoom(-RUG.thickness, ROOM_KEEP_OUT.rug));
+  return group;
+}
+
+function buildPlaymat(): THREE.Group {
+  const group = new THREE.Group();
+  const face = new THREE.MeshStandardMaterial({ map: texture(playmatCanvas(), [PLAYMAT.width, PLAYMAT.depth], [PLAYMAT.width, PLAYMAT.depth]), roughness: 0.95 });
+  const side = new THREE.MeshStandardMaterial({ color: 0x2f4a6b, roughness: 1 });
+  const mat = receive(new THREE.Mesh(new THREE.BoxGeometry(PLAYMAT.width, PLAYMAT.thickness, PLAYMAT.depth), [side, side, face, side, side, side]));
+  mat.position.y = -PLAYMAT.thickness / 2;
+  group.add(mat, ground(boardsMaterial(), -PLAYMAT.thickness), dressRoom(-PLAYMAT.thickness, ROOM_KEEP_OUT.playmat));
   return group;
 }
 
 function buildFloor(): THREE.Group {
-  return new THREE.Group().add(ground(boardsMaterial(), 0));
+  return new THREE.Group().add(ground(boardsMaterial(), 0), dressRoom(0, ROOM_KEEP_OUT.floor));
 }
 
 function buildGrass(): THREE.Group {
   const lawn = new THREE.MeshStandardMaterial({ map: texture(grassCanvas(), [1000, 1000], [FLOOR, FLOOR]), roughness: 1 });
-  return new THREE.Group().add(ground(lawn, 0));
+  return new THREE.Group().add(ground(lawn, 0), dressGrass());
 }
 
 /** The original planning mat: 100 mm squares with a heavier line every metre. */
@@ -474,12 +487,12 @@ function buildTown(): THREE.Group {
   // cross in the middle; shift half a block so a layout started there sits
   // in a block instead.
   t.offset.set(0.5, 0.5);
-  return new THREE.Group().add(ground(new THREE.MeshStandardMaterial({ map: t, roughness: 0.9 }), 0));
+  return new THREE.Group().add(ground(new THREE.MeshStandardMaterial({ map: t, roughness: 0.9 }), 0), dressTown());
 }
 
 function buildSnow(): THREE.Group {
   const snow = new THREE.MeshStandardMaterial({ map: texture(snowCanvas(), [1000, 1000], [FLOOR, FLOOR]), roughness: 0.95 });
-  return new THREE.Group().add(ground(snow, 0));
+  return new THREE.Group().add(ground(snow, 0), dressSnow());
 }
 
 /** Water lies this far below the land, inside banks this deep. */
@@ -532,7 +545,7 @@ function buildRiver(): THREE.Group {
   const northBank = new THREE.Shape([...north, new THREE.Vector2(H, H), new THREE.Vector2(-H, H)]);
   const southBank = new THREE.Shape([...south, new THREE.Vector2(H, -H), new THREE.Vector2(-H, -H)]);
   const lawn = new THREE.MeshStandardMaterial({ map: planTexture(grassCanvas(), 1000), roughness: 1 });
-  return landAndWater([northBank, southBank], [north, south], lawn, 0x7a6248);
+  return landAndWater([northBank, southBank], [north, south], lawn, 0x7a6248).add(dressRiver());
 }
 
 function buildLake(): THREE.Group {
@@ -546,12 +559,13 @@ function buildLake(): THREE.Group {
   const beach = new THREE.Shape([new THREE.Vector2(-H, -H), new THREE.Vector2(H, -H), new THREE.Vector2(H, H), new THREE.Vector2(-H, H)]);
   beach.holes.push(new THREE.Path(shore));
   const sand = new THREE.MeshStandardMaterial({ map: planTexture(sandCanvas(), 1000), roughness: 1 });
-  return landAndWater([beach], [shore], sand, 0xc9b183);
+  return landAndWater([beach], [shore], sand, 0xc9b183).add(dressLake());
 }
 
 const BUILDERS: Record<EnvironmentId, () => THREE.Group> = {
   table: buildTable,
   rug: buildRug,
+  playmat: buildPlaymat,
   floor: buildFloor,
   grid: buildGrid,
   grass: buildGrass,
