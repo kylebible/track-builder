@@ -42,7 +42,7 @@ import { describeFill, searchFills, type Fill } from '../layout/fill';
 import { DEFAULT_SECTION, generateSection, type SectionOptions } from '../layout/generate';
 import { renderGeneratePanel, type GeneratePanelState } from './generatePanel';
 import { Palette } from './palette';
-import { attachEnd, flipFor, hasEndsChoice, turnFrom, isLoose, SHAPES, variantFor, type Shape } from './variants';
+import { attachEnd, flipFor, hasEndsChoice, offeredIds, turnFrom, isLoose, SHAPES, variantFor, type Shape } from './variants';
 import { LayoutView } from './view';
 
 // Turns pointer, keyboard and toolbar input into layout edits. Every edit
@@ -396,7 +396,7 @@ export class Editor {
     const partner = partnerOf(joints, joined[0])!;
     const rest = removePieces(this.layout, new Set([uid]));
     const target = worldEnd(rest, partner).connector.gender;
-    for (const id of shape.ids.filter((i) => i !== piece.pieceId)) {
+    for (const id of offeredIds(shape).filter((i) => i !== piece.pieceId)) {
       for (const c of getPiece(id).connectors) {
         if (c.gender === target || c.id === joined[0].connectorId) continue;
         const ext = extendFrom(rest, partner, id, flipFor(id, c.id, this.palette.hand), c.id);
