@@ -11,9 +11,11 @@ import type { Route } from './route';
 // its hook reaches, a lifting bridge on its own span. Trains with their
 // engines on brake for them: at a red signal or a raised bridge until it
 // clears, at a station for a few seconds, under the loader until an empty
-// open wagon is filled, and at the crane while it lifts a crate off.
+// open wagon is filled, and at the crane while it lifts a crate off. Each
+// line across a turntable is one too: trains wait short of it until the
+// bridge lines up with them (see turntable.ts).
 
-export type AccessoryKind = 'signal' | 'station' | 'bridge' | 'loader' | 'crane';
+export type AccessoryKind = 'signal' | 'station' | 'bridge' | 'loader' | 'crane' | 'turntable';
 
 export interface Accessory {
   uid: string;
@@ -30,6 +32,8 @@ export interface Accessory {
   /** Height of the piece's bottom, and of the track it acts on. */
   base: number;
   trackBase: number;
+  /** Which line across a turntable. */
+  line?: number;
 }
 
 /** Tunable estimates. Times in seconds of simulated time. */
@@ -63,6 +67,13 @@ export function findAccessories(layout: Layout, edgeOf: (key: string) => Edge | 
       const at = poseAt(edge.path, (from + to) / 2);
       return { uid: piece.uid, kind, edgeKey: edge.key, from, to, at: { x: at.x, y: at.y }, origin, angle: piece.pose.angle, base, trackBase: edge.base };
     };
+    if (def.structure === 'turntable') {
+      def.paths.forEach((_, i) => {
+        const edge = edgeOf(`${piece.uid}:${i}`);
+        if (edge) out.push({ ...make('turntable', edge, 0, edge.length), line: i });
+      });
+      continue;
+    }
     if (def.liftSpan) {
       // Its own first path. Edges are keyed `uid:index`.
       const edge = edgeOf(`${piece.uid}:0`);
