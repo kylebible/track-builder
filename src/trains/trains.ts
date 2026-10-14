@@ -8,6 +8,8 @@ import { getStock, STOCK, type StockDef } from './stock';
 import { edgeGrade, edgeHeight } from './network';
 import { TrainSim, type StuckKind, type Train, type VehicleGeometry } from './sim';
 import { AXLE_HEIGHT, buildVehicle } from './trainMesh';
+import { Synth } from '../sound/synth';
+import { TrainSounds } from '../sound/trainSounds';
 import './trains.css';
 
 // Trains on the layout. Drag engines and cars from the Trains panel onto the
@@ -141,9 +143,11 @@ export class Trains {
   private carry: Carry | null = null;
   private press: Press | null = null;
   private thumbnails: Map<string, string> | null = null;
+  readonly sounds: TrainSounds;
 
   private readonly panel: HTMLElement;
   private readonly toggle: HTMLButtonElement;
+  private readonly muteButton: HTMLButtonElement;
   private readonly tiles: HTMLElement;
   private readonly pauseButton: HTMLButtonElement;
   private readonly speedButtons: HTMLButtonElement[];
@@ -168,8 +172,10 @@ export class Trains {
     this.toggle.innerHTML =
       '<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="14" rx="3"/><path d="M4 11h16"/><circle cx="8.5" cy="14" r=".5"/><circle cx="15.5" cy="14" r=".5"/><path d="m8 17-2 4"/><path d="m16 17 2 4"/></svg><span>Trains</span>';
     this.toggle.onclick = () => this.setOpen(!this.open);
+    this.sounds = new TrainSounds(new Synth(), camera);
+    this.muteButton = el('button', { id: 'sound-button', type: 'button', onclick: () => this.setMuted(!this.sounds.synth.muted) });
     // Beside the view buttons, which stay pushed to the right.
-    toolbar.insertBefore(el('div', { class: 'group' }, this.toggle), toolbar.lastElementChild);
+    toolbar.insertBefore(el('div', { class: 'group' }, this.toggle, this.muteButton), toolbar.lastElementChild);
 
     this.pauseButton = el('button', { class: 'tr-btn', type: 'button', onclick: () => this.setPaused(!this.paused) });
     this.speedButtons = SPEEDS.map((s) => el('button', { type: 'button', textContent: `${s}×`, title: `Run at ${s}× speed`, onclick: () => this.setSpeed(s) }));
@@ -208,6 +214,7 @@ export class Trains {
     window.addEventListener('keydown', (e) => {
       if (e.target instanceof HTMLInputElement || e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === 'y' || e.key === 'Y') this.setOpen(!this.open);
+      else if (e.key === 'm' || e.key === 'M') this.setMuted(!this.sounds.synth.muted);
       else if (e.key === 'Escape' && this.carry) this.drop(false);
       else if (e.key === ' ' && this.sim.trains.length) {
         e.preventDefault();
@@ -216,6 +223,7 @@ export class Trains {
     });
     this.setSpeed(1);
     this.setPaused(false);
+    this.setMuted(this.sounds.synth.muted);
     this.drawLevers();
     this.setOpen(false);
   }
@@ -245,6 +253,16 @@ export class Trains {
   private setSpeed(speed: (typeof SPEEDS)[number]): void {
     this.speed = speed;
     this.speedButtons.forEach((b, i) => b.setAttribute('aria-pressed', String(SPEEDS[i] === speed)));
+  }
+
+  private setMuted(muted: boolean): void {
+    this.sounds.synth.setMuted(muted);
+    const b = this.muteButton;
+    b.setAttribute('aria-pressed', String(muted));
+    b.title = muted ? 'Sound is off: turn it on (M)' : 'Sound is on: mute it (M)';
+    b.innerHTML = muted
+      ? '<svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/></svg><span>Muted</span>'
+      : '<svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/></svg><span>Sound</span>';
   }
 
   private reset(): void {
@@ -294,9 +312,16 @@ export class Trains {
           ? act('Put back on the rails', 'Put it back where it was built', () => this.restore(t), 'wide')
           : el('div', { class: 'seg drive' }, drive('◀', 'Engines in reverse', -1), drive('■', 'Engines off', 0), drive('▶', 'Engines forward', 1)),
         t.wrecked ? '' : act('⇄', 'Turn the whole train round', () => this.turnTrain(t)),
+        t.wrecked || !t.vehicles.some((v) => v.def.motor) ? '' : this.whistleButton(t),
         act('✕', 'Take the train off the track', () => this.sim.removeTrain(t.id), 'danger'),
       ),
     );
+  }
+
+  private whistleButton(t: Train): HTMLButtonElement {
+    const b = el('button', { type: 'button', class: 'whistle', title: 'Blow the whistle', onclick: () => this.sounds.whistle(t, undefined, true) });
+    b.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>';
+    return b;
   }
 
   private turnTrain(t: Train): void {
@@ -317,7 +342,7 @@ export class Trains {
     const seen = new Set<number>();
     for (const t of this.sim.trains) {
       seen.add(t.id);
-      const key = `${t.throttle}/${t.wrecked}/${t.name}`;
+      const key = `${t.throttle}/${t.wrecked}/${t.name}/${t.vehicles.some((v) => v.def.motor)}`;
       let entry = this.cards.get(t.id);
       if (!entry || entry.key !== key) {
         const card = this.makeCard(t);
@@ -534,6 +559,7 @@ export class Trains {
       this.drawLevers();
     }
     if (!this.paused && dt > 0) this.sim.advance(Math.min(dt, 0.05) * this.speed);
+    this.sounds.update(this.sim, !this.paused);
     this.drawTrains(time);
     this.drawCards();
     this.updateLeverVisibility();
