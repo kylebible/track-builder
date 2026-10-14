@@ -155,7 +155,7 @@ async function openSharedLayout(): Promise<void> {
 }
 window.addEventListener('hashchange', openSharedLayout);
 
-const trains = new Trains(scene, camera, editor, container, document.getElementById('toolbar')!);
+const trains = new Trains(scene, camera, editor, container, document.getElementById('toolbar')!, orbit);
 
 const hemisphere = new THREE.HemisphereLight(0xffffff, 0xcfc4b0, 1.5);
 scene.add(hemisphere);
@@ -196,13 +196,15 @@ resize();
 const ease = (t: number) => 1 - Math.pow(1 - t, 3);
 
 renderer.setAnimationLoop((time) => {
+  // Riding along, the train places the camera.
+  if (trains.riding) flight = null;
   if (flight) {
     const t = Math.min(1, (performance.now() - flight.start) / FLIGHT_MS);
     orbit.target.lerpVectors(flight.fromTarget, flight.toTarget, ease(t));
     camera.position.lerpVectors(flight.fromCamera, flight.toCamera, ease(t));
     if (t === 1) flight = null;
   }
-  orbit.update();
+  if (!trains.riding) orbit.update();
   editor.tick(time);
   trains.tick(time);
   environmentScene.tick(time);
