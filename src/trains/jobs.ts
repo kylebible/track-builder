@@ -90,7 +90,7 @@ export interface Candidate {
 }
 
 /** How low an engine's stores have to be before a job train goes for more. */
-const REFUEL_BELOW = 0.35;
+const REFUEL_BELOW = 0.5;
 
 /**
  * Where a train on a job should head next, given the places it could
@@ -137,7 +137,7 @@ export function nextStop(
     for (const s of sites) {
       if (!s.crew.length && staffOf(s)) continue;
       for (const kind of loaded.keys()) {
-        if (!s.place.unloads?.includes(kind) || roomFor(s, kind) < 1) continue;
+        if (!s.place.unloads?.includes(kind) || roomFor(s, kind) < 1 || s.uid === last) continue;
         const d = reach(s);
         if (d === null) continue;
         cands.push({ uid: s.uid, score: scoreOf((s.stock[kind] ?? 0) / (s.place.holds?.[kind] ?? 1), d) });
@@ -151,7 +151,8 @@ export function nextStop(
   for (const s of sites) {
     if (!s.crew.length && staffOf(s)) continue;
     for (const kind of goods) {
-      if (!s.place.loads?.includes(kind) || !(room.get(kind) ?? 0) || unitsOf(s, kind) < 1) continue;
+      // Not straight back where it has just been: whatever was there to load, it took.
+      if (!s.place.loads?.includes(kind) || !(room.get(kind) ?? 0) || unitsOf(s, kind) < 1 || s.uid === last) continue;
       const d = reach(s);
       if (d === null) continue;
       cands.push({ uid: s.uid, score: scoreOf(1 - (s.stock[kind] ?? 0) / (s.place.holds?.[kind] ?? 1), d) });

@@ -174,6 +174,33 @@ engines, ⇄ to turn the whole train round and ✕ to take it off. The panel
 keeps Pause, the speed and Reset. Tap a switch's yellow knob to change
 which way it sends trains; the yellow stripe shows the way it is set.
 
+### Autoroute
+
+Turn on **Autoroute** in the Trains panel and trains set the switches
+themselves and wait for each other instead of colliding
+(`src/trains/dispatch.ts`). Every piece of track is a block: a train holds
+the pieces it stands on and reserves the way ahead, throwing each facing
+switch its way as it does. It reserves on through the next switch that
+splits the line and down the way it takes, to the switch at the far end,
+so it never waits halfway along single track where a train coming the
+other way could meet it. A piece another train holds stops it just short,
+showing "Waiting for Train 2". At a facing switch whose lever points at
+taken track, a train takes the other way if that one is free and leads on
+(not into a siding), so trains pass each other on passing loops, going
+the same way or opposite ways. With nothing set, it follows the levers;
+levers no train has reserved still change with a tap. It also stops a
+train before it runs off an open end.
+
+**Go to** on a train's card sends it to a station, the cargo loader, a
+crane or a trackside place by the shortest way, setting switches as it
+goes (pieces other trains hold count as longer, so it picks the free side
+of a loop). It runs whichever way round is shorter, backing up if need
+be, and stops with its middle on the spot, after any loading or
+unloading there; a blue pin marks where it's going. Trains can still
+deadlock: two passing loops can't let four trains through each other.
+Code can do the same with `sim.routeTo(trainId, destination)`;
+`sim.arrivals` lists the trains that got there.
+
 ### Accessories that work
 
 Some scenery works with running trains (`src/trains/accessories.ts`).
@@ -249,8 +276,10 @@ A train's **job** (picked on its card, `src/trains/jobs.ts`) decides what it
 carries and where it goes: coal, water, farm, timber, goods, mail or
 workers. A job train handles only its own goods, chooses its next stop by
 what places need and how far away they are, tops up its own engine when it
-runs low, and throws the switches ahead of it to get there
-(`src/trains/paths.ts`). Goods trains run through stations; workers trains
+runs low, and gets there by autoroute (`routeTo`), only ever driving
+forwards. New job trains are put on facing the same way round as the others,
+so they follow each other and never meet head on; with nothing to do, one
+runs on to the next station and looks again. Goods trains run through stations; workers trains
 take tired people from places to the station and bring fresh people back.
 **Free** trains behave as before. The Jobs buttons add a standard train
 (engine, tender and `JOB_TRAIN.cars` cars, 3 by default) on free track.
@@ -305,7 +334,15 @@ npm install
 npm run dev     # local dev server
 npm test        # geometry and layout tests
 npm run build   # type-check and build to dist/
+npm run perf    # frame and edit timings for a 250-piece layout with trains
 ```
+
+`npm run perf` drives the app in headless Chromium, so it needs Playwright
+(`npm i -D playwright`, not installed by default). It reports draw calls,
+the JS time of a frame's train update, an edit and the layout check, on
+desktop and on a 4x CPU-throttled phone. Its frame rate uses software WebGL,
+so compare it between runs on the same machine rather than reading it as
+real-world fps.
 
 Pushes to `main` run the tests and deploy to GitHub Pages. In the repo's
 Settings → Pages, set **Source** to **GitHub Actions** once.

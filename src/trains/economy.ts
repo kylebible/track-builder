@@ -13,7 +13,7 @@ import type { PlaceDef } from './stops';
 /** Tunable estimates for the play table, not anything measured. */
 export const ECONOMY = {
   /** Seconds a worker works before they're tired and want to go home. */
-  shiftSeconds: 150,
+  shiftSeconds: 300,
   /** How full each place starts, of what it holds. */
   startFull: 0.5,
   /** A store this empty, of what a place takes in, counts as running low. */

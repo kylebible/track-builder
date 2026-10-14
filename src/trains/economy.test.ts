@@ -185,6 +185,35 @@ describe('train jobs', () => {
     expect(thrown).toBeGreaterThan(0);
   });
 
+  it('a train for every job keeps the full town going without a jam', () => {
+    const sim = new TrainSim(getTemplate('full-town').build());
+    const jobs = ['coal', 'water', 'workers', 'timber', 'farm', 'goods', 'mail'] as const;
+    const trains = jobs.map((job) => sim.addJobTrain(job));
+    for (const t of trains) if (typeof t === 'string') throw new Error(t);
+    // All one way round, so none ever meets another head on.
+    const all = trains as Exclude<(typeof trains)[number], string>[];
+    for (const t of all.slice(1)) expect(sim.dispatcher.sameWayRound(all[0], t)).toBe(true);
+    const visited = new Map(all.map((t) => [t.id, new Set<string>()]));
+    for (let i = 0; i < 1200; i++) {
+      sim.advance(0.1);
+      for (const t of all) if (t.lastStop) visited.get(t.id)!.add(t.lastStop);
+    }
+    expect(sim.trains.length).toBe(jobs.length);
+    for (const t of all) {
+      expect(t.wrecked, t.name).toBe(false);
+      expect(t.status.kind, t.name).not.toBe('stuck');
+      expect(visited.get(t.id)!.size, `${t.name} got round`).toBeGreaterThan(0);
+    }
+  }, 60000);
+
+  it('a coach with no seats left takes no more workers on', () => {
+    const sim = new TrainSim(withPlaces('station', null, 'coal-mine'));
+    const mine = site(sim, 'coal-mine');
+    mine.tired = 3;
+    const work = planWork(getPlace('coal-mine')!, [{ stockId: 'coach', reversed: false, units: 9, crew: 0, tired: 9 }], Math.random, { economy: sim.economy, site: mine, job: 'workers' });
+    expect(work === null || work.queues.flat().every((j) => j.amount > 0)).toBe(true);
+  });
+
   it('flags what each place needs, and says when no train is on it', () => {
     const sim = new TrainSim(withPlaces('coaling-stage'));
     site(sim, 'coaling-stage').stock.coal = 0;

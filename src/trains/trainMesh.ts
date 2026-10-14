@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import * as D from '../pieces/dimensions';
+import { mergeStaticMeshes } from '../render/merge';
 import { WOOD_GRAIN } from '../render/pieceMesh';
 import { polesOf, supplyLevel, WHEEL_RADIUS, type ConsistEntry, type StockDef } from './stock';
 
@@ -581,6 +582,7 @@ export function buildVehicle(def: StockDef): THREE.Group {
         o.receiveShadow = true;
       }
     });
+    mergeStaticMeshes(template);
     templates.set(def.id, template);
   }
   return template.clone(true);

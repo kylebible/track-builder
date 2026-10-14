@@ -196,7 +196,7 @@ export function planWork(place: PlaceDef, consist: readonly ConsistEntry[], rand
     if (visit?.job === 'workers' && cargo.kind === 'passengers') {
       const fresh = entry.crew ?? 0;
       const tired = entry.tired ?? 0;
-      const free = cargo.capacity - load;
+      const free = Math.max(0, cargo.capacity - load);
       if (place.id === 'station') {
         if (tired) queues[i].push({ action: 'unload', what: 'passengers', amount: tired, rider: 'tired' });
         const on = Math.min(free + tired, wanted);
@@ -320,6 +320,10 @@ export function doWork(work: Work, consist: ConsistEntry[], dt: number, delivere
   work.queues.forEach((queue, i) => {
     const job = queue[0];
     if (!job) return;
+    if (job.action !== 'refill' && job.amount <= 0) {
+      queue.shift();
+      return;
+    }
     const entry = consist[i];
     if (!entry) {
       queue.length = 0;
@@ -369,6 +373,15 @@ export function doWork(work: Work, consist: ConsistEntry[], dt: number, delivere
           work.clocks[i] = 0;
           break;
         }
+      }
+      // Full up (a coach's seats went to someone else first): nothing more fits.
+      const capacity = getStock(entry.stockId).cargo?.capacity ?? Infinity;
+      if (job.action === 'load' && (entry.units ?? 0) >= capacity) {
+        work.done += job.amount;
+        job.amount = 0;
+        queue.shift();
+        work.clocks[i] = 0;
+        break;
       }
       work.clocks[i] -= per;
       job.amount--;

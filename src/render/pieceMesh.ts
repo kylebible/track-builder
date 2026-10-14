@@ -3,8 +3,9 @@ import { heightAt, pathLength, poseAt } from '../geometry/path';
 import { applyPose, type Pose } from '../geometry/pose';
 import * as D from '../pieces/dimensions';
 import type { Connector, PieceDef, TrackPath } from '../pieces/types';
-import { pieceStructure } from './bridges';
+import { pieceStructure, turntableDeck } from './bridges';
 import { MOVING_PARTS } from '../scenery/models';
+import { mergeStaticMeshes } from './merge';
 import { sceneryModel } from './sceneryModels';
 
 // Plan coordinates (x, y) in mm map to three.js (x, height, -y), so a
@@ -69,8 +70,21 @@ const woodMaterial = new THREE.MeshStandardMaterial({
   roughness: 0.68,
   flatShading: true,
 });
-const pegMaterial = new THREE.MeshStandardMaterial({ color: 0xe0bb83, map: woodMaterial.map, roughness: 0.68 });
-const holeMaterial = new THREE.MeshStandardMaterial({ color: 0x5a4026, roughness: 1 });
+/**
+ * Pegs and holes are drawn in the track's own wood material, tinted through
+ * its vertex colours, so they bake into the same mesh as the track: one
+ * draw call a piece instead of three.
+ */
+function tinted(geometry: THREE.BufferGeometry, color: number): THREE.BufferGeometry {
+  const want = new THREE.Color(color);
+  const base = woodMaterial.color;
+  const shade = [want.r / base.r, want.g / base.g, want.b / base.b];
+  const count = geometry.getAttribute('position').count;
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(Array.from({ length: count }, () => shade).flat(), 3));
+  return geometry;
+}
+const PEG_COLOR = 0xe0bb83;
+const HOLE_COLOR = 0x5a4026;
 const bufferMaterial = new THREE.MeshStandardMaterial({ color: 0xc8352b, roughness: 0.6 });
 const stripeMaterial = new THREE.MeshStandardMaterial({ color: 0xf5f1e8, roughness: 0.6 });
 
@@ -158,17 +172,17 @@ function connectorMesh(c: Connector): THREE.Object3D {
   group.position.copy(toWorld(x, y, c.z ?? 0));
   group.rotation.y = angle;
   if (c.gender === 'peg') {
-    const neck = new THREE.Mesh(new THREE.BoxGeometry(D.PEG_NECK_LENGTH, D.TRACK_HEIGHT - 2, D.PEG_NECK_WIDTH), pegMaterial);
+    const neck = new THREE.Mesh(tinted(new THREE.BoxGeometry(D.PEG_NECK_LENGTH, D.TRACK_HEIGHT - 2, D.PEG_NECK_WIDTH), PEG_COLOR), woodMaterial);
     neck.position.set(D.PEG_NECK_LENGTH / 2, (D.TRACK_HEIGHT - 2) / 2, 0);
-    const head = new THREE.Mesh(new THREE.CylinderGeometry(D.PEG_DIAMETER / 2, D.PEG_DIAMETER / 2, D.TRACK_HEIGHT - 2, 32), pegMaterial);
+    const head = new THREE.Mesh(tinted(new THREE.CylinderGeometry(D.PEG_DIAMETER / 2, D.PEG_DIAMETER / 2, D.TRACK_HEIGHT - 2, 32), PEG_COLOR), woodMaterial);
     head.position.set(D.PEG_NECK_LENGTH + D.PEG_DIAMETER / 2, (D.TRACK_HEIGHT - 2) / 2, 0);
     group.add(neck, head);
   } else {
     const throat = 5;
-    const disc = new THREE.Mesh(new THREE.CircleGeometry(D.HOLE_DIAMETER / 2, 32), holeMaterial);
+    const disc = new THREE.Mesh(tinted(new THREE.CircleGeometry(D.HOLE_DIAMETER / 2, 32), HOLE_COLOR), woodMaterial);
     disc.rotation.x = -Math.PI / 2;
     disc.position.set(-(throat + D.HOLE_DIAMETER / 2), D.TRACK_HEIGHT + 0.05, 0);
-    const slot = new THREE.Mesh(new THREE.PlaneGeometry(throat + 0.5, D.PEG_NECK_WIDTH + 1), holeMaterial);
+    const slot = new THREE.Mesh(tinted(new THREE.PlaneGeometry(throat + 0.5, D.PEG_NECK_WIDTH + 1), HOLE_COLOR), woodMaterial);
     slot.rotation.x = -Math.PI / 2;
     slot.position.set(-throat / 2, D.TRACK_HEIGHT + 0.05, 0);
     group.add(disc, slot);
@@ -252,12 +266,30 @@ function liftingTrack(path: TrackPath, [from, to]: [number, number]): THREE.Obje
   return [new THREE.Mesh(sweepGeometry(partOf(path, 0, from)), woodMaterial), new THREE.Mesh(sweepGeometry(partOf(path, to, length - to)), woodMaterial), deck];
 }
 
+/**
+ * A turntable's bridge, track and all, as a group `turntable-bridge` with
+ * its origin on the pivot, so the trains layer turns it with rotation.y.
+ */
+function turntableBridge(path: TrackPath): THREE.Group {
+  const length = pathLength(path);
+  const centre = poseAt(path, length / 2);
+  const pivot = new THREE.Group();
+  pivot.name = 'turntable-bridge';
+  pivot.position.copy(toWorld(centre.x, centre.y, 0));
+  const deck = new THREE.Group();
+  deck.position.copy(pivot.position).negate();
+  deck.add(new THREE.Mesh(sweepGeometry(path), woodMaterial), ...turntableDeck(length));
+  pivot.add(deck);
+  return pivot;
+}
+
 /** A three.js object for one catalog piece, in its own plan frame. */
 export function buildPieceObject(piece: PieceDef): THREE.Group {
   const group = new THREE.Group();
   group.name = piece.id;
   // A turntable draws its turning bridge, lined up with its first line, over its pit.
-  const paths = piece.structure === 'turntable' ? piece.paths.slice(0, 1) : piece.paths;
+  if (piece.structure === 'turntable') group.add(turntableBridge(piece.paths[0]));
+  const paths = piece.structure === 'turntable' ? [] : piece.paths;
   paths.forEach((path, i) => {
     if (i === 0 && piece.liftSpan) {
       group.add(...liftingTrack(path, piece.liftSpan));
@@ -301,5 +333,5 @@ export function buildPieceObject(piece: PieceDef): THREE.Group {
       o.receiveShadow = true;
     }
   });
-  return group;
+  return mergeStaticMeshes(group);
 }

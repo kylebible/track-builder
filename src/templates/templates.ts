@@ -267,8 +267,8 @@ function fullTown(): Layout {
   const n2 = lay('D');
   end = passingLoop(b, end, ['D', 'D'], near);
   const n3 = lay('D');
-  // Up the right-hand end over the hill.
-  for (const t of ['L', 'L', 'N:up', 'bridge-viaduct', 'N:down', 'A:pp', 'L', 'L']) lay(t);
+  // Round the right-hand end. It stays level: a job train's engine can't haul three loaded cars up a ramp.
+  const e = ['L', 'L', 'D', 'D', 'D', 'D', 'A', 'L', 'L'].map(lay);
   // The far side, right to left: the goods yard, the lifting bridge, the second station's passing loop.
   const f1 = lay('D');
   const outward = (from: EndRef) => (layout: Layout, uid: string) => {
@@ -284,9 +284,10 @@ function fullTown(): Layout {
   siding = b.run(siding, ['D'])!;
   const sidingB = siding.uid;
   b.run(siding, ['buffer']);
-  siding = b.run({ uid: split, connectorId: 'branch1' }, ['L', 'D'])!;
+  // The last siding climbs a ramp onto a viaduct, a lookout for a light train.
+  siding = b.run({ uid: split, connectorId: 'branch1' }, ['L'])!;
   const sidingC = siding.uid;
-  b.run(siding, ['buffer']);
+  b.run(siding, ['N:up', 'bridge-viaduct', 'A:pp', 'buffer']);
   end = { uid: yard, connectorId: 'branch0' };
   const f2 = lay('D');
   lay('lift-bridge');
@@ -322,6 +323,9 @@ function fullTown(): Layout {
   by(near.loop[1], 'post-office', { out: true });
   by(n3, 'farm');
   by(n3, 'signal', { side: 60, along: 20, out: true });
+  // The right-hand end: a second water tower and coaling stage, so a busy town's engines needn't queue at one.
+  by(e[2], 'water-tower');
+  by(e[4], 'coaling-stage');
   // Far side: the yard, the market, the second station and the timber trade.
   by(f1, 'market');
   by(sidingA, 'cargo-loader');
