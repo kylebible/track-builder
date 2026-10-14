@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { pathLength, poseAt } from '../geometry/path';
+import { heightAt, pathLength, poseAt } from '../geometry/path';
 import { applyPose, type Pose } from '../geometry/pose';
 import * as D from '../pieces/dimensions';
 import type { Connector, PieceDef, TrackPath } from '../pieces/types';
@@ -71,10 +71,11 @@ const holeMaterial = new THREE.MeshStandardMaterial({ color: 0x5a4026, roughness
 const bufferMaterial = new THREE.MeshStandardMaterial({ color: 0xc8352b, roughness: 0.6 });
 const stripeMaterial = new THREE.MeshStandardMaterial({ color: 0xf5f1e8, roughness: 0.6 });
 
-function profileAt(pose: Pose): THREE.Vector3[] {
+/** The profile at a point on the track, its bottom `lift` mm up (on a ramp). */
+function profileAt(pose: Pose, lift = 0): THREE.Vector3[] {
   return PROFILE.map(([u, h]) => {
     const p = applyPose(pose, { x: 0, y: u, angle: 0 });
-    return toWorld(p.x, p.y, h);
+    return toWorld(p.x, p.y, h + lift);
   });
 }
 
@@ -109,8 +110,13 @@ function capTriangles(ring: THREE.Vector3[], out: Buffers, facingBack: boolean):
 /** Sweep the track profile along one running path. */
 function sweepGeometry(path: TrackPath): THREE.BufferGeometry {
   const length = pathLength(path);
-  const steps = path.kind === 'straight' ? 1 : Math.max(2, Math.ceil(length / SAMPLE_STEP_MM));
-  const rings = Array.from({ length: steps + 1 }, (_, i) => profileAt(poseAt(path, (length * i) / steps)));
+  const steps = path.kind === 'straight' && !path.rise ? 1 : Math.max(2, Math.ceil(length / SAMPLE_STEP_MM));
+  // A ramp's profile is lifted, not tilted: the slope is gentle enough that
+  // the shear doesn't show, and the ends stay square to join flat track.
+  const rings = Array.from({ length: steps + 1 }, (_, i) => {
+    const s = (length * i) / steps;
+    return profileAt(poseAt(path, s), heightAt(path, s));
+  });
   const out: Buffers = { positions: [], uvs: [], colors: [] };
   // Across-the-track texture coordinate: sideways offset plus height, so
   // both the top and the sides get grain.
@@ -146,7 +152,7 @@ function sweepGeometry(path: TrackPath): THREE.BufferGeometry {
 function connectorMesh(c: Connector): THREE.Object3D {
   const group = new THREE.Group();
   const { x, y, angle } = c.pose;
-  group.position.copy(toWorld(x, y));
+  group.position.copy(toWorld(x, y, c.z ?? 0));
   group.rotation.y = angle;
   if (c.gender === 'peg') {
     const neck = new THREE.Mesh(new THREE.BoxGeometry(D.PEG_NECK_LENGTH, D.TRACK_HEIGHT - 2, D.PEG_NECK_WIDTH), pegMaterial);
@@ -183,6 +189,48 @@ function bufferBarrier(piece: PieceDef): THREE.Object3D {
     stripe.position.set(-thickness / 2, D.TRACK_HEIGHT + height * h, 0);
     group.add(stripe);
   }
+  return group;
+}
+
+const supportMaterial = new THREE.MeshStandardMaterial({ color: 0xd9b27a, map: WOOD_GRAIN, roughness: 0.7 });
+const supportGeometry = (() => {
+  const g = new THREE.BoxGeometry(D.SUPPORT_LENGTH, D.LEVEL_HEIGHT - 1, D.SUPPORT_WIDTH);
+  g.translate(0, (D.LEVEL_HEIGHT - 1) / 2, 0);
+  return g;
+})();
+const capGeometry = (() => {
+  // The cradle on top that the track sits in: a lip each side.
+  const g = new THREE.BoxGeometry(D.SUPPORT_LENGTH, 6, (D.SUPPORT_WIDTH - D.TRACK_WIDTH) / 2);
+  g.translate(0, 3, 0);
+  return g;
+})();
+
+/**
+ * A stack of support blocks standing on the floor under a raised end at
+ * plan (x, y), `height` up, with the track running along `angle`.
+ */
+export function buildSupport(x: number, y: number, angle: number, height: number, blocks: number): THREE.Group {
+  const group = new THREE.Group();
+  group.position.copy(toWorld(x, y));
+  group.rotation.y = angle;
+  const step = height / blocks;
+  for (let i = 0; i < blocks; i++) {
+    const block = new THREE.Mesh(supportGeometry, supportMaterial);
+    block.position.y = i * step;
+    block.scale.y = step / D.LEVEL_HEIGHT;
+    group.add(block);
+  }
+  for (const side of [-1, 1]) {
+    const lip = new THREE.Mesh(capGeometry, supportMaterial);
+    lip.position.set(0, height, side * (D.TRACK_WIDTH / 2 + (D.SUPPORT_WIDTH - D.TRACK_WIDTH) / 4));
+    group.add(lip);
+  }
+  group.traverse((o) => {
+    if (o instanceof THREE.Mesh) {
+      o.castShadow = true;
+      o.receiveShadow = true;
+    }
+  });
   return group;
 }
 

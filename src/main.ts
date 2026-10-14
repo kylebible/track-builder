@@ -87,6 +87,8 @@ const editor = new Editor(scene, camera, orbit, {
     rotateRight: button('rotate-right'),
     flip: button('flip'),
     swap: button('swap'),
+    raise: button('raise'),
+    lower: button('lower'),
     section: button('section'),
     remove: button('remove'),
     fit: button('fit'),

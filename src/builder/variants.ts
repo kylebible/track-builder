@@ -54,7 +54,8 @@ export function variantFor(shape: Shape, ends: Ends, target: Gender | null): str
   if (hasEndsChoice(shape)) {
     return shape.ids.find((id) => endsOf(getPiece(id)) === ends) ?? shape.ids[0];
   }
-  if (target && (shape.category === 'switch' || shape.category === 'buffer')) {
+  // A ramp goes on by its low end, so it climbs away from the end built from.
+  if (target && (shape.category === 'switch' || shape.category === 'buffer' || shape.category === 'ramp')) {
     const first = shape.ids.find((id) => getPiece(id).connectors[0].gender !== target);
     if (first) return first;
   }
@@ -81,10 +82,14 @@ export function flipFor(pieceId: string, attachId: string, hand: Hand): boolean 
   return hand === 'left' ? turn < 0 : turn > 0;
 }
 
-/** The end a piece goes on by: the first one that mates with `target`, else its first end. */
-export function attachEnd(pieceId: string, target: Gender | null): string {
+/**
+ * The end a piece goes on by: the first one that mates with `target`, `height`
+ * mm above the floor, without the piece going below the floor; else its first end.
+ */
+export function attachEnd(pieceId: string, target: Gender | null, height = 0): string {
   const connectors = getPiece(pieceId).connectors;
-  return (target ? connectors.find((c) => c.gender !== target) : undefined)?.id ?? connectors[0].id;
+  const fits = target ? connectors.find((c) => c.gender !== target && height - (c.z ?? 0) > -1e-6) : undefined;
+  return fits?.id ?? connectors[0].id;
 }
 
 const mirrored = new Map<string, PieceDef>();

@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import * as D from '../pieces/dimensions';
-import { defOf, sameEnd, type EndRef, type Layout, type WorldEnd } from '../layout/layout';
-import { buildPieceObject, toWorld } from '../render/pieceMesh';
+import { baseOf, defOf, sameEnd, type EndRef, type Layout, type WorldEnd } from '../layout/layout';
+import { supportsOf } from '../layout/supports';
+import { buildPieceObject, buildSupport, toWorld } from '../render/pieceMesh';
 
 // Keeps three.js objects in step with a layout: one object per placed
 // piece, plus a marker on every open end that can be clicked to build from.
@@ -11,10 +12,10 @@ export interface ViewState {
   openEnds: WorldEnd[];
   selectedPieces: ReadonlySet<string>;
   selectedEnd: EndRef | null;
-  /** Where a dragged piece is snapping on, shown as a ring. */
-  snapAt: { x: number; y: number } | null;
+  /** Where a dragged piece is snapping on, shown as a ring; `z` is its height. */
+  snapAt: { x: number; y: number; z?: number } | null;
   /** Problems the layout check found, shown as red rings on the track. */
-  marks: { at: { x: number; y: number }; focused: boolean }[];
+  marks: { at: { x: number; y: number }; z?: number; focused: boolean }[];
 }
 
 const MARKER_RADIUS = 11;
@@ -61,13 +62,15 @@ export class LayoutView {
   readonly root = new THREE.Group();
   private readonly piecesRoot = new THREE.Group();
   private readonly markersRoot = new THREE.Group();
+  private readonly supportsRoot = new THREE.Group();
+  private supportsKey = '';
   private readonly entries = new Map<string, PieceEntry>();
   private readonly templates = new Map<string, THREE.Group>();
   /** Rings that gently pulse: the selected end and the snap target. */
   private pulsing: THREE.Object3D[] = [];
 
   constructor(scene: THREE.Scene) {
-    this.root.add(this.piecesRoot, this.markersRoot);
+    this.root.add(this.piecesRoot, this.supportsRoot, this.markersRoot);
     scene.add(this.root);
   }
 
@@ -102,7 +105,7 @@ export class LayoutView {
         this.entries.set(piece.uid, entry);
         this.piecesRoot.add(object);
       }
-      entry.object.position.copy(toWorld(piece.pose.x, piece.pose.y));
+      entry.object.position.copy(toWorld(piece.pose.x, piece.pose.y, baseOf(piece)));
       entry.object.rotation.y = piece.pose.angle;
       const selected = state.selectedPieces.has(piece.uid);
       if (selected !== entry.selected) {
@@ -120,7 +123,18 @@ export class LayoutView {
         this.entries.delete(uid);
       }
     }
+    this.updateSupports(state.layout);
     this.updateMarkers(state);
+  }
+
+  /** Support stacks under raised ends, rebuilt only when they change. */
+  private updateSupports(layout: Layout): void {
+    const supports = supportsOf(layout);
+    const key = supports.map((s) => `${s.at.x.toFixed(1)},${s.at.y.toFixed(1)},${s.angle.toFixed(3)},${s.height},${s.blocks}`).join(';');
+    if (key === this.supportsKey) return;
+    this.supportsKey = key;
+    this.supportsRoot.clear();
+    for (const s of supports) this.supportsRoot.add(buildSupport(s.at.x, s.at.y, s.angle, s.height, s.blocks));
   }
 
   /** Animate the pulsing rings; call once a frame with the time in ms. */
@@ -137,7 +151,7 @@ export class LayoutView {
       const material = isSelected ? markerMaterial.selected : markerMaterial[end.connector.gender];
       const marker = new THREE.Mesh(markerGeometry, material);
       const { x, y } = end.connector.pose;
-      marker.position.copy(toWorld(x, y, D.TRACK_HEIGHT + MARKER_LIFT));
+      marker.position.copy(toWorld(x, y, (end.connector.z ?? 0) + D.TRACK_HEIGHT + MARKER_LIFT));
       marker.userData.end = { uid: end.uid, connectorId: end.connectorId } satisfies EndRef;
       const rim = new THREE.Mesh(rimGeometry, rimMaterial);
       rim.rotation.x = Math.PI / 2;
@@ -147,7 +161,7 @@ export class LayoutView {
       if (isSelected) this.addRing(marker.position, material, 1, marker.userData.end);
     }
     for (const mark of state.marks) {
-      const at = toWorld(mark.at.x, mark.at.y, D.TRACK_HEIGHT + 2);
+      const at = toWorld(mark.at.x, mark.at.y, (mark.z ?? 0) + D.TRACK_HEIGHT + 2);
       const ring = new THREE.Mesh(markGeometry, markerMaterial.problem);
       ring.rotation.x = Math.PI / 2;
       ring.position.copy(at);
@@ -157,7 +171,7 @@ export class LayoutView {
       if (mark.focused) this.pulsing.push(ring);
     }
     if (state.snapAt) {
-      this.addRing(toWorld(state.snapAt.x, state.snapAt.y, D.TRACK_HEIGHT + MARKER_LIFT), markerMaterial.snap, 1.4);
+      this.addRing(toWorld(state.snapAt.x, state.snapAt.y, (state.snapAt.z ?? 0) + D.TRACK_HEIGHT + MARKER_LIFT), markerMaterial.snap, 1.4);
     }
   }
 

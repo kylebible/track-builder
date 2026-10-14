@@ -15,6 +15,8 @@ export interface PlacedPiece {
   flipped: boolean;
   /** Where the piece's own frame sits in the plan. */
   pose: Pose;
+  /** Height of the piece's bottom above the floor, mm. Missing means on the floor. */
+  z?: number;
 }
 
 export interface Layout {
@@ -22,6 +24,16 @@ export interface Layout {
 }
 
 export const EMPTY_LAYOUT: Layout = { pieces: [] };
+
+/** Height of a piece's bottom above the floor. */
+export const baseOf = (piece: Pick<PlacedPiece, 'z'>): number => piece.z ?? 0;
+
+/** The piece at height `z`, leaving `z` out on the floor so saved layouts stay as they were. */
+function atHeight(piece: PlacedPiece, z: number): PlacedPiece {
+  const { z: _, ...rest } = piece;
+  const rounded = Math.round(z * 1000) / 1000;
+  return rounded ? { ...rest, z: rounded } : rest;
+}
 
 /** One end of one placed piece. */
 export interface EndRef {
@@ -60,7 +72,7 @@ export function worldEnds(piece: PlacedPiece, placement: Pose = piece.pose): Wor
   return defOf(piece).connectors.map((c) => ({
     uid: piece.uid,
     connectorId: c.id,
-    connector: worldConnector(placement, c),
+    connector: worldConnector(placement, c, baseOf(piece)),
   }));
 }
 
@@ -143,14 +155,20 @@ function nextUid(layout: Layout): string {
   return `p${max + 1}`;
 }
 
-export function addPiece(layout: Layout, pieceId: string, pose: Pose, flipped = false): { layout: Layout; uid: string } {
+export function addPiece(layout: Layout, pieceId: string, pose: Pose, flipped = false, z = 0): { layout: Layout; uid: string } {
   const uid = nextUid(layout);
-  return { layout: { pieces: [...layout.pieces, { uid, pieceId, flipped, pose }] }, uid };
+  return { layout: { pieces: [...layout.pieces, atHeight({ uid, pieceId, flipped, pose }, z)] }, uid };
 }
 
-/** Connectors of `def` that could mate with an end of the given gender, in catalog order. */
+/** Where the bottom of a piece sits when its end `c` joins the world end `with_`. */
+const baseFor = (c: Connector, with_: Connector): number => (with_.z ?? 0) - (c.z ?? 0);
+
+/**
+ * Connectors of `def` that could mate with the world end `with_`: the other
+ * gender, and not leaving the piece below the floor. In catalog order.
+ */
 function compatible(def: PieceDef, with_: Connector): Connector[] {
-  return def.connectors.filter((c) => c.gender !== with_.gender);
+  return def.connectors.filter((c) => c.gender !== with_.gender && baseFor(c, with_) > -1e-6);
 }
 
 /** Whether `pieceId` can be added onto the end `end` (it has an end of the opposite gender). */
@@ -184,7 +202,7 @@ export function extendFrom(
   const options = compatible(def, target);
   const attach = connectorId ? options.find((c) => c.id === connectorId) : options[0];
   if (!attach) return null;
-  const added = addPiece(layout, pieceId, placeToMate(target.pose, def, attach.id), flipped);
+  const added = addPiece(layout, pieceId, placeToMate(target.pose, def, attach.id), flipped, baseFor(attach, target));
   return { ...added, attached: attach.id, next: firstOpenEnd(added.layout, added.uid) };
 }
 
@@ -193,11 +211,18 @@ export function firstOpenEnd(layout: Layout, uid: string): EndRef | null {
   return open ? { uid: open.uid, connectorId: open.connectorId } : null;
 }
 
-/** Apply a rigid transform to some pieces. */
-export function transformPieces(layout: Layout, uids: ReadonlySet<string>, transform: Pose): Layout {
+/** Apply a rigid transform to some pieces, lifting them `dz` mm as well. */
+export function transformPieces(layout: Layout, uids: ReadonlySet<string>, transform: Pose, dz = 0): Layout {
   return {
-    pieces: layout.pieces.map((p) => (uids.has(p.uid) ? { ...p, pose: applyPose(transform, p.pose) } : p)),
+    pieces: layout.pieces.map((p) => (uids.has(p.uid) ? atHeight({ ...p, pose: applyPose(transform, p.pose) }, baseOf(p) + dz) : p)),
   };
+}
+
+/** Lift (or lower) some pieces by `dz` mm. Null if that would put any below the floor. */
+export function raisePieces(layout: Layout, uids: ReadonlySet<string>, dz: number): Layout | null {
+  const moving = layout.pieces.filter((p) => uids.has(p.uid));
+  if (!moving.length || moving.some((p) => baseOf(p) + dz < -1e-6)) return null;
+  return { pieces: layout.pieces.map((p) => (uids.has(p.uid) ? atHeight(p, baseOf(p) + dz) : p)) };
 }
 
 /** The middle of a group of pieces' ends, used as a rotation pivot. */
@@ -261,7 +286,7 @@ export function swapEnd(layout: Layout, uid: string): Layout | null {
   const index = options.findIndex((c) => c.id === joined[0].connectorId);
   const next = options[(index + 1) % options.length];
   const pose = placeToMate(partner.connector.pose, def, next.id);
-  return { pieces: layout.pieces.map((p) => (p.uid === uid ? { ...p, pose } : p)) };
+  return { pieces: layout.pieces.map((p) => (p.uid === uid ? atHeight({ ...p, pose }, baseFor(next, partner.connector)) : p)) };
 }
 
 export function removePieces(layout: Layout, uids: ReadonlySet<string>): Layout {
@@ -284,6 +309,8 @@ export interface DragContext {
   moving: ReadonlySet<string>;
   movingEnds: WorldEnd[];
   fixedEnds: WorldEnd[];
+  /** The lowest of the dragged pieces, which mustn't go below the floor. */
+  lowest: number;
 }
 
 export function dragContext(layout: Layout, moving: ReadonlySet<string>): DragContext {
@@ -301,12 +328,15 @@ export function dragContext(layout: Layout, moving: ReadonlySet<string>): DragCo
       }
     }
   }
-  return { moving, movingEnds, fixedEnds };
+  const lowest = Math.min(...layout.pieces.filter((p) => moving.has(p.uid)).map(baseOf));
+  return { moving, movingEnds, fixedEnds, lowest };
 }
 
 export interface Snap {
   /** The corrected transform for the dragged group. */
   transform: Pose;
+  /** How far the group goes up (or down) to meet the end it snaps to. */
+  dz: number;
   moving: EndRef;
   fixed: EndRef;
 }
@@ -321,14 +351,18 @@ export function findSnap(context: DragContext, transform: Pose, range: SnapRange
     const moved = applyPose(transform, m.connector.pose);
     for (const f of context.fixedEnds) {
       if (f.connector.gender === m.connector.gender) continue;
+      const dz = (f.connector.z ?? 0) - (m.connector.z ?? 0);
+      if (context.lowest + dz < -1e-6) continue;
       const error = jointError(moved, f.connector.pose);
       if (error.gapMm > range.mm || error.angleDeg > range.deg) continue;
-      if (best && error.gapMm >= best.gap) continue;
+      // Where ends at two levels line up in plan, the one at the same height wins.
+      const score = error.gapMm + Math.abs(dz) * 0.05;
+      if (best && score >= best.gap) continue;
       const seat: Pose = { ...f.connector.pose, angle: normalizeAngle(f.connector.pose.angle + Math.PI) };
       const correction = applyPose(seat, invertPose(moved));
       best = {
-        gap: error.gapMm,
-        snap: { transform: applyPose(correction, transform), moving: m, fixed: f },
+        gap: score,
+        snap: { transform: applyPose(correction, transform), dz, moving: m, fixed: f },
       };
     }
   }

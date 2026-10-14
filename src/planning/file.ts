@@ -4,11 +4,15 @@ import type { Layout, PlacedPiece } from '../layout/layout';
 
 // Layouts as files and links. One format serves the autosave, downloaded
 // layout files and share links: plain JSON listing each piece's catalog id,
-// position in mm and heading in degrees. Joints are never stored; they come
-// back from the positions, as they do on the floor.
+// position in mm and heading in degrees, and height for raised track.
+// Joints are never stored; they come back from the positions, as they do
+// on the floor. Supports aren't stored either: they follow from the heights.
+//
+// Version 2 added heights (`z`). A layout with nothing raised saves exactly
+// as version 1 did, apart from the number.
 
 export const FORMAT = 'track-builder-layout';
-export const VERSION = 1;
+export const VERSION = 2;
 
 interface SavedPiece {
   piece: string;
@@ -17,6 +21,8 @@ interface SavedPiece {
   /** Heading in degrees, counter-clockwise. */
   angle: number;
   flipped?: true;
+  /** Height above the floor in mm, when raised. */
+  z?: number;
 }
 
 export interface SavedLayout {
@@ -41,6 +47,7 @@ export function toSaved(layout: Layout): SavedLayout {
       y: round(p.pose.y, 3),
       angle: round(toDeg(p.pose.angle), 4),
       ...(p.flipped ? { flipped: true as const } : {}),
+      ...(p.z ? { z: round(p.z, 3) } : {}),
     })),
   };
 }
@@ -57,14 +64,19 @@ export function fromSaved(data: unknown): Layout {
     throw new LayoutFileError('This layout was saved by a newer version of the app.');
   }
   const pieces: PlacedPiece[] = d.pieces.map((p, i) => {
-    const ok = p && typeof p.piece === 'string' && [p.x, p.y, p.angle].every((n) => typeof n === 'number' && Number.isFinite(n));
+    const ok =
+      p &&
+      typeof p.piece === 'string' &&
+      [p.x, p.y, p.angle].every((n) => typeof n === 'number' && Number.isFinite(n)) &&
+      (p.z === undefined || (typeof p.z === 'number' && Number.isFinite(p.z) && p.z >= 0));
     if (!ok) throw new LayoutFileError(`Piece ${i + 1} in this layout is damaged.`);
     try {
       getPiece(p.piece);
     } catch {
       throw new LayoutFileError(`This layout uses a piece the app doesn't know (${p.piece}).`);
     }
-    return { uid: `p${i + 1}`, pieceId: p.piece, flipped: p.flipped === true, pose: { x: p.x, y: p.y, angle: normalizeAngle(deg(p.angle)) } };
+    const pose = { x: p.x, y: p.y, angle: normalizeAngle(deg(p.angle)) };
+    return { uid: `p${i + 1}`, pieceId: p.piece, flipped: p.flipped === true, pose, ...(p.z ? { z: p.z } : {}) };
   });
   return { pieces };
 }
