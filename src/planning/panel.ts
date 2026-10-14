@@ -42,7 +42,8 @@ export interface PlanningDom {
 const CATEGORY_NAMES: Record<PieceCategory, string> = {
   straight: 'Straights',
   curve: 'Curves',
-  ramp: 'Ramps',
+  double: 'Double track',
+  ramp: 'Ramps and bridges',
   switch: 'Switches',
   crossing: 'Crossings',
   buffer: 'Buffer stops',

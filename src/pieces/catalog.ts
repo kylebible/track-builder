@@ -14,14 +14,13 @@ const startOf = (path: TrackPath, id: string, gender: Gender): Connector => ({
   id,
   gender,
   pose: { x: path.from.x, y: path.from.y, angle: normalizeAngle(path.from.angle + Math.PI) },
+  ...(path.z ? { z: path.z } : {}),
 });
 
-const endOf = (path: TrackPath, id: string, gender: Gender): Connector => ({
-  id,
-  gender,
-  pose: pathEnd(path),
-  ...(path.rise ? { z: path.rise } : {}),
-});
+const endOf = (path: TrackPath, id: string, gender: Gender): Connector => {
+  const z = (path.z ?? 0) + (path.rise ?? 0);
+  return { id, gender, pose: pathEnd(path), ...(z ? { z } : {}) };
+};
 
 const straightPath = (length: number, from: Pose = ORIGIN): TrackPath => ({
   kind: 'straight',
@@ -63,6 +62,7 @@ function twoEnded(
 
 const STRAIGHTS: { id: string; name: string; length: number; brio: string[] }[] = [
   { id: 'straight-mini', name: 'Mini straight', length: D.MINI_STRAIGHT, brio: ['A2', 'B2', 'C2'] },
+  { id: 'straight-middle', name: 'Middle straight', length: D.MIDDLE_STRAIGHT, brio: ['A3'] },
   { id: 'straight-short', name: 'Short straight', length: D.SHORT_STRAIGHT, brio: ['A1', 'B1', 'C1'] },
   { id: 'straight-medium', name: 'Medium straight', length: D.MEDIUM_STRAIGHT, brio: ['A', 'B', 'C'] },
   { id: 'straight-long', name: 'Long straight', length: D.LONG_STRAIGHT, brio: ['D'] },
@@ -74,6 +74,25 @@ const straights: PieceDef[] = STRAIGHTS.flatMap((s) =>
     twoEnded(s.id + v.suffix, s.name + v.label, [s.brio[i]], 'straight', straightPath(s.length), v.ends),
   ),
 );
+
+/**
+ * Bendy track: one piece in several shapes, from straight to bent as far as
+ * a curve. Each bend is its own catalog entry so layouts, the check and the
+ * trains treat it like any other piece; the parts list counts them all as
+ * one bendy track, and Bend (B) on the floor swaps between them.
+ */
+const BENDY_STEPS = Math.round(D.BENDY_MAX_BEND / D.BENDY_STEP);
+export const BENDY_IDS: readonly string[] = Array.from({ length: BENDY_STEPS + 1 }, (_, i) => (i ? `bendy-b${i}` : 'bendy'));
+
+const bendy: PieceDef[] = BENDY_IDS.map((id, i) => {
+  const bend = i * D.BENDY_STEP;
+  const path = i ? arcPath(D.BENDY_LENGTH / bend, bend) : straightPath(D.BENDY_LENGTH);
+  return {
+    ...twoEnded(id, 'Bendy track', [], 'straight', path, ['hole', 'peg']),
+    bend: Math.round((bend * 180) / Math.PI * 10) / 10,
+    ...(i ? { partOf: 'bendy' } : {}),
+  };
+});
 
 const CURVES = [
   { id: 'curve-large', name: 'Large curve', radius: D.LARGE_CURVE_RADIUS, brio: 'E' },
@@ -96,6 +115,34 @@ const curves: PieceDef[] = CURVES.flatMap((c) =>
 );
 
 /**
+ * Double track: two tracks side by side, a peg and a hole on each, the
+ * second track on the right (the outside, on a curve). EE and EE1 are
+ * retired but still about; K1 is two D straights side by side.
+ */
+function doubleTrack(id: string, name: string, brio: string, make: (from: Pose, outer: boolean) => TrackPath): PieceDef {
+  const near = make(ORIGIN, false);
+  const far = make({ x: 0, y: -D.DOUBLE_TRACK_SPACING, angle: 0 }, true);
+  return {
+    id,
+    name,
+    brioIds: [brio],
+    category: 'double',
+    paths: [near, far],
+    connectors: [startOf(near, 'a', 'hole'), endOf(near, 'b', 'peg'), startOf(far, 'c', 'hole'), endOf(far, 'd', 'peg')],
+  };
+}
+
+const doubles: PieceDef[] = [
+  doubleTrack('double-straight', 'Double straight', 'K1', (from) => straightPath(D.LONG_STRAIGHT, from)),
+  doubleTrack('double-curve-large', 'Large double curve', 'EE', (from, outer) =>
+    arcPath(D.LARGE_CURVE_RADIUS + (outer ? D.DOUBLE_TRACK_SPACING : 0), D.CURVE_ANGLE, from),
+  ),
+  doubleTrack('double-curve-short', 'Short double curve', 'EE1', (from, outer) =>
+    arcPath(D.SHORT_CURVE_RADIUS + (outer ? D.DOUBLE_TRACK_SPACING : 0), D.CURVE_ANGLE, from),
+  ),
+];
+
+/**
  * N ascending track: a long straight that climbs one level from its `a` end
  * to its `b` end. Turned end for end it goes down. N has a peg and a hole
  * (which end has which is UNCONFIRMED; we put the hole at the bottom), N1
@@ -107,6 +154,29 @@ const ramps: PieceDef[] = [
 ].map((v) =>
   twoEnded('ramp' + v.suffix, v.name, [v.brio], 'ramp', { ...straightPath(D.RAMP_LENGTH), rise: D.RAMP_RISE }, v.ends),
 );
+
+/**
+ * Arch bridge: up a level, across, and back down, on its own legs. Track a
+ * level below can run under the flat top. Not a lettered Brio piece.
+ */
+function archBridge(): PieceDef {
+  const slope = D.ARCH_BRIDGE_SLOPE;
+  const up: TrackPath = { ...straightPath(slope), rise: D.LEVEL_HEIGHT };
+  const top: TrackPath = { ...straightPath(D.ARCH_BRIDGE_TOP, { x: slope, y: 0, angle: 0 }), z: D.LEVEL_HEIGHT };
+  const down: TrackPath = {
+    ...straightPath(slope, { x: slope + D.ARCH_BRIDGE_TOP, y: 0, angle: 0 }),
+    z: D.LEVEL_HEIGHT,
+    rise: -D.LEVEL_HEIGHT,
+  };
+  return {
+    id: 'arch-bridge',
+    name: 'Arch bridge',
+    brioIds: [],
+    category: 'ramp',
+    paths: [up, top, down],
+    connectors: [startOf(up, 'a', 'hole'), endOf(down, 'b', 'peg')],
+  };
+}
 
 /**
  * A piece with one trunk end at the origin and several branch ends. Brio
@@ -288,7 +358,7 @@ const scenery: PieceDef[] = [
   loose('cottage', 'Cottage'),
 ];
 
-export const CATALOG: readonly PieceDef[] = [...straights, ...curves, ...ramps, ...switches, ...bigSwitches, ...crossings, ...buffers, ...scenery];
+export const CATALOG: readonly PieceDef[] = [...straights, ...bendy, ...curves, ...doubles, ...ramps, archBridge(), ...switches, ...bigSwitches, ...crossings, ...buffers, ...scenery];
 
 const byId = new Map(CATALOG.map((p) => [p.id, p]));
 

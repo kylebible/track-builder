@@ -48,13 +48,30 @@ Live site: https://kylebible.github.io/track-builder/
 - Trains feel the slope: a battery engine gets up a ramp pulling one car,
   but a heavy train stalls partway and slides back down.
 
+## More track types
+
+- **Middle straight** (A3, 72 mm), alongside the mini, short, medium and
+  long straights.
+- **Bendy track**: put it down straight, then Bend (B) it 7.5° at a time up
+  to 45°, the way the Curves turn setting says (Shift+B straightens it). It
+  bends about the end it's joined by. Every bend counts as one bendy track
+  on the parts list.
+- **Double track**: double straight (K1), large double curve (EE) and short
+  double curve (EE1), two tracks 46 mm apart. A piece goes on by its first
+  track; Reverse (S) moves it across to join by the other.
+- **Arch bridge**: climbs a level over an N-length slope, runs across a
+  144 mm top on its own legs and comes back down, so floor track can pass
+  under the top. It needs no support blocks.
+
 **T switch** (T) and **star switch** (X) are built on a D straight with
 quarter curves into its ends. Every end where paths split has its own lever
 when trains run: three on a T, four on a star.
 
 Unmeasured guesses, all in `src/pieces/dimensions.ts` and
 `src/pieces/catalog.ts`: the ramp's exact profile (a smooth S here),
-the support block size, and which ends of N, T and X are pegs.
+the support block size, which ends of N, T and X are pegs, the bendy
+track's length and bend limit, the double curves' radii, and the arch
+bridge's size.
 
 ## Planning tools
 

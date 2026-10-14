@@ -1,0 +1,168 @@
+import { describe, expect, it } from 'vitest';
+import { heightAt, pathLength } from '../geometry/path';
+import { distance, IDENTITY, normalizeAngle } from '../geometry/pose';
+import { flipFor, SHAPES, turnFrom, variantFor } from '../builder/variants';
+import { addPiece, EMPTY_LAYOUT, extendFrom, findJoints, openEnds, reshapePiece, swapEnd, worldEnd, type Layout } from '../layout/layout';
+import { supportsOf } from '../layout/supports';
+import { checkLayout } from '../planning/check';
+import { layoutFromJson, layoutToJson } from '../planning/file';
+import { partsList } from '../planning/parts';
+import { TrackNetwork } from '../trains/network';
+import { TrainSim, type Train } from '../trains/sim';
+import { BENDY_IDS, getPiece } from './catalog';
+import * as D from './dimensions';
+
+const shape = (id: string) => SHAPES.find((s) => s.ids.includes(id))!;
+
+describe('middle straight', () => {
+  it('is A3, half an A', () => {
+    const piece = getPiece('straight-middle');
+    expect(piece.brioIds).toEqual(['A3']);
+    expect(pathLength(piece.paths[0])).toBe(D.MEDIUM_STRAIGHT / 2);
+    expect(shape('straight-middle').ids).toEqual(['straight-middle']);
+  });
+});
+
+describe('bendy track', () => {
+  it('keeps its length however far it bends, up to an eighth of a circle', () => {
+    for (const id of BENDY_IDS) expect(pathLength(getPiece(id).paths[0])).toBeCloseTo(D.BENDY_LENGTH, 9);
+    const last = getPiece(BENDY_IDS[BENDY_IDS.length - 1]);
+    expect(last.bend).toBe(45);
+    expect(normalizeAngle(last.connectors[1].pose.angle)).toBeCloseTo(D.CURVE_ANGLE, 9);
+  });
+
+  it('is one palette tile', () => {
+    expect(shape('bendy').ids).toEqual(BENDY_IDS);
+    expect(variantFor(shape('bendy'), 'mixed', null)).toBe('bendy');
+  });
+
+  it('counts as one piece on the parts list however it is bent', () => {
+    let layout = addPiece(EMPTY_LAYOUT, 'bendy', IDENTITY).layout;
+    layout = addPiece(layout, 'bendy-b3', { x: 0, y: 400, angle: 0 }).layout;
+    layout = addPiece(layout, 'bendy-b6', { x: 0, y: 800, angle: 0 }, true).layout;
+    const list = partsList(layout);
+    expect(list.lines).toHaveLength(1);
+    expect(list.lines[0]).toMatchObject({ pieceId: 'bendy', name: 'Bendy track', count: 3 });
+  });
+
+  it('bends about the end it is joined by, the way asked', () => {
+    let layout = addPiece(EMPTY_LAYOUT, 'straight-long', IDENTITY).layout;
+    const ext = extendFrom(layout, { uid: 'p1', connectorId: 'b' }, 'bendy')!;
+    layout = ext.layout;
+    const id = 'bendy-b6';
+    const bent = reshapePiece(layout, ext.uid, id, (anchor) => flipFor(id, anchor, 'right'));
+    expect(findJoints(bent)).toHaveLength(1);
+    const far = worldEnd(bent, { uid: ext.uid, connectorId: 'b' }).connector.pose;
+    expect(normalizeAngle(far.angle)).toBeCloseTo(-D.CURVE_ANGLE, 9);
+    expect(far.y).toBeLessThan(0);
+  });
+
+  it('saves and loads each bend', () => {
+    const layout = addPiece(EMPTY_LAYOUT, 'bendy-b2', IDENTITY, true).layout;
+    expect(layoutFromJson(layoutToJson(layout)).pieces[0]).toMatchObject({ pieceId: 'bendy-b2', flipped: true });
+  });
+});
+
+describe('double track', () => {
+  it('has two tracks the guide spacing apart', () => {
+    for (const id of ['double-straight', 'double-curve-large', 'double-curve-short']) {
+      const piece = getPiece(id);
+      const [a, , c] = piece.connectors;
+      expect(distance(a.pose, c.pose), id).toBeCloseTo(D.DOUBLE_TRACK_SPACING, 9);
+      expect(piece.category).toBe('double');
+    }
+    expect(['double-straight', 'double-curve-large', 'double-curve-short'].map((id) => getPiece(id).brioIds[0])).toEqual(['K1', 'EE', 'EE1']);
+  });
+
+  it('curves keep the second track outside the first, both turning an eighth', () => {
+    const piece = getPiece('double-curve-large');
+    const [inner, outer] = piece.paths;
+    expect(inner.kind === 'arc' && inner.radius).toBe(D.LARGE_CURVE_RADIUS);
+    expect(outer.kind === 'arc' && outer.radius).toBe(D.LARGE_CURVE_RADIUS + D.DOUBLE_TRACK_SPACING);
+    const [, b, , d] = piece.connectors;
+    expect(b.pose.angle).toBeCloseTo(D.CURVE_ANGLE, 9);
+    expect(d.pose.angle).toBeCloseTo(D.CURVE_ANGLE, 9);
+    // Entered by either track, it turns left an eighth, not muddled by the other start.
+    expect(turnFrom(piece, 'a')).toBeCloseTo(2 * D.CURVE_ANGLE, 9);
+    expect(flipFor(piece.id, 'a', 'right')).toBe(true);
+    expect(flipFor(piece.id, 'c', 'left')).toBe(false);
+  });
+
+  it('joins single track on either track, and Reverse moves it across', () => {
+    let layout = addPiece(EMPTY_LAYOUT, 'straight-long', IDENTITY).layout;
+    const ext = extendFrom(layout, { uid: 'p1', connectorId: 'b' }, 'double-straight')!;
+    layout = ext.layout;
+    expect(ext.attached).toBe('a');
+    const swapped = swapEnd(layout, ext.uid)!;
+    expect(findJoints(swapped)).toEqual([{ a: { uid: 'p1', connectorId: 'b' }, b: { uid: ext.uid, connectorId: 'c' } }]);
+  });
+
+  it('runs a train down each track without crossing over', () => {
+    const layout = addPiece(EMPTY_LAYOUT, 'double-straight', IDENTITY).layout;
+    const net = new TrackNetwork(layout);
+    expect(net.edges).toHaveLength(2);
+    expect(net.switches()).toEqual([]);
+    const onward = net.onward(net.edges[0], 1, () => 0);
+    expect(onward.kind).toBe('open');
+  });
+
+  it('is on the parts list under double track', () => {
+    const layout = addPiece(EMPTY_LAYOUT, 'double-curve-short', IDENTITY).layout;
+    expect(partsList(layout).lines[0]).toMatchObject({ name: 'Short double curve', brioIds: ['EE1'], category: 'double', count: 1 });
+  });
+});
+
+describe('arch bridge', () => {
+  const bridge = getPiece('arch-bridge');
+
+  it('goes up a level, across and back down, with both ends on the floor', () => {
+    expect(bridge.connectors.map((c) => c.z ?? 0)).toEqual([0, 0]);
+    const [up, top, down] = bridge.paths;
+    expect(heightAt(up, 0)).toBe(0);
+    expect(heightAt(up, pathLength(up))).toBeCloseTo(D.LEVEL_HEIGHT, 9);
+    expect(heightAt(top, 0)).toBe(D.LEVEL_HEIGHT);
+    expect(heightAt(top, pathLength(top))).toBe(D.LEVEL_HEIGHT);
+    expect(heightAt(down, 0)).toBe(D.LEVEL_HEIGHT);
+    expect(heightAt(down, pathLength(down))).toBeCloseTo(0, 9);
+  });
+
+  it('stands on its own legs: no support blocks', () => {
+    const layout = addPiece(EMPTY_LAYOUT, 'arch-bridge', IDENTITY).layout;
+    expect(supportsOf(layout)).toEqual([]);
+    expect(partsList(layout).supports).toBe(0);
+  });
+
+  /** An arch bridge with a long straight crossing square under the point `along` it. */
+  function under(along: number): Layout {
+    let layout = addPiece(EMPTY_LAYOUT, 'arch-bridge', IDENTITY).layout;
+    const half = D.LONG_STRAIGHT / 2;
+    layout = addPiece(layout, 'straight-long', { x: along, y: -half, angle: Math.PI / 2 }).layout;
+    return layout;
+  }
+
+  it('track can run under the top', () => {
+    const issues = checkLayout(under(D.ARCH_BRIDGE_SLOPE + D.ARCH_BRIDGE_TOP / 2));
+    expect(issues.filter((i) => i.kind !== 'open-end')).toEqual([]);
+  });
+
+  it('track under the slope is too low', () => {
+    const issues = checkLayout(under(D.ARCH_BRIDGE_SLOPE / 2));
+    expect(issues.some((i) => i.kind === 'overlap' && /too low/.test(i.message))).toBe(true);
+  });
+
+  it('a battery engine runs up and over it', () => {
+    let layout = addPiece(EMPTY_LAYOUT, 'straight-long', IDENTITY).layout;
+    layout = extendFrom(layout, { uid: 'p1', connectorId: 'b' }, 'arch-bridge')!.layout;
+    expect(openEnds(layout)).toHaveLength(2);
+    const sim = new TrainSim(layout);
+    const train = sim.addTrain([{ stockId: 'battery-engine', reversed: false }], { edgeKey: 'p1:0', s: 100, reversed: false }) as Train;
+    sim.setThrottle(train.id, 1);
+    let highest = 0;
+    for (let i = 0; i < 60 * 30 && !train.wrecked && train.status.kind !== 'stuck'; i++) {
+      sim.advance(1 / 60);
+      highest = Math.max(highest, train.vehicles[0].geo.z);
+    }
+    expect(highest).toBeCloseTo(D.LEVEL_HEIGHT, 0);
+    expect(train.status).toMatchObject({ stuck: 'ran-off' });
+  });
+});

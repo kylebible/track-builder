@@ -263,6 +263,21 @@ export function flipPiece(layout: Layout, uid: string): Layout {
 }
 
 /**
+ * Swap a piece for another shape of it (a bendy track bent further), keeping
+ * the end it is joined by where it is (or its first end, if it is loose).
+ * `flipped` says whether to turn the new shape over, given that end.
+ */
+export function reshapePiece(layout: Layout, uid: string, pieceId: string, flipped: (anchorId: string) => boolean): Layout {
+  const piece = findPiece(layout, uid);
+  const joints = findJoints(layout);
+  const ends = worldEnds(piece);
+  const anchor = ends.find((e) => partnerOf(joints, e)) ?? ends[0];
+  const next = { ...piece, pieceId, flipped: flipped(anchor.connectorId) };
+  const pose = placeConnectorAt(anchor.connector.pose, defOf(next), anchor.connectorId);
+  return { pieces: layout.pieces.map((p) => (p.uid === uid ? { ...next, pose } : p)) };
+}
+
+/**
  * Turn a group of pieces over together, mirroring the group across the
  * line through its middle that runs along x. Joints inside the group stay
  * joined.
@@ -403,7 +418,7 @@ export function findSeat(layout: Layout, uid: string, transform: Pose, range: nu
     const z = baseOf(other) - (def.holdsTrackAt ?? 0);
     if (z < -1e-6) continue;
     for (const path of defOf(other).paths) {
-      if (path.kind !== 'straight' || path.rise) continue;
+      if (path.kind !== 'straight' || path.rise || path.z) continue;
       const mid = applyPose(other.pose, poseAt(path, path.length / 2));
       const gap = Math.hypot(mid.x - moved.x, mid.y - moved.y);
       if (gap > range || (best && gap >= best.gap)) continue;

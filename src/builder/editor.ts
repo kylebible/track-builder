@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { deg, IDENTITY, type Pose, type Vec2 } from '../geometry/pose';
-import { getPiece } from '../pieces/catalog';
+import { BENDY_IDS, getPiece } from '../pieces/catalog';
 import { LEVEL_HEIGHT } from '../pieces/dimensions';
 import type { Gender } from '../pieces/types';
 import { History } from '../layout/history';
@@ -10,6 +10,7 @@ import {
   anchorPoints,
   canExtend,
   centerOf,
+  defOf,
   dragContext,
   EMPTY_LAYOUT,
   extendFrom,
@@ -22,6 +23,7 @@ import {
   openEnds,
   partnerOf,
   raisePieces,
+  reshapePiece,
   removePieces,
   rotatePieces,
   sectionOf,
@@ -36,7 +38,7 @@ import {
 } from '../layout/layout';
 import { flexContext, flexDrag, type FlexContext, type FlexResult } from '../layout/flex';
 import { Palette } from './palette';
-import { attachEnd, flipFor, hasEndsChoice, isLoose, SHAPES, variantFor, type Shape } from './variants';
+import { attachEnd, flipFor, hasEndsChoice, turnFrom, isLoose, SHAPES, variantFor, type Shape } from './variants';
 import { LayoutView } from './view';
 
 // Turns pointer, keyboard and toolbar input into layout edits. Every edit
@@ -100,7 +102,7 @@ export interface EditorDom {
   status: HTMLElement;
   /** Shown while the layout is empty. */
   empty: HTMLElement;
-  buttons: Record<'undo' | 'redo' | 'rotateLeft' | 'rotateRight' | 'flip' | 'swap' | 'raise' | 'lower' | 'section' | 'remove' | 'fit', HTMLButtonElement>;
+  buttons: Record<'undo' | 'redo' | 'rotateLeft' | 'rotateRight' | 'flip' | 'swap' | 'bend' | 'raise' | 'lower' | 'section' | 'remove' | 'fit', HTMLButtonElement>;
   /** Frame the whole layout in the view. */
   onFit: () => void;
   /** The layout to start with, such as the one saved last time. */
@@ -157,6 +159,7 @@ export class Editor {
     b.rotateRight.onclick = () => this.rotate(-1);
     b.flip.onclick = () => this.flip();
     b.swap.onclick = () => this.swap();
+    b.bend.onclick = (e) => this.bend(e.shiftKey ? -1 : 1);
     b.raise.onclick = () => this.raise(1);
     b.lower.onclick = () => this.raise(-1);
     b.section.onclick = () => this.selectSection();
@@ -352,6 +355,40 @@ export class Editor {
       }
     }
     return null;
+  }
+
+  /** The one selected piece, if it is a bendy track. */
+  private selectedBendy(): string | null {
+    const uids = this.targets();
+    if (uids.size !== 1) return null;
+    const [uid] = uids;
+    return BENDY_IDS.includes(findPiece(this.layout, uid).pieceId) ? uid : null;
+  }
+
+  /**
+   * Bend a bendy track a step further (or back towards straight), keeping
+   * the end it is joined by in place. It keeps bending the way it already
+   * turns; a straight one starts bending the way the palette's Curves turn
+   * setting says.
+   */
+  bend(direction: 1 | -1): void {
+    const uid = this.selectedBendy();
+    if (!uid) return;
+    const piece = findPiece(this.layout, uid);
+    const step = BENDY_IDS.indexOf(piece.pieceId);
+    const next = step + direction;
+    if (next < 0 || next >= BENDY_IDS.length) {
+      this.flash(next < 0 ? 'That bendy track is already straight.' : 'That bendy track is bent as far as it goes.');
+      return;
+    }
+    const id = BENDY_IDS[next];
+    const layout = reshapePiece(this.layout, uid, id, (anchorId) => {
+      const turn = step ? turnFrom(defOf(piece), anchorId) : 0;
+      const hand = turn ? (turn > 0 ? 'left' : 'right') : this.palette.hand;
+      return flipFor(id, anchorId, hand);
+    });
+    this.commit(layout, this.selection);
+    this.flash(`Bent ${getPiece(id).bend}°.`);
   }
 
   /** Lift the selection a level (onto supports), or lower it a level. */
@@ -610,6 +647,8 @@ export class Editor {
       this.flip();
     } else if (k === 's') {
       this.swap();
+    } else if (k === 'b') {
+      this.bend(e.shiftKey ? -1 : 1);
     } else if (k === 'u') {
       this.raise(1);
     } else if (k === 'd') {
@@ -712,6 +751,7 @@ export class Editor {
     b.redo.disabled = !this.history.canRedo;
     for (const button of [b.rotateLeft, b.rotateRight, b.flip, b.raise, b.lower, b.section, b.remove]) button.disabled = !has;
     b.swap.disabled = this.targets().size !== 1;
+    b.bend.hidden = !this.selectedBendy();
     b.fit.disabled = layout.pieces.length === 0;
 
     const [hint, counts] = this.flashText ? [this.flashText, ''] : this.describe(layout, open.length, joints.length);

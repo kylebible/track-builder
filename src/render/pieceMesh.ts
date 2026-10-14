@@ -251,6 +251,14 @@ export function buildPieceObject(piece: PieceDef): THREE.Group {
     group.add(new THREE.Mesh(sweepGeometry(path), material));
   });
   for (const c of piece.connectors) group.add(connectorMesh(c));
+  // Track carried up on the piece's own legs (a bridge deck) stands on a
+  // leg at each end of the raised stretch.
+  for (const path of piece.paths.filter((p) => p.z && !p.rise)) {
+    for (const s of [0, pathLength(path)]) {
+      const at = poseAt(path, s);
+      group.add(buildSupport(at.x, at.y, at.angle, path.z!, 1));
+    }
+  }
   if (piece.category === 'buffer') group.add(bufferBarrier(piece));
   if (piece.model) {
     const model = sceneryModel(piece.model);

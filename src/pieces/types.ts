@@ -17,15 +17,17 @@ export interface Connector {
 
 /**
  * A running surface along the track centerline, in piece-local coordinates.
- * `rise` is how much it climbs from start to end (a ramp); it starts level
- * with the bottom of the piece.
+ * `rise` is how much it climbs from start to end (a ramp; negative goes
+ * down). `z` is how high it starts above the bottom of the piece, for
+ * track carried up on a piece's own legs (a bridge deck); missing is level
+ * with the bottom.
  */
 export type TrackPath =
-  | { kind: 'straight'; from: Pose; length: number; rise?: number }
+  | { kind: 'straight'; from: Pose; length: number; rise?: number; z?: number }
   /** `sweep` is signed: positive turns left (counter-clockwise). */
-  | { kind: 'arc'; from: Pose; radius: number; sweep: number; rise?: number };
+  | { kind: 'arc'; from: Pose; radius: number; sweep: number; rise?: number; z?: number };
 
-export type PieceCategory = 'straight' | 'curve' | 'ramp' | 'switch' | 'crossing' | 'buffer' | 'scenery';
+export type PieceCategory = 'straight' | 'curve' | 'double' | 'ramp' | 'switch' | 'crossing' | 'buffer' | 'scenery';
 
 export interface PieceDef {
   /** Stable catalog id, used in saved layouts. */
@@ -46,6 +48,13 @@ export interface PieceDef {
   seatsOnTrack?: boolean;
   /** Seated scenery that holds the track up this high (a pier), standing on the floor under raised track. */
   holdsTrackAt?: number;
+  /**
+   * The catalog piece this one is a shape of, for pieces you reshape on the
+   * floor (bendy track): the parts list counts them all as that piece.
+   */
+  partOf?: string;
+  /** How far a bendy track is bent, degrees, before any flip. */
+  bend?: number;
   /** Turned over from the catalog piece, see `mirrorPiece`. */
   mirrored?: boolean;
 }
