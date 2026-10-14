@@ -7,7 +7,7 @@ import { PlanningPanel } from './planning/panel';
 import { autosave, loadAutosave } from './planning/storage';
 import { Trains } from './trains/trains';
 import { loadSceneryModels } from './render/sceneryModels';
-import { DEFAULT_ENVIRONMENT, type EnvironmentId } from './environments/environments';
+import { DEFAULT_ENVIRONMENT, getEnvironment, inWater, offArea, type EnvironmentId } from './environments/environments';
 import { EnvironmentPicker } from './environments/picker';
 import { EnvironmentScene } from './environments/scene';
 import './style.css';
@@ -96,10 +96,16 @@ const editor = new Editor(scene, camera, orbit, {
     raise: button('raise'),
     lower: button('lower'),
     section: button('section'),
+    fill: button('fill'),
     remove: button('remove'),
     fit: button('fit'),
   },
   onFit: fitView,
+  fillPanel: document.getElementById('fill-panel')!,
+  blocked: (layout) => {
+    const env = getEnvironment(environment);
+    return [...(offArea(layout, env)?.uids ?? []), ...(inWater(layout, env)?.uids ?? [])];
+  },
   initial: restored ?? undefined,
   onChange: (layout) => {
     saved = autosave({ ...layout, environment });
