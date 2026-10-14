@@ -25,7 +25,7 @@ export type TrackPath =
   /** `sweep` is signed: positive turns left (counter-clockwise). */
   | { kind: 'arc'; from: Pose; radius: number; sweep: number; rise?: number };
 
-export type PieceCategory = 'straight' | 'curve' | 'ramp' | 'switch' | 'crossing' | 'buffer' | 'scenery';
+export type PieceCategory = 'straight' | 'curve' | 'ramp' | 'switch' | 'crossing' | 'buffer' | 'scenery' | 'trackside';
 
 export interface PieceDef {
   /** Stable catalog id, used in saved layouts. */

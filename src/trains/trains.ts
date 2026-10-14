@@ -5,10 +5,10 @@ import type { Layout } from '../layout/layout';
 import * as D from '../pieces/dimensions';
 import { toWorld } from '../render/pieceMesh';
 import { cabPose, travelWay } from './cab';
-import { getStock, STOCK, type StockDef } from './stock';
+import { cargoCount, getStock, STOCK, supplyLevel, type CargoKind, type StockDef } from './stock';
 import { edgeGrade, edgeHeight } from './network';
 import { TrainSim, type StuckKind, type Train, type VehicleGeometry } from './sim';
-import { AXLE_HEIGHT, buildVehicle } from './trainMesh';
+import { AXLE_HEIGHT, buildVehicle, showLoad } from './trainMesh';
 import { AccessoryView } from './accessoryView';
 import { Synth } from '../sound/synth';
 import { TrainSounds } from '../sound/trainSounds';
@@ -75,7 +75,13 @@ const SHORT: Record<StuckKind, string> = {
   crashed: 'Crashed',
   derailed: 'Derailed',
   tipped: 'Tipped over',
+  'no-water': 'Out of water',
+  'no-coal': 'Out of coal',
+  'flat-battery': 'Battery flat',
 };
+
+/** How long a whistle's "Toot!" shows, ms. */
+const BUBBLE_MS = 1600;
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> & { class?: string } = {}, ...children: (Node | string)[]) => {
   const node = document.createElement(tag);
@@ -192,6 +198,10 @@ export class Trains {
   /** Each train's own controls, floating over it. */
   private readonly hud: HTMLElement;
   private readonly cards = new Map<number, { card: HTMLElement; key: string }>();
+  /** Bubbles over engines as they pass signs. */
+  private readonly bubbles: { el: HTMLElement; at: THREE.Vector3; until: number }[] = [];
+  private eventsSeen = 0;
+  private readonly deliveries: HTMLElement;
 
   constructor(
     scene: THREE.Scene,
@@ -220,16 +230,23 @@ export class Trains {
     this.speedButtons = SPEEDS.map((s) => el('button', { type: 'button', textContent: `${s}×`, title: `Run at ${s}× speed`, onclick: () => this.setSpeed(s) }));
     this.toast = el('div', { class: 'tr-toast', hidden: true });
     this.hud = el('div', { class: 'tr-hud' });
+    const tile = (def: StockDef) => {
+      const t = el('button', { class: 'tr-tile', type: 'button', title: `Drag a ${def.name.toLowerCase()} onto the track${def.cargo ? `. It carries ${def.cargo.capacity} ${cargoCount(def.cargo.kind, def.cargo.capacity).replace(/^\d+ /, '')}` : ''}` }, el('span', { class: 'tr-thumb' }), el('span', { textContent: def.name }));
+      t.dataset.stock = def.id;
+      t.addEventListener('pointerdown', (e) => this.pickUp(e, def));
+      return t;
+    };
+    const powered = (def: StockDef) => def.motor || def.supplies;
     this.tiles = el(
       'div',
-      { class: 'tr-stock' },
-      ...STOCK.map((def) => {
-        const tile = el('button', { class: 'tr-tile', type: 'button', title: `Drag a ${def.name.toLowerCase()} onto the track` }, el('span', { class: 'tr-thumb' }), el('span', { textContent: def.name }));
-        tile.dataset.stock = def.id;
-        tile.addEventListener('pointerdown', (e) => this.pickUp(e, def));
-        return tile;
-      }),
+      {},
+      el('h3', { textContent: 'Engines' }),
+      el('div', { class: 'tr-stock' }, ...STOCK.filter(powered).map(tile)),
+      el('h3', { textContent: 'Cars' }),
+      el('div', { class: 'tr-stock' }, ...STOCK.filter((d) => !powered(d)).map(tile)),
     );
+    const supplies = el('input', { type: 'checkbox', checked: this.sim.useSupplies, onchange: () => (this.sim.useSupplies = supplies.checked) });
+    this.deliveries = el('p', { class: 'tr-deliveries' });
     this.panel = el(
       'section',
       { id: 'trains', hidden: true, ariaLabel: 'Trains' },
@@ -237,12 +254,15 @@ export class Trains {
       el('p', { class: 'tr-lead', textContent: 'Drag engines and cars onto the track. Drop one by the end of a train to couple it on.' }),
       this.tiles,
       el('div', { class: 'tr-row' }, this.pauseButton, el('div', { class: 'seg' }, ...this.speedButtons), el('button', { class: 'tr-btn', type: 'button', textContent: 'Reset', title: 'Put every train back where it was built, stopped', onclick: () => this.reset() })),
+      el('label', { class: 'tr-check', title: 'Steam engines burn water and coal and battery engines use charge. Top them up at a water tower, coaling stage or charging post.' }, supplies, ' Engines use up water, coal and charge'),
+      this.deliveries,
       el('ul', { class: 'tr-hint' },
         el('li', { innerHTML: '<b>Tap a car</b> on the track to turn it round. Red and blue ends are the magnets: red pulls blue.' }),
         el('li', { innerHTML: '<b>Drag a car</b> to lift it off. Drop it off the track to take it away.' }),
         el('li', { innerHTML: 'Each train has its own controls. Tap a switch’s <b>yellow knob</b> to change its way.' }),
         el('li', { innerHTML: '<b>Tap a signal</b> to turn it red or green. Trains stop at stations, and under the cargo loader and by the crane to load and unload open wagons. The lifting bridge’s knob raises it.' }),
         el('li', { innerHTML: '<b>Ride along</b> (C) watches from the cab. Drag to look around; Esc gets off.' }),
+        el('li', { innerHTML: 'Put <b>trackside</b> places from the parts palette over a straight: trains stop at water towers, mines and more when there’s work for them.' }),
       ),
     );
     container.append(this.hud, this.panel, this.toast);
@@ -311,6 +331,7 @@ export class Trains {
   private reset(): void {
     this.sim.reset();
     this.noticesSeen = 0;
+    this.eventsSeen = 0;
   }
 
   private say(message: string): void {
@@ -351,6 +372,8 @@ export class Trains {
       'div',
       { class: 'tr-card' },
       el('div', { class: 'tr-card-head' }, el('b', { textContent: t.name }), el('span', { class: 'tr-card-status' })),
+      el('div', { class: 'tr-card-load' }),
+      el('div', { class: 'tr-card-work', hidden: true }, el('span'), el('i', {}, el('i'))),
       el('div', { class: 'tr-card-row' },
         t.wrecked
           ? act('Put back on the rails', 'Put it back where it was built', () => this.restore(t), 'wide')
@@ -363,6 +386,70 @@ export class Trains {
         act('✕', 'Take the train off the track', () => this.sim.removeTrain(t.id), 'danger'),
       ),
     );
+  }
+
+  /** Stores and cargo, for the card: "Water 60% · Coal 80% · 5 passengers". */
+  private loadText(t: Train): string {
+    const parts: string[] = [];
+    const stores = new Map<string, number>();
+    t.consist.forEach((entry) => {
+      const def = getStock(entry.stockId);
+      if (!this.sim.useSupplies) return;
+      for (const s of def.supplies ?? []) {
+        // A tender's coal and the engine's own show as one.
+        const level = supplyLevel(entry, s);
+        stores.set(s, Math.max(stores.get(s) ?? 0, level));
+      }
+    });
+    const NAMES = { water: 'Water', coal: 'Coal', charge: 'Battery' } as Record<string, string>;
+    for (const [s, level] of stores) parts.push(`${NAMES[s]} ${Math.round(level * 100)}%`);
+    const cargo = new Map<CargoKind, number>();
+    for (const entry of t.consist) {
+      const kind = getStock(entry.stockId).cargo?.kind;
+      if (kind) cargo.set(kind, (cargo.get(kind) ?? 0) + (entry.units ?? 0));
+    }
+    const carried = [...cargo].filter(([, n]) => n);
+    if (carried.length) for (const [kind, n] of carried) parts.push(cargoCount(kind, n));
+    else if (cargo.size) parts.push('Cars empty');
+    return parts.join(' · ');
+  }
+
+  /** Bubbles over engines passing signs, and the tally of deliveries. */
+  private drawPlaces(time: number): void {
+    const rect = this.container.getBoundingClientRect();
+    const screen = (at: THREE.Vector3): string | null => {
+      const p = at.clone().project(this.camera);
+      if (p.z >= 1 || Math.abs(p.x) > 1.1 || Math.abs(p.y) > 1.1) return null;
+      return `translate(${((p.x + 1) / 2) * rect.width}px, ${((1 - p.y) / 2) * rect.height}px) translate(-50%, -100%)`;
+    };
+    // Signs passed since last time.
+    for (const e of this.sim.events) {
+      if (e.time <= this.eventsSeen) continue;
+      const bubble = el('div', { class: `tr-bubble ${e.kind}`, textContent: e.kind === 'whistle' ? 'Toot toot!' : 'Slow' });
+      this.hud.append(bubble);
+      const train = this.sim.train(e.trainId);
+      if (train && e.kind === 'whistle') this.sounds.whistle(train, undefined, true);
+      const engine = train?.vehicles.find((v) => v.def.motor) ?? train?.vehicles[0];
+      const at = engine ? toWorld(engine.geo.center.x, engine.geo.center.y, engine.geo.z + engine.def.height + 30) : toWorld(e.at.x, e.at.y, e.z + 90);
+      this.bubbles.push({ el: bubble, at, until: time + BUBBLE_MS });
+    }
+    if (this.sim.events.length) this.eventsSeen = this.sim.events[this.sim.events.length - 1].time;
+    for (let i = this.bubbles.length - 1; i >= 0; i--) {
+      const b = this.bubbles[i];
+      const transform = time < b.until ? screen(b.at) : null;
+      if (time >= b.until) {
+        b.el.remove();
+        this.bubbles.splice(i, 1);
+        continue;
+      }
+      b.el.hidden = !transform;
+      if (transform) b.el.style.transform = transform;
+    }
+    // What's been delivered so far.
+    const delivered = Object.entries(this.sim.delivered).filter(([, n]) => n) as [CargoKind, number][];
+    const text = delivered.length ? `Delivered: ${delivered.map(([k, n]) => cargoCount(k, n)).join(', ')}.` : '';
+    if (this.deliveries.textContent !== text) this.deliveries.textContent = text;
+    this.deliveries.hidden = !text;
   }
 
   private whistleButton(t: Train): HTMLButtonElement {
@@ -498,6 +585,19 @@ export class Trains {
         if (visible) card.style.transform = `translate(${((p.x + 1) / 2) * rect.width}px, ${((1 - p.y) / 2) * rect.height}px) translate(-50%, -100%)`;
       }
       card.classList.toggle('stuck', t.status.kind === 'stuck');
+      const load = card.querySelector<HTMLElement>('.tr-card-load')!;
+      const loadText = this.loadText(t);
+      if (load.textContent !== loadText) load.textContent = loadText;
+      load.hidden = !loadText;
+      // What's being done where it's stopped, and how far along.
+      const work = card.querySelector<HTMLElement>('.tr-card-work')!;
+      const doing = t.stop?.phase === 'dwell' ? t.stop.work : t.hold?.until != null ? t.hold.work : undefined;
+      work.hidden = !doing;
+      if (doing) {
+        const span = work.querySelector('span')!;
+        if (span.textContent !== doing.summary) span.textContent = doing.summary;
+        work.querySelector<HTMLElement>('i i')!.style.width = `${doing.total ? Math.round((100 * doing.done) / doing.total) : 100}%`;
+      }
       const status = card.querySelector<HTMLElement>('.tr-card-status')!;
       status.textContent = this.statusText(t);
       status.title = t.status.kind === 'stuck' ? t.status.message : '';
@@ -729,6 +829,7 @@ export class Trains {
     this.drawTrains(time);
     if (this.ride) this.placeCab(dt);
     this.drawCards();
+    this.drawPlaces(time);
     this.updateLeverVisibility();
     this.accessories.update(this.layout, time, this.leversRoot.visible);
     const notices = this.sim.notices;
@@ -755,6 +856,7 @@ export class Trains {
         }
         mesh.userData.trainId = train.id;
         mesh.userData.index = i;
+        showLoad(mesh, v.def, train.consist[i]);
         const { center, heading } = v.geo;
         mesh.position.copy(toWorld(center.x, center.y, v.geo.z));
         mesh.rotation.set(0, heading, 0);
