@@ -1,4 +1,5 @@
 import { normalizeAngle } from '../geometry/pose';
+import { offered } from '../pieces/basic';
 import { CATALOG, getPiece, mirrorPiece } from '../pieces/catalog';
 import type { Gender, PieceCategory, PieceDef } from '../pieces/types';
 
@@ -54,16 +55,29 @@ export const hasEndsChoice = (shape: Shape): boolean => shape.category === 'stra
  * stops take whichever version fits; straights and curves follow `ends`.
  */
 export function variantFor(shape: Shape, ends: Ends, target: Gender | null): string {
+  const ids = offeredIds(shape);
   if (hasEndsChoice(shape)) {
-    return shape.ids.find((id) => endsOf(getPiece(id)) === ends) ?? shape.ids[0];
+    return ids.find((id) => endsOf(getPiece(id)) === ends) ?? ids[0];
   }
   // A ramp goes on by its low end, so it climbs away from the end built from.
   if (target && (shape.category === 'switch' || shape.category === 'buffer' || shape.category === 'ramp')) {
-    const first = shape.ids.find((id) => getPiece(id).connectors[0].gender !== target);
+    const first = ids.find((id) => getPiece(id).connectors[0].gender !== target);
     if (first) return first;
   }
-  return shape.ids[0];
+  return ids[0];
 }
+
+/** The versions of a shape the current mode offers (Basic mode: real Brio ones); all of them if none is. */
+export function offeredIds(shape: Shape): string[] {
+  const ids = shape.ids.filter((id) => offered(getPiece(id)));
+  return ids.length ? ids : shape.ids;
+}
+
+/** Whether the current mode offers any version of a shape. */
+export const isOffered = (shape: Shape): boolean => shape.ids.some((id) => offered(getPiece(id)));
+
+/** Whether a shape offers the `ends` choice in the current mode. */
+export const offersEnds = (shape: Shape, ends: Ends): boolean => offeredIds(shape).some((id) => endsOf(getPiece(id)) === ends);
 
 /**
  * How far the piece turns, summed over its other ends, when a train enters
