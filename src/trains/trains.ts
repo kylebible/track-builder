@@ -62,6 +62,8 @@ const knobGeometry = new THREE.SphereGeometry(9, 24, 16);
 const stemGeometry = new THREE.CylinderGeometry(2, 2, 22, 10);
 const attachMaterial = new THREE.MeshBasicMaterial({ color: 0x1f9d55, transparent: true, opacity: 0.85 });
 const attachGeometry = new THREE.TorusGeometry(10, 2.2, 10, 40);
+const pinMaterial = new THREE.MeshStandardMaterial({ color: 0x2a7fd4, emissive: 0x1a4f88, emissiveIntensity: 0.4, roughness: 0.4 });
+const pinGeometry = new THREE.ConeGeometry(8, 22, 20).rotateX(Math.PI);
 
 /** An eye: watch from the train. */
 const RIDE_ICON = '<svg viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>';
@@ -206,6 +208,8 @@ export class Trains {
   private readonly bubbles: { el: HTMLElement; at: THREE.Vector3; until: number }[] = [];
   private eventsSeen = 0;
   private readonly deliveries: HTMLElement;
+  private readonly autorouteBox: HTMLInputElement;
+  private leverVersion = 0;
 
   constructor(
     scene: THREE.Scene,
@@ -255,6 +259,7 @@ export class Trains {
     );
     const supplies = el('input', { type: 'checkbox', checked: this.sim.useSupplies, onchange: () => (this.sim.useSupplies = supplies.checked) });
     this.deliveries = el('p', { class: 'tr-deliveries' });
+    this.autorouteBox = el('input', { type: 'checkbox', checked: this.sim.autoroute, onchange: () => this.sim.setAutoroute(this.autorouteBox.checked) });
     this.panel = el(
       'section',
       { id: 'trains', hidden: true, ariaLabel: 'Trains' },
@@ -263,6 +268,7 @@ export class Trains {
       this.tiles,
       el('div', { class: 'tr-row' }, this.pauseButton, el('div', { class: 'seg' }, ...this.speedButtons), el('button', { class: 'tr-btn', type: 'button', textContent: 'Reset', title: 'Put every train back where it was built, stopped', onclick: () => this.reset() })),
       el('label', { class: 'tr-check', title: 'Steam engines burn water and coal and battery engines use charge. Top them up at a water tower, coaling stage or charging post.' }, supplies, ' Engines use up water, coal and charge'),
+      el('label', { class: 'tr-check', title: 'Each train reserves the track ahead of it and sets the switches its way. A train waits short of track another train is on instead of running into it, and takes the free side of a passing loop.' }, this.autorouteBox, ' Autoroute: trains set switches and wait for each other'),
       this.deliveries,
       el('ul', { class: 'tr-hint' },
         el('li', { innerHTML: '<b>Tap a car</b> on the track to turn it round. Red and blue ends are the magnets: red pulls blue.' }),
@@ -270,6 +276,7 @@ export class Trains {
         el('li', { innerHTML: 'Each train has its own controls. Tap a switch’s <b>yellow knob</b> to change its way.' }),
         el('li', { innerHTML: '<b>Tap a signal</b> to turn it red or green. Trains stop at stations, and under the cargo loader and by the crane to load and unload open wagons. The lifting bridge’s knob raises it.' }),
         el('li', { innerHTML: '<b>Ride along</b> (C) watches from the cab. Drag to look around; Esc gets off.' }),
+        el('li', { innerHTML: '<b>Go to</b> on a train’s card sends it to a station or trackside place by the shortest way, setting switches as it goes. It backs up if that’s quicker.' }),
         el('li', { innerHTML: 'Put <b>trackside</b> places from the parts palette over a straight: trains stop at water towers, mines and more when there’s work for them.' }),
       ),
     );
@@ -281,7 +288,7 @@ export class Trains {
     window.addEventListener('pointerup', (e) => this.pointerUp(e));
     window.addEventListener('pointercancel', (e) => this.cancel(e));
     window.addEventListener('keydown', (e) => {
-      if (e.target instanceof HTMLInputElement || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === 'y' || e.key === 'Y') this.setOpen(!this.open);
       else if (e.key === 'm' || e.key === 'M') this.setMuted(!this.sounds.synth.muted);
       else if (e.key === 'c' || e.key === 'C') this.toggleRide();
@@ -382,6 +389,7 @@ export class Trains {
       el('div', { class: 'tr-card-head' }, el('b', { textContent: t.name }), el('span', { class: 'tr-card-status' })),
       el('div', { class: 'tr-card-load' }),
       el('div', { class: 'tr-card-work', hidden: true }, el('span'), el('i', {}, el('i'))),
+      this.destinationPicker(t),
       el('div', { class: 'tr-card-row' },
         t.wrecked
           ? act('Put back on the rails', 'Put it back where it was built', () => this.restore(t), 'wide')
@@ -394,6 +402,38 @@ export class Trains {
         act('✕', 'Take the train off the track', () => this.sim.removeTrain(t.id), 'danger'),
       ),
     );
+  }
+
+  /** "Go to…": send the train to a station or a place beside the track. */
+  private destinationPicker(t: Train): HTMLElement | string {
+    const places = this.sim.destinations();
+    if (t.wrecked || !t.vehicles.some((v) => v.def.motor) || !places.length) return '';
+    const current = t.dispatch?.dest.kind === 'place' ? t.dispatch.dest.uid : '';
+    const select = el(
+      'select',
+      {
+        class: 'tr-dest',
+        title: 'Send this train somewhere: it finds the way and sets the switches',
+        onchange: () => {
+          if (!select.value) {
+            this.sim.clearRoute(t.id);
+            return;
+          }
+          const error = this.sim.routeTo(t.id, { kind: 'place', uid: select.value });
+          if (error) {
+            this.say(error);
+            select.value = current;
+            return;
+          }
+          this.autorouteBox.checked = true;
+          this.setPaused(false);
+        },
+      },
+      el('option', { value: '', textContent: t.dispatch ? 'Stop going there' : 'Go to…' }),
+      ...places.map((p) => el('option', { value: p.uid, textContent: p.name })),
+    );
+    select.value = current;
+    return el('div', { class: 'tr-card-row' }, select);
   }
 
   /** Stores and cargo, for the card: "Water 60% · Coal 80% · 5 passengers". */
@@ -567,7 +607,8 @@ export class Trains {
     for (const t of this.sim.trains) {
       seen.add(t.id);
       const riding = this.ride?.trainId === t.id;
-      const key = `${t.throttle}/${t.wrecked}/${t.name}/${t.vehicles.some((v) => v.def.motor)}/${riding}`;
+      const dest = t.dispatch?.dest.kind === 'place' ? t.dispatch.dest.uid : '';
+      const key = `${t.throttle}/${t.wrecked}/${t.name}/${t.vehicles.some((v) => v.def.motor)}/${riding}/${dest}/${this.sim.destinations().length}`;
       let entry = this.cards.get(t.id);
       if (!entry || entry.key !== key) {
         const card = this.makeCard(t);
@@ -859,6 +900,8 @@ export class Trains {
       this.drawLevers();
     }
     if (!this.paused && dt > 0) this.sim.advance(Math.min(dt, 0.05) * this.speed);
+    if (this.sim.leverVersion !== this.leverVersion) this.drawLevers();
+    if (this.autorouteBox.checked !== this.sim.autoroute) this.autorouteBox.checked = this.sim.autoroute;
     this.sounds.update(this.sim, !this.paused);
     this.drawTrains(time);
     if (this.ride) this.placeCab(dt);
@@ -904,6 +947,11 @@ export class Trains {
         }
       });
       if (train.status.kind === 'stuck') this.markersRoot.add(this.stuckMarker(train.status.at, this.heightNear(train.status.at), time));
+      if (train.dispatch && train.dispatch.state !== 'arrived') {
+        const dest = train.dispatch.dest;
+        const at = dest.kind === 'place' ? this.sim.destinations().find((p) => p.uid === dest.uid)?.at : undefined;
+        if (at) this.markersRoot.add(this.destinationPin(at, this.heightNear(at), time));
+      }
     }
     for (const [key, mesh] of this.meshes) {
       if (!seen.has(key)) {
@@ -949,8 +997,16 @@ export class Trains {
     return ring;
   }
 
+  /** A pin bobbing over where a train is headed. */
+  private destinationPin(at: Vec2, z: number, time: number): THREE.Object3D {
+    const pin = new THREE.Mesh(pinGeometry, pinMaterial);
+    pin.position.copy(toWorld(at.x, at.y, z + D.TRACK_HEIGHT + 140 + 6 * Math.sin(time / 220)));
+    return pin;
+  }
+
   /** A yellow knob over each switch, and a yellow stripe down the way it is set. */
   private drawLevers(): void {
+    this.leverVersion = this.sim.leverVersion;
     this.leversRoot.traverse((o) => {
       if (o instanceof THREE.Mesh && o.geometry instanceof THREE.TubeGeometry) o.geometry.dispose();
     });
