@@ -15,9 +15,15 @@ describe('scene dressing', () => {
     for (const dress of [dressGrass, dressRiver, dressLake, dressSnow]) {
       const group = dress();
       expect(group.children.length).toBeGreaterThan(5);
+      // One expect per scene, not per vertex: there are hundreds of thousands.
+      let inside: string | null = null;
       for (const [x, y, z] of points(group)) {
-        if (z > 1) expect(Math.abs(x) < 850 && Math.abs(y) < 600, `${dress.name} has something at ${x}, ${y}`).toBe(false);
+        if (z > 1 && Math.abs(x) < 850 && Math.abs(y) < 600) {
+          inside = `${dress.name} has something at ${x}, ${y}`;
+          break;
+        }
       }
+      expect(inside).toBeNull();
     }
   });
 
