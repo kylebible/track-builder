@@ -196,6 +196,30 @@ body.dragging-piece, body.dragging-piece * { cursor: grabbing !important; }
   #status .counts { display: none; }
 }
 
+/* ---- auto-fill choices ------------------------------------------------- */
+
+#fill-panel { position: absolute; top: 60px; right: 12px; margin: 0; max-height: calc(100% - 130px); z-index: 1; }
+#fill-panel[hidden] { display: none; }
+#toolbar button[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); }
+.fills { display: grid; gap: 4px; }
+.fill-option { display: grid; gap: 1px; width: 100%; padding: 7px 9px; border: 1px solid transparent; border-radius: 9px; background: #faf6ee; text-align: left; font-size: 13px; line-height: 1.35; cursor: pointer; transition: background 120ms, border-color 120ms; }
+.fill-option:hover { background: #f1eadd; }
+.fill-option[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-soft); }
+.fill-option small { color: var(--muted); font-size: 12px; }
+.fill-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fill-actions { display: flex; gap: 6px; margin-top: 10px; }
+.fill-actions .action { flex: 1; justify-content: center; }
+.action.primary { background: var(--accent); color: #fff; }
+.action.primary:hover { background: #188548; }
+@media (max-width: 760px) {
+  /* Kept short along the bottom, so the track it previews stays in view. */
+  #fill-panel { top: auto; left: 8px; right: 8px; bottom: 54px; width: auto; max-height: 40%; padding: 10px 12px; }
+  #fill-panel .panel-head { margin-bottom: 6px; }
+  #fill-panel .panel-sub, .fill-option small { display: none; }
+  .fill-option { padding: 5px 8px; font-size: 12px; }
+  .fill-actions { margin-top: 6px; }
+}
+
 /* ---- scene picker ------------------------------------------------------ */
 
 .scenes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
