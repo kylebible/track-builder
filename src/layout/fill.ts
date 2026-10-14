@@ -74,6 +74,8 @@ function moves(): Move[] {
   for (const base of CATALOG) {
     if (base.category !== 'straight' && base.category !== 'curve' && base.category !== 'ramp') continue;
     if (base.connectors.length !== 2 || base.paths.length !== 1) continue;
+    // Plain, common track only: not bridge spans, every bend of a bendy track, or rare pieces.
+    if (base.bridge || base.bend !== undefined || base.noFill) continue;
     for (const flipped of [false, true]) {
       const def: PieceDef = defOf({ pieceId: base.id, flipped });
       for (const attach of def.connectors) {
@@ -128,7 +130,8 @@ function grow(start: Pose, z: number, allowed: number[], depth: number): Chain[]
         next.push(c);
       }
     }
-    chains.push(...next);
+    // One at a time: a spread of a big frontier can overflow the stack.
+    for (const c of next) chains.push(c);
     frontier = next;
   }
   return chains;

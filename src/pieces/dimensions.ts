@@ -14,6 +14,8 @@ export const PEG_NECK_WIDTH = 6;
 export const HOLE_DIAMETER = 16;
 
 export const MINI_STRAIGHT = 54;
+/** A3, half an A. Retired, but still about. */
+export const MIDDLE_STRAIGHT = 72;
 export const SHORT_STRAIGHT = 108;
 export const MEDIUM_STRAIGHT = 144;
 export const LONG_STRAIGHT = 216;
@@ -81,6 +83,46 @@ export const HEADROOM = LEVEL_HEIGHT - 4;
  */
 export const T_SWITCH_LENGTH = LONG_STRAIGHT;
 export const T_SWITCH_RADIUS = T_SWITCH_LENGTH / 2;
+
+/**
+ * Double track: two tracks side by side on one piece, centerline to
+ * centerline, as the guide gives it. EE and EE1 double curves have their
+ * inner track on the E or E1 curve (an UNMEASURED reading: the guide gives
+ * their radius as the plain curve's), and the outer one this much further out.
+ */
+export const DOUBLE_TRACK_SPACING = 46;
+
+/**
+ * Bendy track: a run of short wooden links that bends anywhere from straight
+ * to a turn. Not a Brio piece, so these are UNMEASURED guesses: as long as a
+ * D, and bending up to an eighth of a circle (like a curve), in steps that
+ * the joint play covers between.
+ */
+export const BENDY_LENGTH = LONG_STRAIGHT;
+export const BENDY_MAX_BEND = CURVE_ANGLE;
+export const BENDY_STEP = Math.PI / 24;
+
+/**
+ * Arch bridge: one piece that climbs a level, runs level across the top
+ * and comes back down, standing on its own legs, so track can pass
+ * underneath. A generic accessory with UNMEASURED dimensions: slopes as
+ * long as an N ramp (any steeper and a battery engine can't climb them),
+ * and an A-length top.
+ */
+export const ARCH_BRIDGE_SLOPE = RAMP_LENGTH;
+export const ARCH_BRIDGE_TOP = MEDIUM_STRAIGHT;
+
+/**
+ * Bridge spans: level track a level up on a structure of its own, joined to
+ * raised track or ramp tops at both ends. Generic accessories, so their
+ * lengths are UNMEASURED choices, in whole A or D lengths: a long stone
+ * viaduct of three arches, a long suspension span, a D-length truss and a
+ * covered bridge two A's long.
+ */
+export const VIADUCT_LENGTH = 3 * MEDIUM_STRAIGHT;
+export const SUSPENSION_LENGTH = 2 * LONG_STRAIGHT;
+export const TRUSS_LENGTH = LONG_STRAIGHT;
+export const COVERED_BRIDGE_LENGTH = 2 * MEDIUM_STRAIGHT;
 
 /**
  * Real-world play in a joint: two ends this close in position and angle

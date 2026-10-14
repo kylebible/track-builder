@@ -31,11 +31,12 @@ export function pathEnd(path: TrackPath): Pose {
  * ends and steepest in the middle, like the real ones.
  */
 export function heightAt(path: TrackPath, s: number): number {
+  const base = path.z ?? 0;
   const rise = path.rise ?? 0;
-  if (!rise) return 0;
+  if (!rise) return base;
   const length = pathLength(path);
   const t = Math.min(Math.max(s, 0), length) / length;
-  return (rise * (1 - Math.cos(Math.PI * t))) / 2;
+  return base + (rise * (1 - Math.cos(Math.PI * t))) / 2;
 }
 
 /** Rate of climb at `s` along a path, mm up per mm along. */

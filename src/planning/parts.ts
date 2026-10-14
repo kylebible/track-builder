@@ -40,7 +40,11 @@ export function splitName(piece: PieceDef): { name: string; variant: string } {
 /** Lines in catalog order, so straights come before curves before switches. */
 export function partsList(layout: Layout): PartsList {
   const counts = new Map<string, number>();
-  for (const p of layout.pieces) counts.set(p.pieceId, (counts.get(p.pieceId) ?? 0) + 1);
+  for (const p of layout.pieces) {
+    // Every shape of a bendy track is the one piece.
+    const id = getPiece(p.pieceId).partOf ?? p.pieceId;
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
   const lines = CATALOG.filter((p) => counts.has(p.id)).map((p) => {
     const piece = getPiece(p.id);
     return { pieceId: p.id, ...splitName(piece), brioIds: piece.brioIds, category: piece.category, count: counts.get(p.id)! };

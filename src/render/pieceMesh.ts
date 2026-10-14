@@ -3,6 +3,7 @@ import { heightAt, pathLength, poseAt } from '../geometry/path';
 import { applyPose, type Pose } from '../geometry/pose';
 import * as D from '../pieces/dimensions';
 import type { Connector, PieceDef, TrackPath } from '../pieces/types';
+import { bridgeStructure } from './bridges';
 import { MOVING_PARTS } from '../scenery/models';
 import { sceneryModel } from './sceneryModels';
 
@@ -271,6 +272,21 @@ export function buildPieceObject(piece: PieceDef): THREE.Group {
     group.add(new THREE.Mesh(sweepGeometry(path), material));
   });
   for (const c of piece.connectors) group.add(connectorMesh(c));
+  // Track carried up on the piece's own legs (a bridge deck) stands on a
+  // leg at each end of the raised stretch.
+  if (piece.bridge) {
+    const deck = piece.paths[0];
+    const structure = bridgeStructure(piece.bridge, pathLength(deck), deck.z ?? 0);
+    // Turned over, the structure mirrors across the piece's own x axis.
+    if (piece.mirrored) structure.scale.z = -1;
+    group.add(structure);
+  }
+  for (const path of piece.paths.filter((p) => p.z && !p.rise && !piece.bridge)) {
+    for (const s of [0, pathLength(path)]) {
+      const at = poseAt(path, s);
+      group.add(buildSupport(at.x, at.y, at.angle, path.z!, 1));
+    }
+  }
   if (piece.category === 'buffer') group.add(bufferBarrier(piece));
   if (piece.model) {
     const model = sceneryModel(piece.model);
