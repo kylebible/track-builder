@@ -136,7 +136,7 @@ export class LayoutView {
     if (key === this.supportsKey) return;
     this.supportsKey = key;
     this.supportsRoot.clear();
-    for (const s of supports) this.supportsRoot.add(s.arch ? buildArch(s.arch, s.height) : buildSupport(s.at.x, s.at.y, s.angle, s.height, s.blocks));
+    for (const s of supports) this.supportsRoot.add(s.arch ? buildArch(s.arch, s.height) : buildSupport(s.at.x, s.at.y, s.angle, s.height, s.blocks, !s.flat));
   }
 
   /** Animate the pulsing rings; call once a frame with the time in ms. */

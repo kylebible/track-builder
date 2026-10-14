@@ -3,7 +3,8 @@ import { applyPose, rotate, type Vec2 } from '../geometry/pose';
 import * as D from '../pieces/dimensions';
 import { LEVEL_HEIGHT } from '../pieces/dimensions';
 import type { PieceDef } from '../pieces/types';
-import { baseOf, defOf, worldEnds, type Layout } from './layout';
+import { MODEL_FOOTPRINTS, type Footprint } from '../scenery/footprints';
+import { baseOf, defOf, worldEnds, type Layout, type PlacedPiece } from './layout';
 
 /** Pieces on a structure of their own (a bridge span, a helix tower), which need no supports. */
 export const standsAlone = (def: PieceDef): boolean => !!def.bridge || def.structure === 'helix';
@@ -45,6 +46,8 @@ export interface Support {
   arch?: Arch;
   /** Lower track it would stand on, when not even an arch fits. */
   blockedBy?: string[];
+  /** Holds up a building rather than track, so it has no cradle on top. */
+  flat?: boolean;
 }
 
 /** Ends this close count as resting on the same support. */
@@ -84,10 +87,58 @@ function placeSupports(layout: Layout): Support[] {
       supports.push({ at: { x, y }, angle, height, blocks: blocksFor(height), uids: [piece.uid] });
     }
   }
+  for (const piece of layout.pieces) supports.push(...buildingSupports(piece));
   if (!supports.length) return supports;
   const samples = sampleTrack(layout);
   return supports.map((s) => clearOfTrack(s, samples));
 }
+
+/** Stacks under a building are at most this far apart along it. */
+const BUILDING_STACK_SPACING = 150;
+
+/**
+ * Stacks under a raised building (a station on raised track, a cottage
+ * lifted a level), under the parts of it that aren't over track: two rows
+ * under a deep one, spread along a long one. A pier holds track up from
+ * the floor, so it needs none.
+ */
+function buildingSupports(piece: PlacedPiece): Support[] {
+  const def = defOf(piece);
+  const height = baseOf(piece);
+  const footprint = def.model && MODEL_FOOTPRINTS[def.model];
+  if (height < 1 || !footprint || def.holdsTrackAt || def.structure) return [];
+  const supports: Support[] = [];
+  // Blocks turned so their long side runs along the building.
+  const angle = piece.pose.angle + Math.PI / 2;
+  for (const [x0, x1, y0, y1] of offTrack(footprint, !!def.seatsOnTrack || def.paths.length > 0)) {
+    const depth = y1 - y0;
+    const rows = depth > 2 * D.SUPPORT_WIDTH ? [y0 + D.SUPPORT_LENGTH / 2, y1 - D.SUPPORT_LENGTH / 2] : [(y0 + y1) / 2];
+    const length = x1 - x0;
+    const first = x0 + D.SUPPORT_WIDTH / 2;
+    const last = x1 - D.SUPPORT_WIDTH / 2;
+    const columns = length <= D.SUPPORT_WIDTH + 8 ? [(x0 + x1) / 2] : spread(first, last, Math.ceil((last - first) / BUILDING_STACK_SPACING) + 1);
+    for (const y of rows) {
+      for (const x of columns) {
+        // Turned over, the model mirrors across the piece's x axis.
+        const at = applyPose(piece.pose, { x, y: def.mirrored ? -y : y, angle: 0 });
+        supports.push({ at: { x: at.x, y: at.y }, angle, height, blocks: blocksFor(height), uids: [piece.uid], flat: true });
+      }
+    }
+  }
+  return supports;
+}
+
+/** The parts of a footprint either side of the track it sits on, or all of it if it isn't on track. */
+function offTrack([x0, x1, y0, y1]: Footprint, onTrack: boolean): Footprint[] {
+  if (!onTrack) return [[x0, x1, y0, y1]];
+  const edge = D.TRACK_WIDTH / 2;
+  const sides: Footprint[] = [];
+  if (y1 > edge + 4) sides.push([x0, x1, Math.max(y0, edge), y1]);
+  if (y0 < -edge - 4) sides.push([x0, x1, y0, Math.min(y1, -edge)]);
+  return sides;
+}
+
+const spread = (from: number, to: number, n: number): number[] => Array.from({ length: n }, (_, i) => from + ((to - from) * i) / Math.max(1, n - 1));
 
 /** A point on a piece's track: plan position, the bottom of the track there, and its heading. */
 interface Sample {

@@ -227,7 +227,7 @@ const capGeometry = (() => {
  * A stack of support blocks standing on the floor under a raised end at
  * plan (x, y), `height` up, with the track running along `angle`.
  */
-export function buildSupport(x: number, y: number, angle: number, height: number, blocks: number): THREE.Group {
+export function buildSupport(x: number, y: number, angle: number, height: number, blocks: number, cradle = true): THREE.Group {
   const group = new THREE.Group();
   group.position.copy(toWorld(x, y));
   group.rotation.y = angle;
@@ -238,7 +238,7 @@ export function buildSupport(x: number, y: number, angle: number, height: number
     block.scale.y = step / D.LEVEL_HEIGHT;
     group.add(block);
   }
-  for (const side of [-1, 1]) {
+  for (const side of cradle ? [-1, 1] : []) {
     const lip = new THREE.Mesh(capGeometry, supportMaterial);
     lip.position.set(0, height, side * (D.TRACK_WIDTH / 2 + (D.SUPPORT_WIDTH - D.TRACK_WIDTH) / 4));
     group.add(lip);
@@ -262,10 +262,8 @@ export function buildArch(arch: Arch, height: number): THREE.Group {
   const legHeight = height - D.ARCH_BEAM;
   for (const leg of arch.legs) {
     // A stack whose "track" runs along the beam, so its long side lies along the lower track.
-    const stack = buildSupport(leg.x, leg.y, arch.angle, legHeight, arch.legBlocks);
-    // No cradle lips on a leg: the beam sits flat on top.
-    for (const lip of stack.children.slice(arch.legBlocks)) stack.remove(lip);
-    group.add(stack);
+    // No cradle on a leg: the beam sits flat on top.
+    group.add(buildSupport(leg.x, leg.y, arch.angle, legHeight, arch.legBlocks, false));
   }
   const mid = { x: (arch.legs[0].x + arch.legs[1].x) / 2, y: (arch.legs[0].y + arch.legs[1].y) / 2 };
   const beam = new THREE.Mesh(new THREE.BoxGeometry(arch.span, D.ARCH_BEAM, D.SUPPORT_LENGTH), supportMaterial);

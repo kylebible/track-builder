@@ -173,6 +173,41 @@ describe('supports', () => {
   });
 });
 
+describe('supports under buildings', () => {
+  const raisedWith = (pieceId: string) => {
+    let { layout } = addPiece(EMPTY_LAYOUT, 'straight-long', IDENTITY);
+    layout = addPiece(layout, pieceId, { x: D.LONG_STRAIGHT / 2, y: 0, angle: 0 }).layout;
+    return raisePieces(layout, new Set(['p1', 'p2']), D.LEVEL_HEIGHT)!;
+  };
+
+  it('a station on raised track stands on its own stacks beside the track', () => {
+    const layout = raisedWith('station');
+    const under = supportsOf(layout).filter((s) => s.uids.includes('p2'));
+    expect(under.length).toBeGreaterThanOrEqual(2);
+    for (const s of under) {
+      expect(s.flat).toBe(true);
+      expect(s.height).toBe(D.LEVEL_HEIGHT);
+      // On the platform side, clear of the track.
+      expect(s.at.y).toBeGreaterThan(D.TRACK_WIDTH / 2);
+    }
+    expect(partsList(layout).supports).toBe(2 + under.length);
+  });
+
+  it('a tunnel on raised track has stacks under both walls', () => {
+    const under = supportsOf(raisedWith('tunnel')).filter((s) => s.uids.includes('p2'));
+    expect(under.some((s) => s.at.y > D.TRACK_WIDTH / 2)).toBe(true);
+    expect(under.some((s) => s.at.y < -D.TRACK_WIDTH / 2)).toBe(true);
+  });
+
+  it('a building on the floor, and a bridge pier, need none', () => {
+    let { layout } = addPiece(EMPTY_LAYOUT, 'cottage', IDENTITY);
+    expect(supportsOf(layout)).toEqual([]);
+    layout = raisePieces(layout, new Set(['p1']), D.LEVEL_HEIGHT)!;
+    expect(supportsOf(layout).length).toBeGreaterThan(0);
+    expect(supportsOf(raisedWith('bridge-pier')).filter((s) => s.uids.includes('p2'))).toEqual([]);
+  });
+});
+
 describe('layout check with levels', () => {
   it('track a full level over other track is a bridge, not an overlap', () => {
     const { layout, top } = upAndOver();
