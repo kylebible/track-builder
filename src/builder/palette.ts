@@ -3,6 +3,8 @@ import { applyPose } from '../geometry/pose';
 import { getPiece } from '../pieces/catalog';
 import * as D from '../pieces/dimensions';
 import type { PieceCategory, PieceDef } from '../pieces/types';
+import { buildPieceObject } from '../render/pieceMesh';
+import { thumbnail } from '../render/thumbnail';
 import { hasEndsChoice, iconPiece, SHAPES, variantFor, type Ends, type Hand, type Shape } from './variants';
 
 // The parts palette: one tile per piece shape, with a plan-view drawing
@@ -17,6 +19,7 @@ const CATEGORY_NAMES: Record<PieceCategory, string> = {
   switch: 'Switches',
   crossing: 'Crossings',
   buffer: 'Buffer stops',
+  scenery: 'Scenery',
 };
 
 const ENDS_LABELS: Record<Ends, string> = { mixed: 'Peg + hole', pegs: '2 pegs', holes: '2 holes' };
@@ -81,6 +84,18 @@ export function pieceIcon(piece: PieceDef): SVGSVGElement {
     }
   }
   return svg;
+}
+
+const thumbnails = new Map<string, string>();
+
+/** A rendered picture of a piece that carries a scenery model, made once. */
+export function modelIcon(piece: PieceDef): HTMLImageElement {
+  let src = thumbnails.get(piece.id);
+  if (!src) thumbnails.set(piece.id, (src = thumbnail(buildPieceObject(piece))));
+  const img = document.createElement('img');
+  img.alt = '';
+  img.src = src;
+  return img;
 }
 
 /** Brio letters for the version shown, and a length where it helps. */
@@ -249,7 +264,8 @@ export class Palette {
       const info = document.createElement('span');
       info.className = 'tile-detail';
       info.textContent = detail(shape, piece);
-      button.replaceChildren(pieceIcon(iconPiece(id, this.hand)), name, info);
+      const icon = piece.model ? modelIcon(piece) : pieceIcon(iconPiece(id, this.hand));
+      button.replaceChildren(icon, name, info);
       button.title = piece.name;
     }
   }

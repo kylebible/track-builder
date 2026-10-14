@@ -263,7 +263,32 @@ const buffers: PieceDef[] = [
   bufferStop('buffer-peg', 'Buffer stop, peg', 'S', 'peg'),
 ];
 
-export const CATALOG: readonly PieceDef[] = [...straights, ...curves, ...ramps, ...switches, ...bigSwitches, ...crossings, ...buffers];
+const loose = (id: string, name: string): PieceDef => ({
+  id,
+  name,
+  brioIds: [],
+  category: 'scenery',
+  paths: [],
+  connectors: [],
+  model: id,
+});
+
+/** Generic versions of the accessories wooden railway brands sell alongside track. */
+const scenery: PieceDef[] = [
+  {
+    ...twoEnded('level-crossing', 'Level crossing', [], 'scenery', straightPath(D.MEDIUM_STRAIGHT), ['hole', 'peg']),
+    model: 'level-crossing',
+  },
+  { ...loose('tunnel', 'Tunnel'), seatsOnTrack: true },
+  { ...loose('station', 'Station'), seatsOnTrack: true },
+  { ...loose('bridge-pier', 'Bridge pier'), seatsOnTrack: true, holdsTrackAt: D.LEVEL_HEIGHT },
+  loose('signal', 'Signal'),
+  loose('leafy-tree', 'Leafy tree'),
+  loose('pine-tree', 'Pine tree'),
+  loose('cottage', 'Cottage'),
+];
+
+export const CATALOG: readonly PieceDef[] = [...straights, ...curves, ...ramps, ...switches, ...bigSwitches, ...crossings, ...buffers, ...scenery];
 
 const byId = new Map(CATALOG.map((p) => [p.id, p]));
 
@@ -279,6 +304,7 @@ const mirrorPose = (p: Pose): Pose => ({ x: p.x, y: -p.y, angle: normalizeAngle(
 export function mirrorPiece(piece: PieceDef): PieceDef {
   return {
     ...piece,
+    mirrored: !piece.mirrored,
     paths: piece.paths.map((p) =>
       p.kind === 'arc' ? { ...p, from: mirrorPose(p.from), sweep: -p.sweep } : { ...p, from: mirrorPose(p.from) },
     ),

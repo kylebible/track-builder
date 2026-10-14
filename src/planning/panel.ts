@@ -1,5 +1,5 @@
 import type { Editor } from '../builder/editor';
-import { pieceIcon } from '../builder/palette';
+import { modelIcon, pieceIcon } from '../builder/palette';
 import { DEFAULT_PLAY } from '../geometry/joint';
 import type { Vec2 } from '../geometry/pose';
 import { getPiece } from '../pieces/catalog';
@@ -41,6 +41,7 @@ const CATEGORY_NAMES: Record<PieceCategory, string> = {
   switch: 'Switches',
   crossing: 'Crossings',
   buffer: 'Buffer stops',
+  scenery: 'Scenery',
 };
 
 const ICONS = {
@@ -158,7 +159,8 @@ export class PlanningPanel {
         const text = el('div', 'part-text');
         const detail = [line.variant, line.brioIds.join(' / ')].filter(Boolean).join(' · ');
         text.append(el('span', 'part-name', line.name), el('span', 'part-detail', detail));
-        row.append(pieceIcon(getPiece(line.pieceId)), text, el('span', 'part-count', `×${line.count}`));
+        const piece = getPiece(line.pieceId);
+        row.append(piece.model ? modelIcon(piece) : pieceIcon(piece), text, el('span', 'part-count', `×${line.count}`));
         rows.append(row);
       }
       section.append(rows);

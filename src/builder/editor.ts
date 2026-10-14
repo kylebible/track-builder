@@ -7,6 +7,7 @@ import { History } from '../layout/history';
 import {
   addPiece,
   baseOf,
+  anchorPoints,
   canExtend,
   centerOf,
   dragContext,
@@ -14,6 +15,7 @@ import {
   extendFrom,
   findJoints,
   findPiece,
+  findSeat,
   findSnap,
   flipPiece,
   mirrorPieces,
@@ -34,7 +36,7 @@ import {
 } from '../layout/layout';
 import { flexContext, flexDrag, type FlexContext, type FlexResult } from '../layout/flex';
 import { Palette } from './palette';
-import { attachEnd, flipFor, hasEndsChoice, SHAPES, variantFor, type Shape } from './variants';
+import { attachEnd, flipFor, hasEndsChoice, isLoose, SHAPES, variantFor, type Shape } from './variants';
 import { LayoutView } from './view';
 
 // Turns pointer, keyboard and toolbar input into layout edits. Every edit
@@ -63,6 +65,10 @@ interface Drag {
   flex: FlexContext | null;
   /** The flexed track, while the drag is held by its joints. */
   flexed: FlexResult | null;
+  /** Lined up over a straight, for scenery that sits on track. */
+  seated: boolean;
+  /** How far the drag lifts the pieces: onto a raised end, or onto raised track. */
+  dz: number;
 }
 
 /** A piece being dragged out of the palette, and where it would go if let go now. */
@@ -218,9 +224,15 @@ export class Editor {
   /**
    * A palette tile was tapped: add onto the selected end, or drop the piece
    * loose. The palette's Turn and Ends settings pick the exact version.
+   * Scenery that isn't track always goes down loose.
    */
   pick(shape: Shape): void {
     const hand = this.palette.hand;
+    if (isLoose(shape)) {
+      const { layout, uid } = addPiece(this.layout, shape.ids[0], { ...this.freeSpot(), angle: 0 });
+      this.commit(layout, { kind: 'pieces', uids: new Set([uid]) });
+      return;
+    }
     if (this.selection.kind === 'end') {
       const end = this.selection.end;
       const target = this.genderOf(end);
@@ -270,12 +282,13 @@ export class Editor {
 
     const pieceId = variantFor(shape, this.palette.ends, null);
     const ends = getPiece(pieceId).connectors;
-    const flipped = flipFor(pieceId, ends[0].id, hand);
+    const flipped = ends.length ? flipFor(pieceId, ends[0].id, hand) : false;
     const placed = addPiece(this.layout, pieceId, IDENTITY, flipped);
     const middle = centerOf(placed.layout, new Set([placed.uid]));
     const { layout, uid } = addPiece(this.layout, pieceId, { x: at.x - middle.x, y: at.y - middle.y, angle: 0 }, flipped);
     const next = ends[1] ?? ends[0];
-    return { layout, uid, after: { kind: 'end', end: { uid, connectorId: next.id } }, joins: null };
+    const after: Selection = next ? { kind: 'end', end: { uid, connectorId: next.id } } : { kind: 'pieces', uids: new Set([uid]) };
+    return { layout, uid, after, joins: null };
   }
 
   /** The pieces the toolbar acts on: the selection, or the piece with the selected end. */
@@ -515,6 +528,8 @@ export class Editor {
       height,
       flex: flexContext(this.layout, uids, grab),
       flexed: null,
+      seated: false,
+      dz: 0,
     };
   }
 
@@ -537,7 +552,10 @@ export class Editor {
     drag.flexed = drag.flex && flexDrag(drag.flex, at);
     const moved: Pose = { x: at.x - drag.grab.x, y: at.y - drag.grab.y, angle: 0 };
     drag.snap = drag.flexed ? null : findSnap(drag.context, moved);
-    drag.transform = drag.snap?.transform ?? moved;
+    const seat = !drag.flexed && !drag.snap && drag.uids.size === 1 ? findSeat(drag.start, [...drag.uids][0], moved) : null;
+    drag.seated = seat !== null;
+    drag.transform = drag.snap?.transform ?? seat?.transform ?? moved;
+    drag.dz = drag.snap?.dz ?? seat?.dz ?? 0;
     this.refresh();
   }
 
@@ -622,7 +640,7 @@ export class Editor {
   /** A spot near the middle of the view that no piece is sitting on. */
   private freeSpot(): Vec2 {
     const base = { x: this.controls.target.x, y: -this.controls.target.z };
-    const taken = this.layout.pieces.flatMap((p) => worldEnds(p).map((e) => e.connector.pose));
+    const taken = this.layout.pieces.flatMap(anchorPoints);
     for (let ring = 0; ring < 20; ring++) {
       for (let i = 0; i < Math.max(1, ring * 6); i++) {
         const a = (i / Math.max(1, ring * 6)) * Math.PI * 2;
@@ -682,7 +700,10 @@ export class Editor {
 
     const end = s.kind === 'end' ? s.end : null;
     const target = end && this.genderOf(end);
-    this.palette.setEnabled((shape) => !end || canExtend(this.layout, end, variantFor(shape, this.palette.ends, target)));
+    // Loose scenery can always be put down; it never joins the selected end.
+    this.palette.setEnabled(
+      (shape) => !end || isLoose(shape) || canExtend(this.layout, end, variantFor(shape, this.palette.ends, target)),
+    );
     this.dom.empty.hidden = layout.pieces.length > 0;
 
     const has = this.targets().size > 0;
@@ -706,7 +727,7 @@ export class Editor {
 
   /** The layout as the drag has it now: flexed, or with the pieces moved. */
   private dragged(drag: Drag): Layout {
-    return drag.flexed?.layout ?? transformPieces(drag.start, drag.uids, drag.transform, drag.snap?.dz ?? 0);
+    return drag.flexed?.layout ?? transformPieces(drag.start, drag.uids, drag.transform, drag.dz);
   }
 
   private snapPoint(drag: Drag): Vec2 & { z?: number } {
@@ -732,6 +753,7 @@ export class Editor {
       const stuck = drag.flexed.atLimit.length;
       return [stuck ? `Flexing: ${plural(stuck, 'joint')} at the limit. Pull harder to unclip.` : 'Flexing the joints.', counts];
     }
+    if (drag?.seated) return ['Lined up over the track: let go to place it.', counts];
     if (drag) return [drag.snap ? 'Let go to join.' : 'Drag near an open end to snap on.', counts];
     if (s.kind === 'end') {
       const what = this.genderOf(s.end) === 'peg' ? 'peg' : 'hole';

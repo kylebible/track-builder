@@ -42,6 +42,9 @@ export function endsOf(piece: PieceDef): Ends {
   return genders.has('peg') ? 'pegs' : 'holes';
 }
 
+/** Scenery that isn't track: no ends, so it never joins anything. */
+export const isLoose = (shape: Shape): boolean => getPiece(shape.ids[0]).connectors.length === 0;
+
 /** Whether a shape comes in two-peg and two-hole versions. */
 export const hasEndsChoice = (shape: Shape): boolean => shape.category === 'straight' || shape.category === 'curve';
 
