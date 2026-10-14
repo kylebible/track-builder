@@ -1,7 +1,7 @@
 import { pathEnd } from '../geometry/path';
 import { deg, normalizeAngle, type Pose } from '../geometry/pose';
 import * as D from './dimensions';
-import type { Connector, Gender, PieceCategory, PieceDef, TrackPath } from './types';
+import type { BridgeStyle, Connector, Gender, PieceCategory, PieceDef, TrackPath } from './types';
 
 // Every piece is defined in its own frame: the first connector sits at the
 // origin facing -x, and the track runs along +x. Pieces with a turn are
@@ -177,6 +177,32 @@ function archBridge(): PieceDef {
     connectors: [startOf(up, 'a', 'hole'), endOf(down, 'b', 'peg')],
   };
 }
+
+/**
+ * A level bridge span a level up. Two holes, like the C straight in an up
+ * and over: an N ramp climbs to one end and an N1 comes down from the other,
+ * both peg end up.
+ */
+function bridgeSpan(id: string, name: string, style: BridgeStyle, length: number): PieceDef {
+  const deck: TrackPath = { ...straightPath(length), z: D.LEVEL_HEIGHT };
+  return {
+    id,
+    name,
+    brioIds: [],
+    category: 'ramp',
+    bridge: style,
+    paths: [deck],
+    connectors: [startOf(deck, 'a', 'hole'), endOf(deck, 'b', 'hole')],
+  };
+}
+
+const bridges: PieceDef[] = [
+  archBridge(),
+  bridgeSpan('bridge-viaduct', 'Stone viaduct', 'viaduct', D.VIADUCT_LENGTH),
+  bridgeSpan('bridge-suspension', 'Suspension bridge', 'suspension', D.SUSPENSION_LENGTH),
+  bridgeSpan('bridge-truss', 'Truss bridge', 'truss', D.TRUSS_LENGTH),
+  bridgeSpan('bridge-covered', 'Covered bridge', 'covered', D.COVERED_BRIDGE_LENGTH),
+];
 
 /**
  * A piece with one trunk end at the origin and several branch ends. Brio
@@ -358,7 +384,7 @@ const scenery: PieceDef[] = [
   loose('cottage', 'Cottage'),
 ];
 
-export const CATALOG: readonly PieceDef[] = [...straights, ...bendy, ...curves, ...doubles, ...ramps, archBridge(), ...switches, ...bigSwitches, ...crossings, ...buffers, ...scenery];
+export const CATALOG: readonly PieceDef[] = [...straights, ...bendy, ...curves, ...doubles, ...ramps, ...bridges, ...switches, ...bigSwitches, ...crossings, ...buffers, ...scenery];
 
 const byId = new Map(CATALOG.map((p) => [p.id, p]));
 

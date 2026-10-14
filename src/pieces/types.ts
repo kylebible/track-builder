@@ -27,6 +27,9 @@ export type TrackPath =
   /** `sweep` is signed: positive turns left (counter-clockwise). */
   | { kind: 'arc'; from: Pose; radius: number; sweep: number; rise?: number; z?: number };
 
+/** How a bridge span is built, for its model. */
+export type BridgeStyle = 'viaduct' | 'suspension' | 'truss' | 'covered';
+
 export type PieceCategory = 'straight' | 'curve' | 'double' | 'ramp' | 'switch' | 'crossing' | 'buffer' | 'scenery';
 
 export interface PieceDef {
@@ -53,6 +56,11 @@ export interface PieceDef {
    * floor (bendy track): the parts list counts them all as that piece.
    */
   partOf?: string;
+  /**
+   * A bridge span: track a level up, standing on its own structure, so it
+   * needs no support blocks, and nor does track joined to its ends.
+   */
+  bridge?: BridgeStyle;
   /** How far a bendy track is bent, degrees, before any flip. */
   bend?: number;
   /** Turned over from the catalog piece, see `mirrorPiece`. */

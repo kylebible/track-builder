@@ -166,3 +166,59 @@ describe('arch bridge', () => {
     expect(train.status).toMatchObject({ stuck: 'ran-off' });
   });
 });
+
+describe('bridge spans', () => {
+  const SPANS = ['bridge-viaduct', 'bridge-suspension', 'bridge-truss', 'bridge-covered'];
+
+  /** A long straight, an N ramp up, the span, and an N1 ramp back down by its top end. */
+  function overSpan(id: string): { layout: Layout; span: string } {
+    let layout = addPiece(EMPTY_LAYOUT, 'straight-long', IDENTITY).layout;
+    const up = extendFrom(layout, { uid: 'p1', connectorId: 'b' }, 'ramp')!;
+    const span = extendFrom(up.layout, up.next!, id)!;
+    const down = extendFrom(span.layout, span.next!, 'ramp-pp', false, 'b')!;
+    return { layout: down.layout, span: span.uid };
+  }
+
+  it('carry level track a level up, end to end', () => {
+    for (const id of SPANS) {
+      const piece = getPiece(id);
+      expect(piece.bridge, id).toBeTruthy();
+      expect(piece.connectors.map((c) => c.z), id).toEqual([D.LEVEL_HEIGHT, D.LEVEL_HEIGHT]);
+    }
+  });
+
+  it("join raised track but can't go on at floor level", () => {
+    const layout = addPiece(EMPTY_LAYOUT, 'straight-long', IDENTITY).layout;
+    expect(extendFrom(layout, { uid: 'p1', connectorId: 'b' }, 'bridge-truss')).toBeNull();
+    const { layout: over, span } = overSpan('bridge-truss');
+    expect(findJoints(over).filter((j) => j.a.uid === span || j.b.uid === span)).toHaveLength(2);
+    expect(openEnds(over)).toHaveLength(2);
+  });
+
+  it('need no support blocks, even under the ramp tops joined to them', () => {
+    for (const id of SPANS) expect(supportsOf(overSpan(id).layout), id).toEqual([]);
+  });
+
+  it('let floor track run underneath', () => {
+    const { layout, span } = overSpan('bridge-suspension');
+    const piece = layout.pieces.find((p) => p.uid === span)!;
+    const mid = D.SUSPENSION_LENGTH / 2;
+    const at = { x: piece.pose.x + mid * Math.cos(piece.pose.angle), y: piece.pose.y + mid * Math.sin(piece.pose.angle) };
+    const crossed = addPiece(layout, 'straight-long', { x: at.x, y: at.y - D.LONG_STRAIGHT / 2, angle: Math.PI / 2 }).layout;
+    expect(checkLayout(crossed).filter((i) => i.kind !== 'open-end')).toEqual([]);
+  });
+
+  it('a battery engine runs up, across and down', () => {
+    const { layout } = overSpan('bridge-viaduct');
+    const sim = new TrainSim(layout);
+    const train = sim.addTrain([{ stockId: 'battery-engine', reversed: false }], { edgeKey: 'p1:0', s: 100, reversed: false }) as Train;
+    sim.setThrottle(train.id, 1);
+    for (let i = 0; i < 60 * 40 && !train.wrecked && train.status.kind !== 'stuck'; i++) sim.advance(1 / 60);
+    expect(train.status).toMatchObject({ stuck: 'ran-off' });
+  });
+
+  it('show on the parts list under ramps and bridges', () => {
+    const lines = partsList(overSpan('bridge-covered').layout).lines;
+    expect(lines.find((l) => l.pieceId === 'bridge-covered')).toMatchObject({ name: 'Covered bridge', category: 'ramp', count: 1 });
+  });
+});

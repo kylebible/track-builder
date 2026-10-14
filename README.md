@@ -62,6 +62,13 @@ Live site: https://kylebible.github.io/track-builder/
 - **Arch bridge**: climbs a level over an N-length slope, runs across a
   144 mm top on its own legs and comes back down, so floor track can pass
   under the top. It needs no support blocks.
+- **Bridge spans**: a stone viaduct (three arches, 432 mm), a suspension
+  bridge (towers and cables, 432 mm), a steel truss bridge (216 mm) and a
+  red covered bridge (288 mm). Each is level track a level up on its own
+  structure, with a hole at both ends: climb to it with an N ramp and come
+  down with an N1, like the C straight in an up and over. No support blocks
+  go under a span or the ramp tops joined to it, and floor track can run
+  underneath (`src/render/bridges.ts` draws them).
 
 **T switch** (T) and **star switch** (X) are built on a D straight with
 quarter curves into its ends. Every end where paths split has its own lever
@@ -70,8 +77,8 @@ when trains run: three on a T, four on a star.
 Unmeasured guesses, all in `src/pieces/dimensions.ts` and
 `src/pieces/catalog.ts`: the ramp's exact profile (a smooth S here),
 the support block size, which ends of N, T and X are pegs, the bendy
-track's length and bend limit, the double curves' radii, and the arch
-bridge's size.
+track's length and bend limit, the double curves' radii, and the sizes
+of the arch bridge and the bridge spans.
 
 ## Planning tools
 

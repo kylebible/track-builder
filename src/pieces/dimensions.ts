@@ -113,6 +113,18 @@ export const ARCH_BRIDGE_SLOPE = RAMP_LENGTH;
 export const ARCH_BRIDGE_TOP = MEDIUM_STRAIGHT;
 
 /**
+ * Bridge spans: level track a level up on a structure of its own, joined to
+ * raised track or ramp tops at both ends. Generic accessories, so their
+ * lengths are UNMEASURED choices, in whole A or D lengths: a long stone
+ * viaduct of three arches, a long suspension span, a D-length truss and a
+ * covered bridge two A's long.
+ */
+export const VIADUCT_LENGTH = 3 * MEDIUM_STRAIGHT;
+export const SUSPENSION_LENGTH = 2 * LONG_STRAIGHT;
+export const TRUSS_LENGTH = LONG_STRAIGHT;
+export const COVERED_BRIDGE_LENGTH = 2 * MEDIUM_STRAIGHT;
+
+/**
  * Real-world play in a joint: two ends this close in position and angle
  * count as connected. Tunable.
  */
