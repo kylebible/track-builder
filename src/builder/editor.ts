@@ -118,6 +118,8 @@ interface Generating extends GeneratePanelState {
   /** Where it starts: the selected end, or loose here. */
   start: EndRef | null;
   at: Vec2;
+  /** The open end it finishes at, if one was picked. */
+  goal: EndRef | null;
 }
 
 const SECTION_KEY = 'track-builder:generate';
@@ -582,6 +584,9 @@ export class Editor {
       fromEnd: s.kind === 'end',
       start: s.kind === 'end' ? s.end : null,
       at: this.freeSpot(),
+      goal: null,
+      toEnd: false,
+      pickingEnd: false,
     };
     this.regenerate();
   }
@@ -598,7 +603,7 @@ export class Editor {
     // Let the panel say it's working before a long one starts; a newer ask supersedes it.
     window.setTimeout(() => {
       if (this.generating !== g || ask !== this.asks) return;
-      g.section = generateSection(this.layout, g.options, { start: g.start ?? undefined, at: g.at, blocked: this.dom.blocked });
+      g.section = generateSection(this.layout, g.options, { start: g.start ?? undefined, at: g.at, goal: g.goal ?? undefined, blocked: this.dom.blocked });
       g.busy = false;
       this.renderGenerate();
       this.refresh();
@@ -615,6 +620,20 @@ export class Editor {
     } catch {
       // Private browsing: settings just aren't kept.
     }
+    this.regenerate();
+  }
+
+  /** Finish the section at the next open end tapped, or anywhere. */
+  private finishAt(end: boolean): void {
+    const g = this.generating;
+    if (!g) return;
+    if (end) {
+      g.pickingEnd = true;
+      this.renderGenerate();
+      this.refresh();
+      return;
+    }
+    Object.assign(g, { goal: null, toEnd: false, pickingEnd: false });
     this.regenerate();
   }
 
@@ -652,6 +671,7 @@ export class Editor {
     renderGeneratePanel(this.dom.generatePanel, this.generating, {
       change: (c) => this.changeGenerate(c),
       another: () => this.anotherSection(),
+      finishAt: (end) => this.finishAt(end),
       use: () => this.applyGenerate(),
       cancel: () => this.cancelGenerate(),
     });
@@ -823,9 +843,20 @@ export class Editor {
       return;
     }
     if (this.generating) {
-      // Tapping an open end builds the section on from there instead.
-      if ('end' in hit && !this.generating.busy) {
-        Object.assign(this.generating, { start: hit.end, fromEnd: true });
+      // Tapping an open end builds the section on from there instead, or finishes it there when picking where.
+      const g = this.generating;
+      if ('end' in hit && !g.busy) {
+        if (g.pickingEnd) {
+          if (g.start && sameEnd(g.start, hit.end)) {
+            this.flash('Pick a different end from the one it starts at.');
+            return;
+          }
+          Object.assign(g, { goal: hit.end, toEnd: true, pickingEnd: false });
+        } else {
+          // Starting where it was to finish leaves nowhere to finish.
+          if (g.goal && sameEnd(g.goal, hit.end)) Object.assign(g, { goal: null, toEnd: false });
+          Object.assign(g, { start: hit.end, fromEnd: true });
+        }
         this.regenerate();
       }
       return;
@@ -961,6 +992,10 @@ export class Editor {
       this.startGenerate();
     } else if (this.generating && k === 'enter') {
       this.applyGenerate();
+    } else if (k === 'escape' && this.generating?.pickingEnd) {
+      this.generating.pickingEnd = false;
+      this.renderGenerate();
+      this.refresh();
     } else if (k === 'escape' && this.generating) {
       this.cancelGenerate();
     } else if (this.filling?.options.length && k === 'enter') {
@@ -1110,6 +1145,7 @@ export class Editor {
       const stuck = drag.flexed.atLimit.length;
       return [stuck ? `Flexing: ${plural(stuck, 'joint')} at the limit. Pull harder to unclip.` : 'Flexing the joints.', counts];
     }
+    if (this.generating?.pickingEnd) return ['Tap the open end the new section should finish at. Esc to go back.', counts];
     if (this.generating) return ['Pick settings for the new section, then Use this. Tap an open end to build on from it. Esc to stop.', counts];
     if (this.filling) {
       if (this.filling.searching && !this.filling.options.length) return ['Looking for a run of track to join those ends…', counts];

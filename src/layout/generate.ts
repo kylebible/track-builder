@@ -7,8 +7,8 @@ import type { Gender } from '../pieces/types';
 import { checkLayout } from '../planning/check';
 import { CRANE } from '../scenery/models';
 import { PLACES } from '../trains/stops';
-import { findFills, trackMoves, type TrackMove, type Way } from './fill';
-import { addPiece, baseOf, defOf, findPiece, worldEnd, type EndRef, type Layout } from './layout';
+import { estimate, findFills, trackMoves, type Fill, type TrackMove, type Way } from './fill';
+import { addPiece, baseOf, defOf, findPiece, sameEnd, worldEnd, type EndRef, type Layout } from './layout';
 import { Occupancy } from './occupancy';
 
 // Generate a section of track: a random run (or loop) of a given number of
@@ -62,6 +62,12 @@ export interface GenerateContext {
   play?: Play;
   /** Pieces with problems the layout check can't see (off the table, in the water). */
   blocked?: (layout: Layout) => Iterable<string>;
+  /**
+   * An open end for a run to finish at: it is laid most of the way with
+   * everything asked for along it, then joined to this end with Fill gap's
+   * search, as near the number of pieces asked for as it can.
+   */
+  goal?: EndRef;
   /** How long to keep trying, ms. */
   budgetMs?: number;
 }
@@ -72,7 +78,7 @@ export interface Section {
   uids: string[];
   /** Main line pieces laid; fewer than asked when no more would fit. */
   laid: number;
-  /** Whether a loop asked for was closed. */
+  /** Whether a loop asked for was closed, or a run joined to the end it was to finish at. */
   closed: boolean;
   /** Things to stop at that it placed. */
   stops: number;
@@ -174,6 +180,8 @@ class Attempt {
   closing = false;
   /** Which way, and how far, the line has turned so far: for loops. */
   turned = 0;
+  /** Pieces Fill gap is left to join a run to its goal end with. */
+  aim = 0;
 
   constructor(
     base: Layout,
@@ -400,6 +408,8 @@ class Attempt {
       if (this.rand() >= Math.max(opts.curves, need / remaining)) return 0;
       return this.rand() < 0.85 ? 1 : -1;
     }
+    const toward = this.toward(remaining);
+    if (toward !== null) return toward;
     if (this.rand() >= opts.curves) return 0;
     if (Math.abs(this.turned) >= Math.PI - 1e-6) return -Math.sign(this.turned);
     // Bends of two or three curves read better than single kinks.
@@ -409,6 +419,28 @@ class Attempt {
     return dir;
   }
   lastTurn = 0;
+
+  /** How many pieces it would take to get from the end of the line to the goal end, and which way that is. */
+  toGoal(): { pieces: number; turn: number } | null {
+    if (!this.ctx.goal || !this.end) return null;
+    const here = worldEnd(this.layout, this.end).connector;
+    const there = worldEnd(this.layout, this.ctx.goal).connector;
+    const goal: Pose = { ...there.pose, angle: normalizeAngle(there.pose.angle + Math.PI) };
+    const pieces = estimate(here.pose, here.z ?? 0, goal, there.z ?? 0) / PIECE_MM;
+    const turn = normalizeAngle(Math.atan2(goal.y - here.pose.y, goal.x - here.pose.x) - here.pose.angle);
+    return { pieces, turn };
+  }
+
+  /**
+   * Heading for the goal end: which way to turn, once wandering any more
+   * would leave it too far to reach in the pieces left. Null to wander.
+   */
+  private toward(remaining: number): number | null {
+    const to = this.toGoal();
+    if (!to || to.pieces + 1 < remaining + this.aim) return null;
+    if (Math.abs(to.turn) < Math.PI / 8) return 0;
+    return Math.sign(to.turn);
+  }
 
   /** A switch onto the main line, with a short siding off its other branch. */
   private switchSlot(opts: SectionOptions, outward?: number): boolean {
@@ -507,18 +539,25 @@ class Attempt {
     }
   }
 
-  /** Close a loop back to its first end with Fill gap's search, unless it already meets it. */
-  close(play: Play, budgetMs: number): boolean {
-    if (!this.first || !this.end) return false;
-    if (canMate(worldEnd(this.layout, this.end).connector, worldEnd(this.layout, this.first).connector, play)) {
+  /**
+   * Close a loop back to its first end, or join a run to its goal end, with
+   * Fill gap's search, unless it already meets it. For a run, the fill that
+   * brings it nearest `pieces` long.
+   */
+  close(play: Play, budgetMs: number, pieces?: number): boolean {
+    const to = this.ctx.goal ?? this.first;
+    if (!to || !this.end) return false;
+    if (canMate(worldEnd(this.layout, this.end).connector, worldEnd(this.layout, to).connector, play)) {
       this.closed = true;
       return true;
     }
-    const fills = findFills(this.layout, this.end, this.first, { wanted: 1, budgetMs, play, blocked: this.ctx.blocked });
+    const fills = findFills(this.layout, this.end, to, { wanted: pieces ? 6 : 1, budgetMs, play, blocked: this.ctx.blocked });
     if (!fills.length) return false;
-    this.layout = fills[0].layout;
-    this.uids.push(...fills[0].uids);
-    this.laid += fills[0].uids.length;
+    const off = (f: Fill) => (pieces ? Math.abs(this.laid + f.uids.length - pieces) : 0);
+    const fill = fills.reduce((best, f) => (off(f) < off(best) ? f : best));
+    this.layout = fill.layout;
+    this.uids.push(...fill.uids);
+    this.laid += fill.uids.length;
     this.closed = true;
     return true;
   }
@@ -535,6 +574,13 @@ interface Saved {
   turned: number;
   lastTurn: number;
 }
+
+/** About how long a piece of the main line is, for guessing how many it takes to get somewhere. */
+const PIECE_MM = 160;
+/** Most pieces left for Fill gap to join a run to its goal end with: a short gap is quick to search. */
+const GOAL_FILL = 6;
+/** How long Fill gap gets to join each try to its goal end: a short gap is found quickly, or not at all. */
+const GOAL_FILL_MS = 250;
 
 /** Tries at a loop laid to plan before falling back to closing one with Fill gap. */
 const LOOP_PLANS = 60;
@@ -664,8 +710,8 @@ function fits(points: Pose[], ctx: GenerateContext): boolean {
   return [...ctx.blocked({ pieces: probes })].length === 0;
 }
 
-/** Plan what goes where along the main line. */
-function plan(opts: SectionOptions, rand: () => number): Slot[] {
+/** Plan what goes where along the main line; `more` when Fill gap carries it on after the last place. */
+function plan(opts: SectionOptions, rand: () => number, more = false): Slot[] {
   const n = opts.pieces;
   const slots: Slot[] = Array.from({ length: n }, () => ({ kind: 'plain' }));
   const taken = new Set<number>([0]);
@@ -678,7 +724,7 @@ function plan(opts: SectionOptions, rand: () => number): Slot[] {
     put(up, { kind: 'up' });
     if (opts.climb === 'over' || opts.loop) put(Math.max(up + 2, Math.floor(n * 0.7)), { kind: 'down' });
   }
-  const last = n - 1;
+  const last = more ? n : n - 1;
   const free = (i: number) => i > 0 && i < last && !taken.has(i) && !taken.has(i - 1) && !taken.has(i + 1);
   for (let k = 0; k < opts.switches; k++) {
     // Spread out along the line, nudged to a free place.
@@ -706,13 +752,33 @@ export function generateSection(base: Layout, options: Partial<SectionOptions>, 
   const opts: SectionOptions = { ...DEFAULT_SECTION, ...options };
   opts.pieces = Math.max(2, Math.min(MAX_SECTION_PIECES, Math.round(opts.pieces)));
   const play = ctx.play ?? DEFAULT_PLAY;
-  const budget = ctx.budgetMs ?? 1500;
-  const started = performance.now();
-  const rand = random(opts.seed);
   // A loop stands on its own.
   const start = opts.loop ? undefined : ctx.start;
+  if (opts.loop || (ctx.goal && start && sameEnd(ctx.goal, start))) ctx = { ...ctx, goal: undefined };
+  const goal = ctx.goal;
+  const budget = ctx.budgetMs ?? (goal ? 2500 : 1500);
+  const started = performance.now();
+  const rand = random(opts.seed);
+  // The run to a goal end before Fill gap takes over has room for everything asked for along it, with a piece between each.
+  const specials = 2 * (opts.switches + opts.stops + (opts.climb === 'none' ? 0 : 2)) + 2;
+  // Near enough the pieces asked for, for a run to a goal end.
+  const close = Math.max(1, Math.round(opts.pieces * 0.1));
+
+  /** How many of the things asked for along it a section is short of. */
+  const missing = (a: Attempt): number => {
+    const raised = opts.climb === 'none' || a.uids.some((uid) => baseOf(findPiece(a.layout, uid)) >= D.LEVEL_HEIGHT - 1);
+    return Math.max(0, opts.switches - a.switches) + Math.max(0, opts.stops - a.stops) + (raised ? 0 : 1);
+  };
 
   let best: Attempt | null = null;
+  /** How many pieces over (or under) the last runs to a goal end came out: the next try's run is that much shorter. */
+  let over = 0;
+  const better = (a: Attempt, b: Attempt | null): boolean => {
+    if (!b) return true;
+    if (a.closed !== b.closed) return a.closed;
+    if (goal && missing(a) !== missing(b)) return missing(a) < missing(b);
+    return goal ? Math.abs(a.laid - opts.pieces) < Math.abs(b.laid - opts.pieces) : a.laid > b.laid;
+  };
   for (let tries = 0; tries < LOOP_PLANS + 20 && performance.now() - started < budget; tries++) {
     const attempt = new Attempt(base, rand, ctx);
     // A loop laid to plan closes by itself; when that won't fit, it's laid most of the way and closed with Fill gap.
@@ -728,7 +794,16 @@ export function generateSection(base: Layout, options: Partial<SectionOptions>, 
     } else if (!attempt.startLoose(at, planned ? (angle) => centred(planned, at, angle).start : undefined, planned ? (angle) => fits(centred(planned, at, angle).points, ctx) : undefined)) {
       continue;
     }
-    const slots = planned ?? plan(opts.loop ? { ...opts, pieces: Math.max(4, Math.round(opts.pieces * LOOP_LAID)) } : opts, rand);
+    let walk = opts.pieces;
+    if (goal) {
+      // Head for the goal end, leaving Fill gap a few pieces to join it up with: a short gap is quick to search.
+      const there = attempt.toGoal()!.pieces * (0.9 + rand() * 0.4);
+      attempt.aim = Math.max(2, Math.min(GOAL_FILL - Math.floor(rand() * 2), Math.round(there)));
+      // Fill gap's runs come out a piece or so longer than the guess, coming round to meet the end square.
+      walk = Math.max(Math.min(opts.pieces, specials), opts.pieces - attempt.aim - 1 - Math.round(over));
+      attempt.aim = opts.pieces - walk;
+    }
+    const slots = planned ?? plan(opts.loop ? { ...opts, pieces: Math.max(4, Math.round(opts.pieces * LOOP_LAID)) } : { ...opts, pieces: walk }, rand, !!goal);
     // Lay each place in turn; at a dead end, back up a few places and try other pieces.
     const first = attempt.laid;
     const saved: Saved[] = [];
@@ -750,13 +825,22 @@ export function generateSection(base: Layout, options: Partial<SectionOptions>, 
     let ok = i >= slots.length;
     if (!ok) attempt.load(most);
     if (planned && !ok) continue;
-    if (ok && opts.loop) ok = attempt.close(play, Math.min(700, Math.max(300, budget - (performance.now() - started))));
-    attempt.placeStops();
+    const left = () => Math.min(700, Math.max(300, budget - (performance.now() - started)));
+    if (ok && opts.loop) ok = attempt.close(play, left());
+    // A run to a goal end is joined to it from as far as it got, if that's near enough to be quick to search.
+    if (goal) {
+      // Stops go on first, so Fill gap's run keeps clear of them.
+      attempt.placeStops();
+      const near = ok || attempt.toGoal()!.pieces <= GOAL_FILL + 2;
+      ok = near && attempt.close(play, Math.min(GOAL_FILL_MS, left()), opts.pieces) && Math.abs(attempt.laid - opts.pieces) <= close;
+      if (attempt.closed) over += (attempt.laid - opts.pieces) / 2;
+    }
+    if (!goal) attempt.placeStops();
     const added = new Set(attempt.uids);
     const trouble = checkLayout(attempt.layout, { play }).some((i) => i.kind !== 'open-end' && i.uids.some((u) => added.has(u)));
     if (trouble || !attempt.uids.length) continue;
-    if (ok) return result(attempt);
-    if (!best || attempt.laid > best.laid) best = attempt;
+    if (ok && (!goal || !missing(attempt))) return result(attempt);
+    if (better(attempt, best)) best = attempt;
   }
   return best && result(best);
 }

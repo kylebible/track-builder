@@ -11,11 +11,17 @@ export interface GeneratePanelState {
   fromEnd: boolean;
   /** Still working one out. */
   busy: boolean;
+  /** Finishing at an open end picked for it, joined on with Fill gap. */
+  toEnd: boolean;
+  /** Waiting for that end to be tapped. */
+  pickingEnd: boolean;
 }
 
 export interface GeneratePanelActions {
   change: (options: Partial<SectionOptions>) => void;
   another: () => void;
+  /** Finish at an end tapped next, or anywhere. */
+  finishAt: (end: boolean) => void;
   use: () => void;
   cancel: () => void;
 }
@@ -74,7 +80,9 @@ export function renderGeneratePanel(panel: HTMLElement, state: GeneratePanelStat
   title.innerHTML = '<h2>Generate a section</h2><p class="panel-sub"></p>';
   title.querySelector('p')!.textContent = o.loop
     ? 'A loop stands on its own.'
-    : state.fromEnd
+    : state.pickingEnd
+      ? 'Tap the open end it should finish at.'
+      : state.fromEnd
       ? 'Builds on from the selected end.'
       : 'Starts loose. Tap an open end first to build on from it.';
   head.append(title);
@@ -104,6 +112,7 @@ export function renderGeneratePanel(panel: HTMLElement, state: GeneratePanelStat
   form.append(
     seg('Shape', [['Run', false], ['Loop', true]], o.loop, (loop) => act.change({ loop })),
     pieces,
+    seg('Finish at', [['Anywhere', false], [state.toEnd ? 'The end picked' : 'An end…', true]], state.toEnd || state.pickingEnd, (end) => act.finishAt(end), o.loop),
     seg('Curves', CURVES, CURVES.reduce((best, c) => (Math.abs(c[1] - o.curves) < Math.abs(best[1] - o.curves) ? c : best))[1], (curves) => act.change({ curves })),
     seg('Switches', counts(4), o.switches, (switches) => act.change({ switches })),
     seg('Sidings end', [['Buffer stop', 'buffer'], ['Open', 'open']] as [string, SectionOptions['sidings']][], o.sidings, (sidings) => act.change({ sidings }), o.switches === 0),
@@ -124,13 +133,20 @@ export function renderGeneratePanel(panel: HTMLElement, state: GeneratePanelStat
     if (s.switches) parts.push(plural(s.switches, 'switch').replace('switchs', 'switches'));
     if (s.stops) parts.push(plural(s.stops, 'stop'));
     let text = parts.join(' · ');
-    const short = !o.loop && s.laid < o.pieces;
-    if (short) text += `. Only ${s.laid} of ${o.pieces} fit here.`;
+    const toEnd = state.toEnd && !o.loop;
+    const short = !o.loop && !toEnd && s.laid < o.pieces;
+    const missed = toEnd && !s.closed;
+    const lacking = s.stops < o.stops || s.switches < o.switches;
+    if (missed) text += '. It couldn’t reach the end picked, so it’s left open.';
+    else if (toEnd) {
+      text += Math.abs(s.laid - o.pieces) > Math.max(1, Math.round(o.pieces * 0.1)) ? `. Reaching the end picked took ${s.laid} along the line.` : '. Joined to the end picked.';
+      if (lacking) text += ' Not everything asked for fit on the way.';
+    } else if (short) text += `. Only ${s.laid} of ${o.pieces} fit here.`;
     else if (o.loop && !s.closed) text += '. It couldn’t be closed here, so it’s left open.';
     else if (o.loop && s.uids.length < o.pieces * 0.85) text += `. A loop of ${o.pieces} doesn’t fit here; this is the biggest that did.`;
-    else if (s.stops < o.stops || s.switches < o.switches) text += '. Not everything asked for fit.';
+    else if (lacking) text += '. Not everything asked for fit.';
     result.textContent = text;
-    if (short || (o.loop && !s.closed)) result.dataset.state = 'problem';
+    if (short || missed || (o.loop && !s.closed)) result.dataset.state = 'problem';
   }
 
   const actions = document.createElement('div');

@@ -139,6 +139,42 @@ describe('generating a section', () => {
     }
   });
 
+  describe('finishing at a chosen end', () => {
+    const ends = () => {
+      let layout = addPiece(EMPTY_LAYOUT, 'straight-long', IDENTITY).layout;
+      layout = addPiece(layout, 'straight-long', { x: 900, y: 500, angle: Math.PI / 2 }).layout;
+      const [p, q] = layout.pieces;
+      return { layout, start: worldEnds(p).find((e) => e.connectorId === 'b')!, goal: worldEnds(q).find((e) => e.connectorId === 'a')! };
+    };
+
+    it('joins up to it with about as many pieces as asked, and everything asked for along it', { timeout: 15000 }, () => {
+      const { layout, start, goal } = ends();
+      for (const [pieces, seed] of [[24, 1], [40, 2]]) {
+        const section = generateSection(layout, { pieces, switches: 2, stops: 2, seed }, { start, goal })!;
+        expect(section.closed).toBe(true);
+        expect(Math.abs(section.laid - pieces)).toBeLessThanOrEqual(Math.round(pieces * 0.1));
+        expect(section.switches).toBe(2);
+        expect(section.stops).toBe(2);
+        // Only the far ends of the two old pieces are left open.
+        expect(openEnds(section.layout).map((e) => e.uid).sort()).toEqual(layout.pieces.map((p) => p.uid).sort());
+        expectSound(section.layout);
+      }
+    });
+
+    it('climbs on the way there, or starts loose and still gets there', { timeout: 15000 }, () => {
+      const { layout, start, goal } = ends();
+      const over = generateSection(layout, { ...plainRun, pieces: 24, climb: 'over', seed: 3 }, { start, goal })!;
+      expect(over.closed).toBe(true);
+      expect(added(over.layout, over.uids).some((p) => baseOf(p) >= LEVEL_HEIGHT)).toBe(true);
+      expectSound(over.layout);
+      const loose = generateSection(layout, { ...plainRun, pieces: 16, seed: 4 }, { goal, at: { x: 300, y: -300 } })!;
+      expect(loose.closed).toBe(true);
+      // Both ends of the piece not built on, the far end of the goal piece, and where the new run starts.
+      expect(openEnds(loose.layout)).toHaveLength(4);
+      expectSound(loose.layout);
+    });
+  });
+
   it('lays long sections quickly', () => {
     const t = performance.now();
     const section = generateSection(EMPTY_LAYOUT, { pieces: 80, switches: 3, stops: 3, climb: 'over', seed: 12 })!;
