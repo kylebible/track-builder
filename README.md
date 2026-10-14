@@ -46,14 +46,14 @@ Live site: https://kylebible.github.io/track-builder/
   a bridge; the check flags track crossing lower than that, ends that line
   up at different heights, and supports that would stand on track below.
 - Trains feel the slope: a battery engine gets up a ramp pulling one car,
-  but a heavy train stalls or spins its wheels on the way up.
+  but a heavy train stalls partway and slides back down.
 
 **T switch** (T) and **star switch** (X) are built on a D straight with
 quarter curves into its ends. Every end where paths split has its own lever
 when trains run: three on a T, four on a star.
 
 Unmeasured guesses, all in `src/pieces/dimensions.ts` and
-`src/pieces/catalog.ts`: how long the ramp takes to ease into its climb,
+`src/pieces/catalog.ts`: the ramp's exact profile (a smooth S here),
 the support block size, and which ends of N, T and X are pegs.
 
 ## Planning tools

@@ -35,9 +35,8 @@ export interface StockDef {
 export const WHEEL_RADIUS = 7.5;
 
 // Strong enough to climb an N ramp pulling one car, as the real ones do,
-// but not a long train; it grips a little better than it pushes, so a
-// heavy load stalls it rather than spinning its wheels on the flat.
-const BATTERY_MOTOR: Motor = { stallForceN: 0.8, freeSpeedMm: 180, grip: 0.55 };
+// but not a long train.
+const BATTERY_MOTOR: Motor = { stallForceN: 0.95, freeSpeedMm: 180, grip: 0.65 };
 
 export const STOCK: readonly StockDef[] = [
   {

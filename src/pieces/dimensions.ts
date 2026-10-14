@@ -56,11 +56,6 @@ export const BUFFER_STOP_LENGTH = 40;
 /** N ascending track: a D-length straight that climbs 64 mm. */
 export const RAMP_LENGTH = LONG_STRAIGHT;
 export const RAMP_RISE = 64;
-/**
- * UNMEASURED. How long the ramp takes to bend from level to its steady
- * climb at each end. The ends have to be level to join flat track.
- */
-export const RAMP_BLEND = 36;
 
 /**
  * Height of one level of raised track: what one N ramp climbs, and (an

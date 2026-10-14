@@ -1,4 +1,3 @@
-import { RAMP_BLEND } from '../pieces/dimensions';
 import type { TrackPath } from '../pieces/types';
 import { applyPose, type Pose } from './pose';
 
@@ -27,25 +26,16 @@ export function pathEnd(path: TrackPath): Pose {
 }
 
 /**
- * How steep a ramp's steady climb is, as rise per mm. The climb eases in
- * and out over `RAMP_BLEND` at each end, so the ends sit level.
+ * Height of the track bed at distance `s` along a path, above the piece's
+ * bottom. A ramp climbs in one smooth S: a half cosine wave, level at both
+ * ends and steepest in the middle, like the real ones.
  */
-function climbSlope(path: TrackPath, length: number): number {
-  const blend = Math.min(RAMP_BLEND, length / 2);
-  return (path.rise ?? 0) / (length - blend);
-}
-
-/** Height of the track bed at distance `s` along a path, above the piece's bottom. */
 export function heightAt(path: TrackPath, s: number): number {
   const rise = path.rise ?? 0;
   if (!rise) return 0;
   const length = pathLength(path);
-  const blend = Math.min(RAMP_BLEND, length / 2);
-  const m = climbSlope(path, length);
-  const t = Math.min(Math.max(s, 0), length);
-  if (t < blend) return (m * t * t) / (2 * blend);
-  if (t > length - blend) return rise - (m * (length - t) ** 2) / (2 * blend);
-  return (m * blend) / 2 + m * (t - blend);
+  const t = Math.min(Math.max(s, 0), length) / length;
+  return (rise * (1 - Math.cos(Math.PI * t))) / 2;
 }
 
 /** Rate of climb at `s` along a path, mm up per mm along. */
@@ -53,10 +43,6 @@ export function gradeAt(path: TrackPath, s: number): number {
   const rise = path.rise ?? 0;
   if (!rise) return 0;
   const length = pathLength(path);
-  const blend = Math.min(RAMP_BLEND, length / 2);
-  const m = climbSlope(path, length);
-  const t = Math.min(Math.max(s, 0), length);
-  if (t < blend) return (m * t) / blend;
-  if (t > length - blend) return (m * (length - t)) / blend;
-  return m;
+  const t = Math.min(Math.max(s, 0), length) / length;
+  return ((rise * Math.PI) / (2 * length)) * Math.sin(Math.PI * t);
 }

@@ -66,7 +66,7 @@ describe('ramps', () => {
     expect(heightAt(path, 0)).toBe(0);
     expect(heightAt(path, length)).toBeCloseTo(D.RAMP_RISE, 9);
     expect(gradeAt(path, 0)).toBe(0);
-    expect(gradeAt(path, length)).toBe(0);
+    expect(gradeAt(path, length)).toBeCloseTo(0, 9);
     expect(ramp.connectors.map((c) => c.z ?? 0)).toEqual([0, D.RAMP_RISE]);
   });
 
@@ -275,7 +275,8 @@ describe('T and star switches', () => {
 });
 
 describe('trains on ramps', () => {
-  function runOver(consist: string[]): { train: Train; highest: number } {
+  /** Run from the floor up and over; `highest` is how high the engine got, `tail` the last car. */
+  function runOver(consist: string[]): { train: Train; highest: number; tail: number } {
     const { layout } = upAndOver();
     const sim = new TrainSim(layout);
     const train = sim.addTrain(
@@ -284,11 +285,13 @@ describe('trains on ramps', () => {
     ) as Train;
     sim.setThrottle(train.id, 1);
     let highest = 0;
+    let tail = 0;
     for (let i = 0; i < 60 * 30 && !train.wrecked && train.status.kind !== 'stuck'; i++) {
       sim.advance(1 / 60);
       highest = Math.max(highest, train.vehicles[0].geo.z);
+      tail = Math.max(tail, train.vehicles[train.vehicles.length - 1].geo.z);
     }
-    return { train, highest };
+    return { train, highest, tail };
   }
 
   it('a battery engine climbs up and over and runs off the far end', () => {
@@ -303,10 +306,11 @@ describe('trains on ramps', () => {
     expect(train.status).toMatchObject({ stuck: 'ran-off' });
   });
 
-  it('a battery engine with a heavy load gets stuck on the ramp', () => {
-    const { train } = runOver(['battery-engine', 'coach', 'coach', 'coach']);
+  it("a battery engine with a heavy load can't get up the ramp", () => {
+    // It slows near the top, stops, and slides back down: the train never gets over.
+    const { tail, train } = runOver(['battery-engine', 'timber', 'timber', 'timber', 'timber']);
+    expect(tail).toBeLessThan(D.LEVEL_HEIGHT / 2);
     expect(train.status).toMatchObject({ kind: 'stuck' });
-    expect(train.status.kind === 'stuck' && train.status.message).toMatch(/ramp/);
   });
 
   it('vehicles on a bridge pass over a train underneath', () => {
