@@ -124,6 +124,54 @@ export const SUSPENSION_LENGTH = 2 * LONG_STRAIGHT;
 export const TRUSS_LENGTH = LONG_STRAIGHT;
 export const COVERED_BRIDGE_LENGTH = 2 * MEDIUM_STRAIGHT;
 
+/** Half curves: an E or E1 curve cut in two, a sixteenth of a circle. Generic, not Brio. */
+export const HALF_CURVE_ANGLE = CURVE_ANGLE / 2;
+
+/**
+ * Curved ramp: a quarter circle on the E curve's radius that climbs one
+ * level as it turns. A generic piece, UNMEASURED; a quarter turn keeps it
+ * no steeper than an N ramp.
+ */
+export const CURVED_RAMP_SWEEP = Math.PI / 2;
+
+/**
+ * Helix tower: track spiralling up round a central column, a level per
+ * turn, coming out right over where it went in. UNMEASURED: two turns on
+ * the E curve's radius.
+ */
+export const HELIX_TURNS = 2;
+
+/**
+ * Q five-point switch: the guide gives an A length, outer turns at 45°
+ * (an E curve) and inner turns at 22.5°. The inner radius is UNMEASURED:
+ * we pick the one that ends an A length along, like the E curve does.
+ */
+export const FIVE_POINT_INNER_ANGLE = Math.PI / 8;
+export const FIVE_POINT_INNER_RADIUS = MEDIUM_STRAIGHT / Math.sin(FIVE_POINT_INNER_ANGLE);
+
+/**
+ * F1/G1 parallel switch and F2/G2 triple parallel switch: an A length, as
+ * the guide gives. The sideways offset is UNMEASURED; we use the double
+ * track spacing, so the side track lines up with double track.
+ */
+export const PARALLEL_SWITCH_NEW_LENGTH = MEDIUM_STRAIGHT;
+export const PARALLEL_SWITCH_NEW_OFFSET = DOUBLE_TRACK_SPACING;
+
+/** Bumpy track: an A length with humps this high. Generic, UNMEASURED. */
+export const BUMPY_LENGTH = MEDIUM_STRAIGHT;
+export const BUMPY_COUNT = 3;
+export const BUMP_HEIGHT = 4;
+
+/**
+ * Turntable: a pit with eight track ends round it and a turning bridge
+ * across the middle. Generic and UNMEASURED: a D across.
+ */
+export const TURNTABLE_DIAMETER = LONG_STRAIGHT;
+
+/** Curved viaduct: a bridge span turning an eighth of a circle, on twice the E radius. UNMEASURED. */
+export const CURVED_VIADUCT_RADIUS = 2 * LARGE_CURVE_RADIUS;
+export const CURVED_VIADUCT_SWEEP = Math.PI / 4;
+
 /**
  * Real-world play in a joint: two ends this close in position and angle
  * count as connected. Tunable.
