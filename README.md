@@ -155,6 +155,14 @@ trains are on the track. Stopping distances and waiting times are in
 `ACCESSORY`. The lifting bridge and the loader are our own designs, not
 measured pieces.
 
+The eye button on a train's controls (or C) rides along: the view moves to
+the front of the train, over an engine's cab or over the leading car when
+it is being pushed, looking down the track ahead (`src/trains/cab.ts`).
+When the train backs up, the view moves to its other end. Drag to look
+around; the view drifts back to straight ahead when you let go. Switch
+knobs still work from the cab. Get off, or Esc, goes back to the view you
+had.
+
 The models (`src/trains/trainMesh.ts`) are built in code to look like
 wooden Brio trains: painted beech bodies, red plastic wheels and magnet
 couplers. No 3D scans are used, since none could be found with a licence

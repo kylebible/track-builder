@@ -593,6 +593,13 @@ export class TrainSim {
     return removed;
   }
 
+  /** Find the track up to `reach` mm beyond either end of a train, as far as it goes, to see what's coming. */
+  lookAround(train: Train, reach: number): void {
+    const lo = Math.min(...train.vehicles.map((v) => v.u - v.def.length / 2));
+    const hi = Math.max(...train.vehicles.map((v) => v.u + v.def.length / 2));
+    train.route.extend(this.network, this.choose, lo - reach, hi + reach);
+  }
+
   // ---- running ------------------------------------------------------------
 
   /** Run the world on by `seconds`. */

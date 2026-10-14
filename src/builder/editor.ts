@@ -21,6 +21,7 @@ import {
   mirrorPieces,
   openEnds,
   partnerOf,
+  sameEnd,
   raisePieces,
   removePieces,
   rotatePieces,
@@ -35,6 +36,7 @@ import {
   type Snap,
 } from '../layout/layout';
 import { flexContext, flexDrag, type FlexContext, type FlexResult } from '../layout/flex';
+import { describeFill, findFills, MAX_PIECES, type Fill } from '../layout/fill';
 import { Palette } from './palette';
 import { attachEnd, flipFor, hasEndsChoice, isLoose, SHAPES, variantFor, type Shape } from './variants';
 import { LayoutView } from './view';
@@ -94,13 +96,28 @@ interface Drop {
  */
 const DROP_CAPTURE_MM = { middle: 110, end: 70 };
 
+/**
+ * Filling a gap: the end it starts from, then (once the other end is
+ * tapped) the runs of track that would join them, one previewed at a time.
+ */
+interface Filling {
+  from: EndRef;
+  to: EndRef | null;
+  options: Fill[];
+  index: number;
+}
+
 export interface EditorDom {
   canvas: HTMLElement;
   palette: HTMLElement;
   status: HTMLElement;
   /** Shown while the layout is empty. */
   empty: HTMLElement;
-  buttons: Record<'undo' | 'redo' | 'rotateLeft' | 'rotateRight' | 'flip' | 'swap' | 'raise' | 'lower' | 'section' | 'remove' | 'fit', HTMLButtonElement>;
+  buttons: Record<'undo' | 'redo' | 'rotateLeft' | 'rotateRight' | 'flip' | 'swap' | 'raise' | 'lower' | 'section' | 'fill' | 'remove' | 'fit', HTMLButtonElement>;
+  /** Where the auto-fill choices are listed. */
+  fillPanel: HTMLElement;
+  /** Pieces in trouble the layout check can't see, such as off the table or in the water. */
+  blocked?: (layout: Layout) => Iterable<string>;
   /** Frame the whole layout in the view. */
   onFit: () => void;
   /** The layout to start with, such as the one saved last time. */
@@ -123,6 +140,7 @@ export class Editor {
   private selection: Selection = NONE;
   private drag: Drag | null = null;
   private paletteDrag: PaletteDrag | null = null;
+  private filling: Filling | null = null;
   private readonly view: LayoutView;
   private readonly palette: Palette;
   private readonly raycaster = new THREE.Raycaster();
@@ -160,6 +178,7 @@ export class Editor {
     b.raise.onclick = () => this.raise(1);
     b.lower.onclick = () => this.raise(-1);
     b.section.onclick = () => this.selectSection();
+    b.fill.onclick = () => this.startFill();
     b.remove.onclick = () => this.remove();
     b.fit.onclick = () => dom.onFit();
     this.refresh();
@@ -216,6 +235,7 @@ export class Editor {
 
   private commit(next: Layout | null, selection: Selection = this.selection): void {
     if (!next) return;
+    this.filling = null;
     this.history.push(next);
     this.selection = selection;
     this.refresh();
@@ -401,13 +421,122 @@ export class Editor {
     this.refresh();
   }
 
+  // ---- auto-fill -----------------------------------------------------------
+
+  /** Start filling a gap from the selected open end: the next end tapped is where it goes to. */
+  startFill(): void {
+    if (this.filling) {
+      this.cancelFill();
+      return;
+    }
+    const s = this.selection;
+    if (s.kind !== 'end') {
+      this.flash('Tap the dot on one open end first, then Fill gap.');
+      return;
+    }
+    this.filling = { from: s.end, to: null, options: [], index: 0 };
+    this.refresh();
+  }
+
+  /** The other end was tapped: work out the ways to join the two. */
+  private fillTo(to: EndRef): void {
+    const filling = this.filling!;
+    if (sameEnd(to, filling.from)) return;
+    const options = findFills(this.layout, filling.from, to, { blocked: this.dom.blocked });
+    if (!options.length) {
+      this.filling = { ...filling, to: null, options: [] };
+      this.flash(`No run of up to ${MAX_PIECES} pieces joins those ends without a clash. Try another end.`);
+      return;
+    }
+    this.filling = { ...filling, to, options, index: 0 };
+    this.refresh();
+  }
+
+  /** Preview another of the ways to fill the gap. */
+  showFill(index: number): void {
+    const f = this.filling;
+    if (!f || !f.options.length) return;
+    f.index = (index + f.options.length) % f.options.length;
+    this.refresh();
+  }
+
+  /** Put the previewed run in. */
+  applyFill(): void {
+    const f = this.filling;
+    const fill = f?.options[f.index];
+    if (!fill) return;
+    this.commit(fill.layout, { kind: 'pieces', uids: new Set(fill.uids) });
+    this.flash(`Added ${fill.uids.length === 1 ? 'a piece' : `${fill.uids.length} pieces`} to close the gap.`);
+  }
+
+  cancelFill(): void {
+    if (!this.filling) return;
+    this.filling = null;
+    this.refresh();
+  }
+
+  /** List the ways to fill the gap, with the one being previewed picked out. */
+  private renderFillPanel(): void {
+    const panel = this.dom.fillPanel;
+    const f = this.filling;
+    if (!f || !f.options.length) {
+      panel.hidden = true;
+      panel.replaceChildren();
+      return;
+    }
+    panel.hidden = false;
+    const head = document.createElement('div');
+    head.className = 'panel-head';
+    const title = document.createElement('div');
+    title.innerHTML = '<h2>Fill the gap</h2><p class="panel-sub"></p>';
+    title.querySelector('p')!.textContent =
+      f.options.length === 1 ? 'One way fits. It is shown on the track.' : `${f.options.length} ways fit. Pick one to see it on the track.`;
+    head.append(title);
+    const list = document.createElement('div');
+    list.className = 'fills';
+    f.options.forEach((fill, i) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'fill-option';
+      b.setAttribute('aria-pressed', String(i === f.index));
+      const name = document.createElement('b');
+      name.textContent = `${fill.uids.length} ${fill.uids.length === 1 ? 'piece' : 'pieces'}`;
+      const parts = document.createElement('span');
+      parts.textContent = describeFill(fill).join(', ');
+      const notes: string[] = [];
+      if (fill.odd) notes.push(fill.odd === 1 ? 'needs a two-peg or two-hole piece' : `needs ${fill.odd} two-peg or two-hole pieces`);
+      notes.push(fill.flex < 0.05 ? 'fits exactly' : fill.flex < 0.5 ? 'joints give a little' : 'joints flex near their limit');
+      const note = document.createElement('small');
+      note.textContent = notes.join(' · ');
+      b.append(name, parts, note);
+      b.addEventListener('click', () => this.showFill(i));
+      list.append(b);
+    });
+    const actions = document.createElement('div');
+    actions.className = 'fill-actions';
+    const use = document.createElement('button');
+    use.type = 'button';
+    use.className = 'action compact primary';
+    use.textContent = 'Use this';
+    use.addEventListener('click', () => this.applyFill());
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'action compact';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => this.cancelFill());
+    actions.append(use, cancel);
+    panel.replaceChildren(head, list, actions);
+  }
+
   undo(): void {
+    this.filling = null;
     this.history.undo();
     this.selection = this.validSelection();
     this.refresh();
   }
 
   redo(): void {
+    this.filling = null;
     this.history.redo();
     this.selection = this.validSelection();
     this.refresh();
@@ -499,6 +628,10 @@ export class Editor {
     if (!hit) return;
     // Pressing track or an end belongs to the editor, not the camera.
     this.controls.enabled = false;
+    if (this.filling) {
+      if ('end' in hit) this.fillTo(hit.end);
+      return;
+    }
     if ('end' in hit) {
       this.selection = { kind: 'end', end: hit.end };
       this.refresh();
@@ -622,6 +755,16 @@ export class Editor {
       this.dom.onFit();
     } else if (k === 'delete' || k === 'backspace') {
       this.remove();
+    } else if (k === 'g') {
+      this.startFill();
+    } else if (this.filling?.options.length && k === 'enter') {
+      this.applyFill();
+    } else if (this.filling?.options.length && (k === 'arrowdown' || k === 'arrowright')) {
+      this.showFill(this.filling.index + 1);
+    } else if (this.filling?.options.length && (k === 'arrowup' || k === 'arrowleft')) {
+      this.showFill(this.filling.index - 1);
+    } else if (k === 'escape' && this.filling) {
+      this.cancelFill();
     } else if (k === 'escape') {
       this.selection = NONE;
       this.refresh();
@@ -670,7 +813,9 @@ export class Editor {
   private refresh(): void {
     const drag = this.drag?.active ? this.drag : null;
     const drop = this.paletteDrag?.drop ?? null;
-    const layout = drop ? drop.layout : drag ? this.dragged(drag) : this.layout;
+    const filling = this.filling;
+    const preview = filling?.options[filling.index] ?? null;
+    const layout = drop ? drop.layout : drag ? this.dragged(drag) : (preview?.layout ?? this.layout);
     const joints = findJoints(layout);
     const open = openEnds(layout, joints);
     const s = this.selection;
@@ -688,10 +833,10 @@ export class Editor {
     this.view.update({
       layout,
       openEnds: open,
-      selectedPieces: drop ? new Set([drop.uid]) : s.kind === 'pieces' ? s.uids : new Set(),
-      selectedEnd: drop ? null : s.kind === 'end' ? s.end : null,
+      selectedPieces: drop ? new Set([drop.uid]) : preview ? new Set(preview.uids) : s.kind === 'pieces' ? s.uids : new Set(),
+      selectedEnd: drop || preview ? null : filling ? filling.from : s.kind === 'end' ? s.end : null,
       snapAt,
-      marks: drag || drop ? [] : this.marks,
+      marks: drag || drop || filling ? [] : this.marks,
     });
     if (this.layout !== this.notified) {
       this.notified = this.layout;
@@ -713,6 +858,9 @@ export class Editor {
     for (const button of [b.rotateLeft, b.rotateRight, b.flip, b.raise, b.lower, b.section, b.remove]) button.disabled = !has;
     b.swap.disabled = this.targets().size !== 1;
     b.fit.disabled = layout.pieces.length === 0;
+    b.fill.disabled = !filling && (s.kind !== 'end' || open.length < 2);
+    b.fill.setAttribute('aria-pressed', String(!!filling));
+    this.renderFillPanel();
 
     const [hint, counts] = this.flashText ? [this.flashText, ''] : this.describe(layout, open.length, joints.length);
     const hintEl = document.createElement('span');
@@ -753,11 +901,15 @@ export class Editor {
       const stuck = drag.flexed.atLimit.length;
       return [stuck ? `Flexing: ${plural(stuck, 'joint')} at the limit. Pull harder to unclip.` : 'Flexing the joints.', counts];
     }
+    if (this.filling) {
+      if (!this.filling.options.length) return ['Now tap the open end to join it to. Esc to stop.', counts];
+      return ['Pick a way to fill the gap, then Use this. Esc to stop.', counts];
+    }
     if (drag?.seated) return ['Lined up over the track: let go to place it.', counts];
     if (drag) return [drag.snap ? 'Let go to join.' : 'Drag near an open end to snap on.', counts];
     if (s.kind === 'end') {
       const what = this.genderOf(s.end) === 'peg' ? 'peg' : 'hole';
-      return [`Building from this ${what}: tap a piece to add it.`, counts];
+      return [`Building from this ${what}: tap a piece to add it, or Fill gap to join it to another end.`, counts];
     }
     if (s.kind === 'pieces') {
       return [`${plural(s.uids.size, 'piece')} selected: drag to move, or use the toolbar.`, counts];
