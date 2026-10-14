@@ -336,9 +336,28 @@ export function* searchFills(layout: Layout, from: EndRef, to: EndRef, options: 
   const ends = [a.connector.pose, b.connector.pose];
   const free = (p: Vec2, z: number) =>
     !occupied.near({ p, z }, CLEAR_MM) && (!endPieces.near({ p, z }, CLEAR_MM) || ends.some((e) => Math.hypot(e.x - p.x, e.y - p.y) < 70));
+  // Where track can go at all (on the table, out of the water), asked of a scrap of track at each
+  // point, so chains don't wander off where no run built from them could be offered.
+  const placeable = new Map<number, boolean>();
+  const allowedAt = (pose: Pose, z: number): boolean => {
+    if (!options.blocked) return true;
+    const k = cellKey(pose.x / 10, pose.y / 10, pose.angle / (Math.PI / 8), z);
+    let ok = placeable.get(k);
+    if (ok === undefined) {
+      const probe = { uid: 'probe', pieceId: 'straight-mini', flipped: false, pose: applyPose(pose, { x: -D.MINI_STRAIGHT / 2, y: 0, angle: 0 }), z };
+      ok = [...options.blocked({ pieces: [probe] })].length === 0;
+      placeable.set(k, ok);
+    }
+    return ok;
+  };
   /** The ends are checked as exactly as chains are kept; points between, at about the height. */
   const clearMove = (p: Chain, move: TrackMove, pose: Pose, z: number) =>
-    free(pose, z) && move.along.every((q) => free(applyPose(p.pose, q), (p.z + z) / 2));
+    free(pose, z) &&
+    allowedAt(pose, z) &&
+    move.along.every((q) => {
+      const at = applyPose(p.pose, q);
+      return free(at, (p.z + z) / 2) && allowedAt(at, (p.z + z) / 2);
+    });
   const clearChain = (c: Chain): boolean => {
     if (c.clear === undefined) {
       const p = c.parent;

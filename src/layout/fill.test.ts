@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { canMate } from '../geometry/joint';
 import { IDENTITY } from '../geometry/pose';
 import { checkLayout } from '../planning/check';
+import { getEnvironment, offArea } from '../environments/environments';
 import { findFills, NEAR_PIECES } from './fill';
 import { addPiece, EMPTY_LAYOUT, extendFrom, findJoints, openEnds, removePieces, worldEnd, type EndRef, type Extension, type Layout } from './layout';
 
@@ -149,6 +150,22 @@ describe('auto-fill between two open ends', () => {
     const fills = findFills(layout, ref(a), ref(b), { wanted: 1 });
     expect(fills.length).toBeGreaterThan(0);
     expect(openEnds(fills[0].layout)).toHaveLength(4);
+    expect(checkLayout(fills[0].layout).filter((i) => i.kind !== 'open-end')).toEqual([]);
+  });
+
+  it('keeps its search on the table, so it finds a way that stays on it', () => {
+    const table = getEnvironment('table');
+    const blocked = (layout: Layout) => offArea(layout, table)?.uids ?? [];
+    // Two ends near the front edge, both facing it: the only ways round turn back across the table.
+    let layout = addPiece(EMPTY_LAYOUT, 'straight-long', { x: -170, y: -211, angle: Math.PI / 4 }).layout;
+    layout = addPiece(layout, 'straight-long', { x: 315, y: 5, angle: -3 * Math.PI / 4 }).layout;
+    const [p, q] = layout.pieces;
+    const from = { uid: p.uid, connectorId: 'a' };
+    const to = { uid: q.uid, connectorId: 'b' };
+    expect(blocked(layout)).toEqual([]);
+    const fills = findFills(layout, from, to, { blocked, budgetMs: 4000 });
+    expect(fills.length).toBeGreaterThan(0);
+    expect(blocked(fills[0].layout)).toEqual([]);
     expect(checkLayout(fills[0].layout).filter((i) => i.kind !== 'open-end')).toEqual([]);
   });
 
