@@ -165,12 +165,17 @@ layouts saved before scenes existed stay on the grid mat.
 Open **Trains** in the toolbar (Y) and drag engines and cars onto the
 track. Drop one by the end of a train (a green ring shows where) and it
 couples on; drop it anywhere else on the track and it starts a new train.
-On the track, tap a car to turn it round, or drag it to lift it off and put
-it somewhere else; drop it off the track to take it away. Trains that run
+With the Trains panel open, tap a car on the track to turn it round, or drag
+it to lift it off and put it somewhere else; drop it off the track to take it away. Trains that run
 into each other nose to tail couple up.
 
-Each train carries its own controls, floating over it: ◀ ■ ▶ for the
-engines, ⇄ to turn the whole train round and ✕ to take it off. The panel
+The sidebar's **Trains** tab lists every train with its job, status, where
+it's heading and its stores (`src/trains/trainList.ts`). Hover a row and the
+train glows on the map. Tap a row, or tap a train on the map with the panel
+shut, to fly there, follow it, and open its controls in the row: ◀ ■ ▶ for
+the engines, ⇄ to turn the whole train round, the job, Go to, ride along and
+✕ to take it off. Nothing floats over the trains; riding along, the ridden
+train's controls sit at the foot of the view. The panel
 keeps Pause, the speed and Reset. Tap a switch's yellow knob to change
 which way it sends trains; the yellow stripe shows the way it is set.
 
@@ -191,7 +196,7 @@ the same way or opposite ways. With nothing set, it follows the levers;
 levers no train has reserved still change with a tap. It also stops a
 train before it runs off an open end.
 
-**Go to** on a train's card sends it to a station, the cargo loader, a
+**Go to** in a train's controls sends it to a station, the cargo loader, a
 crane or a trackside place by the shortest way, setting switches as it
 goes (pieces other trains hold count as longer, so it picks the free side
 of a loop). It runs whichever way round is shorter, backing up if need
@@ -272,7 +277,7 @@ for. Workers tire after a shift (`ECONOMY.shiftSeconds`) and wait for a ride
 home; with nobody at work a place stops. The panel's **Places need goods and
 workers** switch turns this off.
 
-A train's **job** (picked on its card, `src/trains/jobs.ts`) decides what it
+A train's **job** (picked in its controls, `src/trains/jobs.ts`) decides what it
 carries and where it goes: coal, water, farm, timber, goods, mail or
 workers. A job train handles only its own goods, chooses its next stop by
 what places need and how far away they are, tops up its own engine when it
