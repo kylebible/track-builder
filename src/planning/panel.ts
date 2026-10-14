@@ -6,7 +6,8 @@ import { getPiece } from '../pieces/catalog';
 import type { PieceCategory } from '../pieces/types';
 import type { Layout } from '../layout/layout';
 import { getEnvironment, inWater, offArea, type EnvironmentId } from '../environments/environments';
-import { checkLayout, summarize, type Issue } from './check';
+import { MODE } from '../pieces/basic';
+import { checkLayout, notBrio, summarize, type Issue } from './check';
 import { layoutFromJson, layoutToJson, LayoutFileError, shareUrl, type LayoutFile } from './file';
 import { partsList, partsText } from './parts';
 import { LEVEL_HEIGHT } from '../pieces/dimensions';
@@ -141,7 +142,7 @@ export class PlanningPanel {
 
   /** Redraw everything from a changed layout. */
   update(layout: Layout): void {
-    this.issues = [...checkLayout(layout), ...this.areaIssues(layout)];
+    this.issues = [...checkLayout(layout), ...this.areaIssues(layout), ...(MODE.basic ? notBrio(layout) : [])];
     this.focused = null;
     this.renderParts(layout);
     this.renderCheck(layout);

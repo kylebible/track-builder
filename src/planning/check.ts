@@ -2,6 +2,7 @@ import { heightAt, pathLength, poseAt } from '../geometry/path';
 import { DEFAULT_PLAY, heightGap, jointError, type Play } from '../geometry/joint';
 import { applyPose, distance, type Vec2 } from '../geometry/pose';
 import * as D from '../pieces/dimensions';
+import { isBrio } from '../pieces/basic';
 import { getPiece } from '../pieces/catalog';
 import { baseOf, defOf, findJoints, nearbyPairs, openEnds, worldEnd, type EndRef, type Layout, type PlacedPiece, type WorldEnd } from '../layout/layout';
 import { supportsOf, type Support } from '../layout/supports';
@@ -20,8 +21,10 @@ import { supportsOf, type Support } from '../layout/supports';
 // - Off the area is track past the edge of a table or rug, and in water is
 //   track on the ground in a river or lake (both added by the panel, which
 //   knows what the layout is built on).
+// - Not Brio is a piece Brio doesn't sell, in Basic mode (also added by the
+//   panel, which knows the mode).
 
-export type IssueKind = 'near-miss' | 'same-gender' | 'height' | 'overlap' | 'support' | 'open-end' | 'off-area' | 'in-water';
+export type IssueKind = 'near-miss' | 'same-gender' | 'height' | 'overlap' | 'support' | 'open-end' | 'off-area' | 'in-water' | 'not-brio';
 
 export interface Issue {
   kind: IssueKind;
@@ -287,6 +290,31 @@ function blockedSupports(layout: Layout, supports: Support[]): Issue[] {
 const midpoint = (a: Vec2, b: Vec2): Vec2 => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 
 /** A one-line summary for the check button and panel. */
+/**
+ * Pieces Brio doesn't sell, for Basic mode: one issue for each kind, so a
+ * layout from before Basic mode was on shows what to swap. Nothing is removed.
+ */
+export function notBrio(layout: Layout): Issue[] {
+  const byPiece = new Map<string, PlacedPiece[]>();
+  for (const placed of layout.pieces) {
+    const piece = getPiece(placed.pieceId);
+    if (isBrio(piece)) continue;
+    const key = piece.partOf ?? piece.id;
+    byPiece.set(key, [...(byPiece.get(key) ?? []), placed]);
+  }
+  return [...byPiece].map(([id, placed]) => {
+    const name = getPiece(id).name;
+    const n = placed.length;
+    return {
+      kind: 'not-brio' as const,
+      at: { x: placed[0].pose.x, y: placed[0].pose.y },
+      ...(placed[0].z ? { z: placed[0].z } : {}),
+      uids: placed.map((p) => p.uid),
+      message: n === 1 ? `${name}: Brio doesn't sell this piece.` : `${n} × ${name}: Brio doesn't sell this piece.`,
+    };
+  });
+}
+
 export function summarize(issues: Issue[]): string {
   const problems = issues.filter((i) => i.kind !== 'open-end').length;
   const open = issues.length - problems;

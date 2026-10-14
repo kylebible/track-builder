@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { poseAt } from '../geometry/path';
 import type { Vec2 } from '../geometry/pose';
 import type { Layout } from '../layout/layout';
+import { MODE, onBasicMode } from '../pieces/basic';
 import * as D from '../pieces/dimensions';
 import { toWorld } from '../render/pieceMesh';
 import { cabPose, travelWay } from './cab';
@@ -39,6 +40,23 @@ export interface ViewControls {
 }
 
 const SPEEDS = [1, 2, 4] as const;
+const KEEP_COUPLED_KEY = 'track-builder:keep-coupled';
+
+function loadFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function saveFlag(key: string, on: boolean): void {
+  try {
+    localStorage.setItem(key, on ? '1' : '0');
+  } catch {
+    // Private browsing: the setting just isn't kept.
+  }
+}
 const LEVER_REACH = 24;
 /** How far down the chosen way the lever's stripe runs. */
 const STRIPE_MM = 110;
@@ -243,6 +261,10 @@ export class Trains {
     this.viewSize = measure();
     new ResizeObserver(() => (this.viewSize = measure())).observe(container);
     this.sim = new TrainSim(this.layout);
+    // Basic mode has real magnets; otherwise they're forgiving.
+    this.sim.realMagnets = MODE.basic;
+    onBasicMode((basic) => (this.sim.realMagnets = basic));
+    this.sim.keepCoupled = loadFlag(KEEP_COUPLED_KEY);
     this.accessories = new AccessoryView(this.sim, host.pieceObjects);
     this.root.add(this.vehiclesRoot, this.leversRoot, this.markersRoot, this.haloRoot, this.accessories.root);
     // eslint-disable-next-line @typescript-eslint/no-this-alias
@@ -297,6 +319,11 @@ export class Trains {
     );
     const supplies = el('input', { type: 'checkbox', checked: this.sim.useSupplies, onchange: () => (this.sim.useSupplies = supplies.checked) });
     this.deliveries = el('p', { class: 'tr-deliveries' });
+    const keepCoupled = el('input', {
+      type: 'checkbox',
+      checked: this.sim.keepCoupled,
+      onchange: () => saveFlag(KEEP_COUPLED_KEY, (this.sim.keepCoupled = keepCoupled.checked)),
+    });
     this.economyView = new EconomyView(this.sim, this.hud, camera, container, { addJobTrain: (job) => this.addJobTrain(job) });
     this.autorouteBox = el('input', { type: 'checkbox', checked: this.sim.autoroute, onchange: () => this.sim.setAutoroute(this.autorouteBox.checked) });
     this.panel = el(
@@ -307,6 +334,7 @@ export class Trains {
       this.tiles,
       el('div', { class: 'tr-row' }, this.pauseButton, el('div', { class: 'seg' }, ...this.speedButtons), el('button', { class: 'tr-btn', type: 'button', textContent: 'Reset', title: 'Put every train back where it was built, stopped', onclick: () => this.reset() })),
       el('label', { class: 'tr-check', title: 'Steam engines burn water and coal and battery engines use charge. Top them up at a water tower, coaling stage or charging post.' }, supplies, ' Engines use up water, coal and charge'),
+      el('label', { class: 'tr-check', title: 'Magnets never let go on their own, however long the train or tight the bend, so job trains and long trains stay in one piece. Off, they pull or slide apart like real ones (more readily in Basic mode).' }, keepCoupled, ' Keep trains coupled'),
       el('label', { class: 'tr-check', title: 'Each train reserves the track ahead of it and sets the switches its way. A train waits short of track another train is on instead of running into it, and takes the free side of a passing loop.' }, this.autorouteBox, ' Autoroute: trains set switches and wait for each other'),
       this.deliveries,
       this.economyView.section,

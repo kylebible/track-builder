@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Editor } from './builder/editor';
+import { onBasicMode } from './pieces/basic';
 import type { Vec2 } from './geometry/pose';
 import { codeFromHash, decodeLayout, LayoutFileError } from './planning/file';
 import { PlanningPanel } from './planning/panel';
@@ -136,6 +137,8 @@ planning = new PlanningPanel(editor, {
   onTemplates: () => templatesPanel.showPopover(),
 });
 planning.update(editor.layout);
+// Basic mode adds a check for pieces Brio doesn't sell.
+onBasicMode(() => planning?.update(editor.layout));
 
 const templatesPanel = document.getElementById('templates-panel')!;
 new TemplatePicker(templatesPanel, (template) => {
