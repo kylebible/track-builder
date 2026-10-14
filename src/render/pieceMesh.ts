@@ -3,6 +3,7 @@ import { heightAt, pathLength, poseAt } from '../geometry/path';
 import { applyPose, type Pose } from '../geometry/pose';
 import * as D from '../pieces/dimensions';
 import type { Connector, PieceDef, TrackPath } from '../pieces/types';
+import type { Arch } from '../layout/supports';
 import { pieceStructure, turntableDeck } from './bridges';
 import { MOVING_PARTS } from '../scenery/models';
 import { mergeStaticMeshes } from './merge';
@@ -248,6 +249,31 @@ export function buildSupport(x: number, y: number, angle: number, height: number
       o.receiveShadow = true;
     }
   });
+  return group;
+}
+
+/**
+ * An arch support (see layout/supports.ts): a stack of blocks each side of
+ * the lower track, turned to stand alongside it, and a beam across their
+ * tops that the raised track rests on, `height` up.
+ */
+export function buildArch(arch: Arch, height: number): THREE.Group {
+  const group = new THREE.Group();
+  const legHeight = height - D.ARCH_BEAM;
+  for (const leg of arch.legs) {
+    // A stack whose "track" runs along the beam, so its long side lies along the lower track.
+    const stack = buildSupport(leg.x, leg.y, arch.angle, legHeight, arch.legBlocks);
+    // No cradle lips on a leg: the beam sits flat on top.
+    for (const lip of stack.children.slice(arch.legBlocks)) stack.remove(lip);
+    group.add(stack);
+  }
+  const mid = { x: (arch.legs[0].x + arch.legs[1].x) / 2, y: (arch.legs[0].y + arch.legs[1].y) / 2 };
+  const beam = new THREE.Mesh(new THREE.BoxGeometry(arch.span, D.ARCH_BEAM, D.SUPPORT_LENGTH), supportMaterial);
+  beam.position.copy(toWorld(mid.x, mid.y, legHeight + D.ARCH_BEAM / 2));
+  beam.rotation.y = arch.angle;
+  beam.castShadow = true;
+  beam.receiveShadow = true;
+  group.add(beam);
   return group;
 }
 

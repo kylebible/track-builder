@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import * as D from '../pieces/dimensions';
 import { baseOf, defOf, sameEnd, type EndRef, type Layout, type WorldEnd } from '../layout/layout';
 import { supportsOf } from '../layout/supports';
-import { buildPieceObject, buildSupport, toWorld } from '../render/pieceMesh';
+import { buildArch, buildPieceObject, buildSupport, toWorld } from '../render/pieceMesh';
 
 // Keeps three.js objects in step with a layout: one object per placed
 // piece, plus a marker on every open end that can be clicked to build from.
@@ -130,11 +130,13 @@ export class LayoutView {
   /** Support stacks under raised ends, rebuilt only when they change. */
   private updateSupports(layout: Layout): void {
     const supports = supportsOf(layout);
-    const key = supports.map((s) => `${s.at.x.toFixed(1)},${s.at.y.toFixed(1)},${s.angle.toFixed(3)},${s.height},${s.blocks}`).join(';');
+    const key = supports
+      .map((s) => `${s.at.x.toFixed(1)},${s.at.y.toFixed(1)},${s.angle.toFixed(3)},${s.height},${s.blocks}` + (s.arch ? `,${s.arch.legs.map((l) => `${l.x.toFixed(1)},${l.y.toFixed(1)}`)}` : ''))
+      .join(';');
     if (key === this.supportsKey) return;
     this.supportsKey = key;
     this.supportsRoot.clear();
-    for (const s of supports) this.supportsRoot.add(buildSupport(s.at.x, s.at.y, s.angle, s.height, s.blocks));
+    for (const s of supports) this.supportsRoot.add(s.arch ? buildArch(s.arch, s.height) : buildSupport(s.at.x, s.at.y, s.angle, s.height, s.blocks));
   }
 
   /** Animate the pulsing rings; call once a frame with the time in ms. */
