@@ -17,15 +17,25 @@ export interface Connector {
 
 /**
  * A running surface along the track centerline, in piece-local coordinates.
- * `rise` is how much it climbs from start to end (a ramp); it starts level
- * with the bottom of the piece.
+ * `rise` is how much it climbs from start to end (a ramp; negative goes
+ * down). `z` is how high it starts above the bottom of the piece, for
+ * track carried up on a piece's own legs (a bridge deck); missing is level
+ * with the bottom. `bumps` humps along the way make a bumpy track. A
+ * `spiral` climb (a helix) rises the same amount every full turn, so each
+ * turn clears the one below it all the way round.
  */
 export type TrackPath =
-  | { kind: 'straight'; from: Pose; length: number; rise?: number }
+  | { kind: 'straight'; from: Pose; length: number; rise?: number; z?: number; bumps?: number; spiral?: boolean }
   /** `sweep` is signed: positive turns left (counter-clockwise). */
-  | { kind: 'arc'; from: Pose; radius: number; sweep: number; rise?: number };
+  | { kind: 'arc'; from: Pose; radius: number; sweep: number; rise?: number; z?: number; bumps?: number; spiral?: boolean };
 
-export type PieceCategory = 'straight' | 'curve' | 'ramp' | 'switch' | 'crossing' | 'buffer' | 'scenery' | 'trackside';
+/** How a bridge span is built, for its model. */
+export type BridgeStyle = 'viaduct' | 'suspension' | 'truss' | 'covered';
+
+/** A piece drawn round a structure of its own rather than as plain track. */
+export type Structure = 'helix' | 'turntable';
+
+export type PieceCategory = 'straight' | 'curve' | 'double' | 'ramp' | 'switch' | 'crossing' | 'buffer' | 'scenery' | 'trackside';
 
 export interface PieceDef {
   /** Stable catalog id, used in saved layouts. */
@@ -46,6 +56,28 @@ export interface PieceDef {
   seatsOnTrack?: boolean;
   /** Seated scenery that holds the track up this high (a pier), standing on the floor under raised track. */
   holdsTrackAt?: number;
+  /**
+   * The catalog piece this one is a shape of, for pieces you reshape on the
+   * floor (bendy track): the parts list counts them all as that piece.
+   */
+  partOf?: string;
+  /**
+   * A bridge span: track a level up, standing on its own structure, so it
+   * needs no support blocks, and nor does track joined to its ends.
+   */
+  bridge?: BridgeStyle;
+  /**
+   * A helix tower (stands on its own column, so needs no support blocks) or
+   * a turntable (a pit with a turning bridge, drawn instead of its paths).
+   */
+  structure?: Structure;
+  /**
+   * Left out of auto-fill: an uncommon or generic piece. Every shape fill can
+   * use multiplies its search, which has to finish in a fraction of a second.
+   */
+  noFill?: boolean;
+  /** How far a bendy track is bent, degrees, before any flip. */
+  bend?: number;
   /** A lifting bridge: the stretch of its first path, from and to (mm along it), that rises. */
   liftSpan?: [number, number];
   /** Turned over from the catalog piece, see `mirrorPiece`. */

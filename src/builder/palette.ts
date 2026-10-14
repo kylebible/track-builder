@@ -15,7 +15,8 @@ import { hasEndsChoice, iconPiece, SHAPES, variantFor, type Ends, type Hand, typ
 const CATEGORY_NAMES: Record<PieceCategory, string> = {
   straight: 'Straights',
   curve: 'Curves',
-  ramp: 'Ramps',
+  double: 'Double track',
+  ramp: 'Ramps and bridges',
   switch: 'Switches',
   crossing: 'Crossings',
   buffer: 'Buffer stops',
@@ -62,11 +63,12 @@ export function pieceIcon(piece: PieceDef): SVGSVGElement {
   for (const d of lines) add('path', { d, class: 'icon-wood', 'stroke-width': D.TRACK_WIDTH });
   for (const d of lines) add('path', { d, class: 'icon-groove', 'stroke-width': D.GROOVE_SPACING + D.GROOVE_WIDTH });
   for (const d of lines) add('path', { d, class: 'icon-wood', 'stroke-width': D.GROOVE_SPACING - D.GROOVE_WIDTH });
-  // Uphill chevrons on a ramp.
+  // Uphill chevrons on a ramp, pointing the way it climbs.
   for (const path of piece.paths.filter((p) => p.rise)) {
     const length = pathLength(path);
     for (const f of [0.35, 0.6]) {
       const p = poseAt(path, length * f);
+      if (path.rise! < 0) p.angle += Math.PI;
       const at = (along: number, side: number) => {
         const q = applyPose(p, { x: along, y: side, angle: 0 });
         return `${q.x.toFixed(1)} ${(-q.y).toFixed(1)}`;
@@ -104,7 +106,10 @@ function detail(shape: Shape, piece: PieceDef): string {
   const letters = hasEndsChoice(shape) ? piece.brioIds : shape.ids.flatMap((id) => getPiece(id).brioIds);
   const parts = [letters.join(' / ')];
   if (shape.category === 'straight') parts.push(`${Math.round(pathLength(piece.paths[0]))} mm`);
-  if (shape.category === 'ramp') parts.push(`up ${D.RAMP_RISE} mm`);
+  if (piece.bridge) parts.push(`${Math.round(pathLength(piece.paths[0]))} mm span`);
+  else if (shape.category === 'ramp') parts.push(piece.paths.length > 1 ? `${D.LEVEL_HEIGHT} mm under` : `up ${Math.max(...piece.connectors.map((c) => c.z ?? 0))} mm`);
+  if (shape.category === 'double') parts.push(`${D.DOUBLE_TRACK_SPACING} mm apart`);
+  if (shape.ids.some((id) => getPiece(id).partOf)) parts.push('bends to 45°');
   return parts.filter(Boolean).join(' · ');
 }
 

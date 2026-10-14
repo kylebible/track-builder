@@ -18,7 +18,7 @@ export interface Shape {
   ids: string[];
 }
 
-const VARIANT_SUFFIX = /-(pp|hh|peg)$/;
+const VARIANT_SUFFIX = /-(pp|hh|peg|b\d+)$/;
 
 /** Catalog pieces grouped by shape, in catalog order. */
 export const SHAPES: readonly Shape[] = (() => {
@@ -68,13 +68,14 @@ export function variantFor(shape: Shape, ends: Ends, target: Gender | null): str
 /**
  * How far the piece turns, summed over its other ends, when a train enters
  * by `attachId`. Positive is left. Zero for straights, crossings and
- * three-way switches.
+ * three-way switches. Ends facing the same way as the one entered by (the
+ * other track's start, on double track) don't count.
  */
 export function turnFrom(piece: PieceDef, attachId: string): number {
   const attach = piece.connectors.find((c) => c.id === attachId)!;
   const heading = attach.pose.angle + Math.PI;
   return piece.connectors
-    .filter((c) => c !== attach)
+    .filter((c) => c !== attach && Math.abs(normalizeAngle(c.pose.angle - attach.pose.angle)) > 1e-6)
     .reduce((sum, c) => sum + normalizeAngle(c.pose.angle - heading), 0);
 }
 
