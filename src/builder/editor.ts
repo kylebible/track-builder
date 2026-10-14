@@ -10,6 +10,8 @@ import {
   anchorPoints,
   canExtend,
   centerOf,
+  clearSpotFor,
+  copyPieces,
   dragContext,
   EMPTY_LAYOUT,
   extendFrom,
@@ -21,6 +23,7 @@ import {
   mirrorPieces,
   openEnds,
   partnerOf,
+  pastePieces,
   sameEnd,
   raisePieces,
   removePieces,
@@ -30,6 +33,7 @@ import {
   transformPieces,
   worldEnd,
   worldEnds,
+  type Clip,
   type DragContext,
   type EndRef,
   type Layout,
@@ -50,6 +54,17 @@ const NONE: Selection = { kind: 'none' };
 /** Pointer travel, in pixels, before a press on a piece becomes a drag. */
 const DRAG_THRESHOLD_PX = 5;
 const ROTATE_STEP = deg(45);
+/** Where the copied pieces are kept, so they can be pasted after a reload or in another tab. */
+const CLIP_KEY = 'track-builder:clipboard';
+
+/** A rubber-band box being dragged across the view to select what's inside it. */
+interface Box {
+  pointerId: number;
+  from: Vec2;
+  to: Vec2;
+  /** What was selected before, which the box adds to. */
+  base: ReadonlySet<string>;
+}
 
 interface Drag {
   pointerId: number;
@@ -67,6 +82,8 @@ interface Drag {
   flex: FlexContext | null;
   /** The flexed track, while the drag is held by its joints. */
   flexed: FlexResult | null;
+  /** A shift-click or select-mode tap on this piece adds it to the selection or takes it out, if it isn't dragged. */
+  toggles: string | null;
   /** Lined up over a straight, for scenery that sits on track. */
   seated: boolean;
   /** How far the drag lifts the pieces: onto a raised end, or onto raised track. */
@@ -113,7 +130,25 @@ export interface EditorDom {
   status: HTMLElement;
   /** Shown while the layout is empty. */
   empty: HTMLElement;
-  buttons: Record<'undo' | 'redo' | 'rotateLeft' | 'rotateRight' | 'flip' | 'swap' | 'raise' | 'lower' | 'section' | 'fill' | 'remove' | 'fit', HTMLButtonElement>;
+  buttons: Record<
+    | 'undo'
+    | 'redo'
+    | 'select'
+    | 'rotateLeft'
+    | 'rotateRight'
+    | 'flip'
+    | 'swap'
+    | 'raise'
+    | 'lower'
+    | 'section'
+    | 'copy'
+    | 'paste'
+    | 'duplicate'
+    | 'fill'
+    | 'remove'
+    | 'fit',
+    HTMLButtonElement
+  >;
   /** Where the auto-fill choices are listed. */
   fillPanel: HTMLElement;
   /** Pieces in trouble the layout check can't see, such as off the table or in the water. */
@@ -141,6 +176,13 @@ export class Editor {
   private drag: Drag | null = null;
   private paletteDrag: PaletteDrag | null = null;
   private filling: Filling | null = null;
+  private box: Box | null = null;
+  /** Select mode: taps add pieces to the selection and drags on the floor draw a box, for touch screens. */
+  private multi = false;
+  private clip: Clip | null = loadClip();
+  /** The floor under the pointer when it last moved over the view, for pasting where it points. */
+  private pointerAt: Vec2 | null = null;
+  private readonly boxEl = document.createElement('div');
   private readonly view: LayoutView;
   private readonly palette: Palette;
   private readonly raycaster = new THREE.Raycaster();
@@ -170,6 +212,10 @@ export class Editor {
     window.addEventListener('keydown', (e) => this.key(e));
     const b = dom.buttons;
     b.undo.onclick = () => this.undo();
+    b.select.onclick = () => this.toggleSelectMode();
+    b.copy.onclick = () => this.copy();
+    b.paste.onclick = () => this.paste(false);
+    b.duplicate.onclick = () => this.duplicate();
     b.redo.onclick = () => this.redo();
     b.rotateLeft.onclick = () => this.rotate(1);
     b.rotateRight.onclick = () => this.rotate(-1);
@@ -181,6 +227,9 @@ export class Editor {
     b.fill.onclick = () => this.startFill();
     b.remove.onclick = () => this.remove();
     b.fit.onclick = () => dom.onFit();
+    this.boxEl.className = 'select-box';
+    this.boxEl.hidden = true;
+    dom.canvas.append(this.boxEl);
     this.refresh();
   }
 
@@ -421,6 +470,119 @@ export class Editor {
     this.refresh();
   }
 
+  // ---- multi-select, copy and paste ---------------------------------------
+
+  /** Turn select mode on or off: taps add to the selection, and drags on the floor draw a box instead of turning the view. */
+  toggleSelectMode(): void {
+    this.multi = !this.multi;
+    if (this.multi) this.flash('Select mode: tap pieces to add them, or drag a box round them. Tap Select again to finish.');
+    else this.refresh();
+  }
+
+  selectAll(): void {
+    this.selectPieces(this.layout.pieces.map((p) => p.uid));
+  }
+
+  /** Keep the selected pieces to paste later. */
+  copy(): boolean {
+    const uids = this.targets();
+    if (!uids.size) return false;
+    this.clip = copyPieces(this.layout, uids);
+    saveClip(this.clip);
+    this.flash(`Copied ${plural(uids.size, 'piece')}. Paste (Ctrl+V) puts a copy down.`);
+    return true;
+  }
+
+  cut(): void {
+    const uids = this.targets();
+    if (!this.copy()) return;
+    this.commit(removePieces(this.layout, uids), NONE);
+    this.flash(`Cut ${plural(uids.size, 'piece')}. Paste (Ctrl+V) puts them back down.`);
+  }
+
+  /**
+   * Put a copy of the copied pieces down: under the pointer when pasting
+   * by key over the view, otherwise in the middle of the view. It steps
+   * aside from track already there, and is left selected to drag into place.
+   */
+  paste(atPointer: boolean): void {
+    if (!this.clip) {
+      this.flash('Select some pieces and Copy them first.');
+      return;
+    }
+    const near = (atPointer && this.pointerAt) || { x: this.controls.target.x, y: -this.controls.target.z };
+    this.putDown(this.clip, clearSpotFor(this.layout, this.clip, near), 'Pasted');
+  }
+
+  /** Copy the selection and put the copy down right beside it. */
+  duplicate(): void {
+    const uids = this.targets();
+    if (!uids.size) return;
+    const clip = copyPieces(this.layout, uids);
+    this.putDown(clip, clearSpotFor(this.layout, clip), 'Duplicated');
+  }
+
+  private putDown(clip: Clip, shift: Pose, verb: string): void {
+    const { layout, uids } = pastePieces(this.layout, clip, shift);
+    this.commit(layout, { kind: 'pieces', uids: new Set(uids) });
+    this.flash(`${verb} ${plural(uids.length, 'piece')}: drag them into place, or near an open end to join on.`);
+  }
+
+  /** Add a piece to the selection, or take it out if it is already in. */
+  private toggle(uid: string): void {
+    const s = this.selection;
+    const uids = new Set(s.kind === 'pieces' ? s.uids : s.kind === 'end' ? [s.end.uid] : []);
+    if (uids.has(uid)) uids.delete(uid);
+    else uids.add(uid);
+    this.selection = uids.size ? { kind: 'pieces', uids } : NONE;
+    this.refresh();
+  }
+
+  /** The pieces whose middles are inside the box, on screen. */
+  private piecesInBox(box: Box): string[] {
+    const rect = this.dom.canvas.getBoundingClientRect();
+    const [left, right] = [Math.min(box.from.x, box.to.x), Math.max(box.from.x, box.to.x)];
+    const [top, bottom] = [Math.min(box.from.y, box.to.y), Math.max(box.from.y, box.to.y)];
+    const inside: string[] = [];
+    for (const piece of this.layout.pieces) {
+      const mid = centerOf(this.layout, new Set([piece.uid]));
+      const v = new THREE.Vector3(mid.x, baseOf(piece), -mid.y).project(this.camera);
+      if (v.z > 1) continue;
+      const x = rect.left + ((v.x + 1) / 2) * rect.width;
+      const y = rect.top + ((1 - v.y) / 2) * rect.height;
+      if (x >= left && x <= right && y >= top && y <= bottom) inside.push(piece.uid);
+    }
+    return inside;
+  }
+
+  private moveBox(e: PointerEvent): void {
+    const box = this.box!;
+    box.to = { x: e.clientX, y: e.clientY };
+    const rect = this.dom.canvas.getBoundingClientRect();
+    Object.assign(this.boxEl.style, {
+      left: `${Math.min(box.from.x, box.to.x) - rect.left}px`,
+      top: `${Math.min(box.from.y, box.to.y) - rect.top}px`,
+      width: `${Math.abs(box.to.x - box.from.x)}px`,
+      height: `${Math.abs(box.to.y - box.from.y)}px`,
+    });
+    this.boxEl.hidden = false;
+    const uids = new Set([...box.base, ...this.piecesInBox(box)]);
+    this.selection = uids.size ? { kind: 'pieces', uids } : NONE;
+    this.refresh();
+  }
+
+  private endBox(e: PointerEvent): void {
+    const box = this.box!;
+    this.box = null;
+    this.boxEl.hidden = true;
+    this.controls.enabled = true;
+    // Barely moved: a tap on empty floor, which keeps the selection to add to.
+    if (Math.hypot(e.clientX - box.from.x, e.clientY - box.from.y) < DRAG_THRESHOLD_PX) {
+      this.selection = box.base.size ? { kind: 'pieces', uids: box.base } : NONE;
+    }
+    this.refresh();
+  }
+
   // ---- auto-fill -----------------------------------------------------------
 
   /** Start filling a gap from the selected open end: the next end tapped is where it goes to. */
@@ -625,7 +787,16 @@ export class Editor {
     if (e.button !== 0 || !this.overFloor(e)) return;
     this.pressStart = { x: e.clientX, y: e.clientY };
     const hit = this.hit(e);
-    if (!hit) return;
+    const adding = e.shiftKey || e.ctrlKey || e.metaKey || this.multi;
+    if (!hit) {
+      // Shift-drag on the floor, or any drag in select mode, draws a box to select with.
+      if ((e.shiftKey || this.multi) && !this.filling && !this.drag && !this.box) {
+        this.controls.enabled = false;
+        const s = this.selection;
+        this.box = { pointerId: e.pointerId, from: this.pressStart, to: this.pressStart, base: s.kind === 'pieces' ? s.uids : new Set() };
+      }
+      return;
+    }
     // Pressing track or an end belongs to the editor, not the camera.
     this.controls.enabled = false;
     if (this.filling) {
@@ -642,11 +813,13 @@ export class Editor {
     const grab = this.floorPoint(e, height);
     if (!grab) return;
     const s = this.selection;
+    // Pressing a selected piece drags the whole selection. Shift (or select
+    // mode) adds the piece to what's selected, and a tap takes it back out.
     const uids =
       s.kind === 'pieces' && s.uids.has(hit.uid)
         ? s.uids
-        : e.shiftKey
-          ? sectionOf(this.layout, hit.uid)
+        : adding && s.kind === 'pieces'
+          ? new Set([...s.uids, hit.uid])
           : new Set([hit.uid]);
     this.drag = {
       pointerId: e.pointerId,
@@ -661,6 +834,7 @@ export class Editor {
       height,
       flex: flexContext(this.layout, uids, grab),
       flexed: null,
+      toggles: adding ? hit.uid : null,
       seated: false,
       dz: 0,
     };
@@ -671,6 +845,11 @@ export class Editor {
       this.movePaletteDrag(e);
       return;
     }
+    if (this.box?.pointerId === e.pointerId) {
+      this.moveBox(e);
+      return;
+    }
+    if (!this.drag && !this.paletteDrag) this.pointerAt = this.overFloor(e) ? this.floorPoint(e) : null;
     const drag = this.drag;
     if (!drag || e.pointerId !== drag.pointerId) return;
     if (!drag.active) {
@@ -697,6 +876,11 @@ export class Editor {
       this.endPaletteDrag(e);
       return;
     }
+    if (this.box?.pointerId === e.pointerId) {
+      this.pressStart = null;
+      this.endBox(e);
+      return;
+    }
     const drag = this.drag;
     const press = this.pressStart;
     this.pressStart = null;
@@ -705,6 +889,8 @@ export class Editor {
       this.drag = null;
       if (drag.active) {
         this.commit(this.dragged(drag), { kind: 'pieces', uids: drag.uids });
+      } else if (drag.toggles) {
+        this.toggle(drag.toggles);
       } else {
         // A click on a piece selects it.
         this.selection = { kind: 'pieces', uids: drag.uids };
@@ -713,7 +899,7 @@ export class Editor {
       return;
     }
     // A click (not a camera drag) on empty floor clears the selection.
-    if (press && e.button === 0 && Math.hypot(e.clientX - press.x, e.clientY - press.y) < DRAG_THRESHOLD_PX && !this.hit(e)) {
+    if (press && e.button === 0 && !this.multi && Math.hypot(e.clientX - press.x, e.clientY - press.y) < DRAG_THRESHOLD_PX && !this.hit(e)) {
       this.selection = NONE;
       this.refresh();
     }
@@ -735,6 +921,16 @@ export class Editor {
       e.shiftKey ? this.redo() : this.undo();
     } else if (mod && k === 'y') {
       this.redo();
+    } else if (mod && k === 'c') {
+      this.copy();
+    } else if (mod && k === 'x') {
+      this.cut();
+    } else if (mod && k === 'v') {
+      this.paste(true);
+    } else if (mod && k === 'd') {
+      this.duplicate();
+    } else if (mod && k === 'a') {
+      this.selectAll();
     } else if (mod) {
       return;
     } else if (k === 'r') {
@@ -763,9 +959,12 @@ export class Editor {
       this.showFill(this.filling.index + 1);
     } else if (this.filling?.options.length && (k === 'arrowup' || k === 'arrowleft')) {
       this.showFill(this.filling.index - 1);
+    } else if (k === 'b') {
+      this.toggleSelectMode();
     } else if (k === 'escape' && this.filling) {
       this.cancelFill();
     } else if (k === 'escape') {
+      this.multi = false;
       this.selection = NONE;
       this.refresh();
     } else {
@@ -855,7 +1054,9 @@ export class Editor {
     const b = this.dom.buttons;
     b.undo.disabled = !this.history.canUndo;
     b.redo.disabled = !this.history.canRedo;
-    for (const button of [b.rotateLeft, b.rotateRight, b.flip, b.raise, b.lower, b.section, b.remove]) button.disabled = !has;
+    for (const button of [b.rotateLeft, b.rotateRight, b.flip, b.raise, b.lower, b.section, b.copy, b.duplicate, b.remove]) button.disabled = !has;
+    b.paste.disabled = !this.clip;
+    b.select.setAttribute('aria-pressed', String(this.multi));
     b.swap.disabled = this.targets().size !== 1;
     b.fit.disabled = layout.pieces.length === 0;
     b.fill.disabled = !filling && (s.kind !== 'end' || open.length < 2);
@@ -886,7 +1087,6 @@ export class Editor {
   /** A hint for what to do next, and the layout's counts. */
   private describe(layout: Layout, open: number, joints: number): [string, string] {
     const s = this.selection;
-    const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
     const counts = layout.pieces.length
       ? [plural(layout.pieces.length, 'piece'), plural(joints, 'joint'), plural(open, 'open end')].join(' · ')
       : '';
@@ -905,6 +1105,7 @@ export class Editor {
       if (!this.filling.options.length) return ['Now tap the open end to join it to. Esc to stop.', counts];
       return ['Pick a way to fill the gap, then Use this. Esc to stop.', counts];
     }
+    if (this.box) return [s.kind === 'pieces' ? `${plural(s.uids.size, 'piece')} in the box.` : 'Drag round the pieces to select.', counts];
     if (drag?.seated) return ['Lined up over the track: let go to place it.', counts];
     if (drag) return [drag.snap ? 'Let go to join.' : 'Drag near an open end to snap on.', counts];
     if (s.kind === 'end') {
@@ -912,9 +1113,32 @@ export class Editor {
       return [`Building from this ${what}: tap a piece to add it, or Fill gap to join it to another end.`, counts];
     }
     if (s.kind === 'pieces') {
-      return [`${plural(s.uids.size, 'piece')} selected: drag to move, or use the toolbar.`, counts];
+      const more = this.multi ? 'tap more to add them, or drag them to move' : 'drag to move, or use the toolbar';
+      return [`${plural(s.uids.size, 'piece')} selected: ${more}.`, counts];
     }
+    if (this.multi) return ['Select mode: tap pieces, or drag a box round them.', counts];
     if (!layout.pieces.length) return ['', ''];
     return ['Tap a dot on an open end to build from it.', counts];
+  }
+}
+
+const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+function loadClip(): Clip | null {
+  try {
+    const clip = JSON.parse(localStorage.getItem(CLIP_KEY) ?? 'null') as Clip | null;
+    // Pieces the catalog no longer has can't be pasted.
+    clip?.pieces.forEach((p) => getPiece(p.pieceId));
+    return clip?.pieces.length ? clip : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveClip(clip: Clip): void {
+  try {
+    localStorage.setItem(CLIP_KEY, JSON.stringify(clip));
+  } catch {
+    // Private windows can refuse storage; the copy still works until reload.
   }
 }

@@ -32,6 +32,12 @@
           <button id="fill" title="Fill gap: pick an open end, then the end to join it to (G)"><svg viewBox="0 0 24 24"><path d="M3 17h3"/><path d="M18 17h3"/><path d="M9 17c0-5 6-5 6 0" stroke-dasharray="2.5 2.5"/><circle cx="7.5" cy="17" r="1.5"/><circle cx="16.5" cy="17" r="1.5"/></svg><span>Fill gap</span></button>
           <button id="remove" class="danger" title="Delete (Delete)"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg><span>Delete</span></button>
         </div>
+        <div class="group">
+          <button id="select-mode" aria-pressed="false" title="Select several: tap pieces to add them, or drag a box round them (B, or Shift-drag)"><svg viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3"/><path d="M12 4h2"/><path d="M4 12v2"/><path d="M8 20H5a1 1 0 0 1-1-1v-1"/><path d="M18 4h1a1 1 0 0 1 1 1v3"/><path d="m12 12 8 3-3.5 1.5L15 20Z"/></svg><span>Select</span></button>
+          <button id="copy" title="Copy (Ctrl+C)"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2"/></svg><span class="sr">Copy</span></button>
+          <button id="paste" title="Paste (Ctrl+V)"><svg viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg><span class="sr">Paste</span></button>
+          <button id="duplicate" title="Duplicate: put a copy right beside it (Ctrl+D)"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2"/><path d="M14.5 11.5v6"/><path d="M11.5 14.5h6"/></svg><span class="sr">Duplicate</span></button>
+        </div>
         <div class="group planning">
           <button id="parts-button" popovertarget="parts-panel" title="Parts list"><svg viewBox="0 0 24 24"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="M4 6h.01"/><path d="M4 12h.01"/><path d="M4 18h.01"/></svg><span>Parts</span><b class="count"></b></button>
           <button id="check-button" popovertarget="check-panel" title="Layout check"><svg viewBox="0 0 24 24"><path d="M9 11.5 11.5 14 16 9.5"/><circle cx="12" cy="12" r="9.5"/></svg><span>Check</span><b class="badge"></b></button>
@@ -70,7 +76,9 @@
           <li><b>Left or right</b> The palette's Curves turn setting decides which way new curves and switches go. Mirror flips one you've already placed.</li>
           <li><b>Up a level</b> Ramps climb 64 mm, and track built on from the top stays up there. Raise and Lower lift whatever is selected a level at a time; supports go under raised track by themselves and show up in the parts list.</li>
           <li><b>Fill a gap</b> Tap the dot on an open end, press Fill gap, then tap the end to join it to. A few runs of track that fit are shown; pick one and Use this.</li>
-          <li><b>Move</b> Drag a piece; bring it near an open end and it snaps on. Shift-drag moves everything joined to it.</li>
+          <li><b>Move</b> Drag a piece; bring it near an open end and it snaps on. Connected (A, or double-click) selects everything joined to it.</li>
+          <li><b>Select several</b> Shift-click pieces to add them, or Shift-drag a box round them. On a phone, tap Select first. Drag any selected piece to move them all; Rotate, Mirror, Raise and Delete act on them together.</li>
+          <li><b>Copy</b> Copy and Paste put a copy of the selection down where you point, or Duplicate puts one right beside it. Drag it near an open end to join it on.</li>
           <li><b>Scene</b> Build on a play table, a rug, a kids' play mat, the floor, the grid mat, grass, town streets, by a river or lake, or in snow. The check says when track runs off a table or rug, or into water.</li>
           <li><b>Templates</b> Start from a simple oval, a figure eight, passing loops, a goods yard or a hill, under Save &amp; share or on the empty table. Undo brings back what you had.</li>
           <li><b>Look around</b> Drag the floor to orbit, scroll or pinch to zoom, right-drag to pan.</li>
@@ -83,6 +91,10 @@
           <dt>T</dt><dd>Toggle left / right</dd>
           <dt>U / D</dt><dd>Raise / lower</dd>
           <dt>A</dt><dd>Select connected</dd>
+          <dt>B / Shift drag</dt><dd>Select several</dd>
+          <dt>Ctrl C / X / V</dt><dd>Copy / cut / paste</dd>
+          <dt>Ctrl D</dt><dd>Duplicate</dd>
+          <dt>Ctrl A</dt><dd>Select all</dd>
           <dt>G</dt><dd>Fill gap</dd>
           <dt>V</dt><dd>Fit view</dd>
           <dt>M</dt><dd>Sound on / off</dd>

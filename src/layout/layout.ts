@@ -1,5 +1,5 @@
 import { canMate, DEFAULT_PLAY, jointError, placeConnectorAt, placeToMate, worldConnector, type Play } from '../geometry/joint';
-import { applyPose, invertPose, normalizeAngle, rotationAbout, type Pose, type Vec2 } from '../geometry/pose';
+import { applyPose, IDENTITY, invertPose, normalizeAngle, rotationAbout, type Pose, type Vec2 } from '../geometry/pose';
 import { poseAt } from '../geometry/path';
 import { getPiece, mirrorPiece } from '../pieces/catalog';
 import type { Connector, PieceDef } from '../pieces/types';
@@ -296,6 +296,65 @@ export function swapEnd(layout: Layout, uid: string): Layout | null {
   const next = options[(index + 1) % options.length];
   const pose = placeToMate(partner.connector.pose, def, next.id);
   return { pieces: layout.pieces.map((p) => (p.uid === uid ? atHeight({ ...p, pose }, baseFor(next, partner.connector)) : p)) };
+}
+
+/** Pieces lifted out of a layout to put down again, as copy and paste do. */
+export interface Clip {
+  pieces: readonly PlacedPiece[];
+}
+
+export function copyPieces(layout: Layout, uids: ReadonlySet<string>): Clip {
+  return { pieces: layout.pieces.filter((p) => uids.has(p.uid)) };
+}
+
+/**
+ * Put a copy of the clipped pieces into the layout, moved by `transform`,
+ * with new uids. Joints between them come along, since joints are only
+ * where ends meet.
+ */
+export function pastePieces(layout: Layout, clip: Clip, transform: Pose = IDENTITY): { layout: Layout; uids: string[] } {
+  let next = Number(nextUid(layout).slice(1));
+  const added = clip.pieces.map((p) => ({ ...p, uid: `p${next++}`, pose: applyPose(transform, p.pose) }));
+  return { layout: { pieces: [...layout.pieces, ...added] }, uids: added.map((p) => p.uid) };
+}
+
+/** Nearest any two anchor points of the two groups come, in plan. */
+function closestApproach(a: Vec2[], b: Vec2[]): number {
+  let best = Infinity;
+  for (const p of a) for (const q of b) best = Math.min(best, Math.hypot(p.x - q.x, p.y - q.y));
+  return best;
+}
+
+/** How far apart a pasted group's ends must be from everything else, mm. */
+const PASTE_CLEARANCE = 120;
+
+/**
+ * A shift that puts the clip down near `near` (by default where it was
+ * copied from) without landing on track already there: centred on `near`
+ * if that is clear, otherwise stepped out to the side, below, and so on.
+ */
+export function clearSpotFor(layout: Layout, clip: Clip, near?: Vec2): Pose {
+  const points = clip.pieces.flatMap(anchorPoints);
+  const taken = layout.pieces.flatMap(anchorPoints);
+  if (!points.length) return IDENTITY;
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const center = { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
+  const base = near ? { x: near.x - center.x, y: near.y - center.y } : { x: 0, y: 0 };
+  const stepX = Math.max(...xs) - Math.min(...xs) + PASTE_CLEARANCE * 2;
+  const stepY = Math.max(...ys) - Math.min(...ys) + PASTE_CLEARANCE * 2;
+  const clearAt = (d: Vec2) => closestApproach(points.map((p) => ({ x: p.x + d.x, y: p.y + d.y })), taken) > PASTE_CLEARANCE;
+  const tries: Vec2[] = near ? [base] : [];
+  for (let k = 1; k <= 8; k++) {
+    tries.push(
+      { x: base.x + k * stepX, y: base.y },
+      { x: base.x, y: base.y - k * stepY },
+      { x: base.x - k * stepX, y: base.y },
+      { x: base.x, y: base.y + k * stepY },
+    );
+  }
+  const spot = tries.find(clearAt) ?? tries[0];
+  return { x: spot.x, y: spot.y, angle: 0 };
 }
 
 export function removePieces(layout: Layout, uids: ReadonlySet<string>): Layout {
