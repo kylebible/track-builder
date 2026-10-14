@@ -9,6 +9,7 @@ import {
   EMPTY_LAYOUT,
   extendFrom,
   findJoints,
+  findSeat,
   findSnap,
   flipPiece,
   mirrorPieces,
@@ -205,6 +206,38 @@ describe('snapping while dragging', () => {
     const snap = findSnap(dragContext(layout, second), IDENTITY)!;
     const closed = transformPieces(layout, second, snap.transform);
     expect(openEnds(closed)).toHaveLength(0);
+  });
+});
+
+describe('scenery', () => {
+  it('never joins anything and rotates and flips where it stands', () => {
+    let { layout } = addPiece(EMPTY_LAYOUT, 'straight-medium', IDENTITY);
+    ({ layout } = addPiece(layout, 'cottage', { x: 72, y: 0, angle: 0 }));
+    expect(findJoints(layout)).toHaveLength(0);
+    expect(openEnds(layout)).toHaveLength(2);
+    const turned = rotatePieces(layout, new Set(['p2']), deg(45));
+    expect(turned.pieces[1].pose).toEqual(expect.objectContaining({ x: 72, y: 0 }));
+    const flipped = flipPiece(layout, 'p2');
+    expect(flipped.pieces[1]).toEqual(expect.objectContaining({ flipped: true, pose: layout.pieces[1].pose }));
+  });
+
+  it('seats a tunnel over the middle of a nearby straight, lined up with it', () => {
+    let { layout } = addPiece(EMPTY_LAYOUT, 'straight-medium', { x: 0, y: 0, angle: deg(45) });
+    ({ layout } = addPiece(layout, 'tunnel', { x: 0, y: 0, angle: deg(-130) }));
+    const mid = { x: 72 * Math.cos(deg(45)), y: 72 * Math.sin(deg(45)) };
+    const seat = findSeat(layout, 'p2', { x: mid.x + 10, y: mid.y - 8, angle: 0 })!;
+    const pose = transformPieces(layout, new Set(['p2']), seat).pieces[1].pose;
+    expect(pose.x).toBeCloseTo(mid.x, 9);
+    expect(pose.y).toBeCloseTo(mid.y, 9);
+    // It was turned nearer the track's backward heading, so it stays that way round.
+    expect(pose.angle).toBeCloseTo(deg(-135), 9);
+    expect(findSeat(layout, 'p2', { x: 300, y: 0, angle: 0 })).toBeNull();
+  });
+
+  it("doesn't seat scenery that stands beside the track", () => {
+    let { layout } = addPiece(EMPTY_LAYOUT, 'straight-medium', IDENTITY);
+    ({ layout } = addPiece(layout, 'leafy-tree', { x: 72, y: 5, angle: 0 }));
+    expect(findSeat(layout, 'p2', IDENTITY)).toBeNull();
   });
 });
 

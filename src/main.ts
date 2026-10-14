@@ -6,6 +6,7 @@ import { codeFromHash, decodeLayout, LayoutFileError } from './planning/file';
 import { PlanningPanel } from './planning/panel';
 import { autosave, loadAutosave } from './planning/storage';
 import { Trains } from './trains/trains';
+import { loadSceneryModels } from './render/sceneryModels';
 import './style.css';
 
 const container = document.getElementById('app')!;
@@ -74,6 +75,9 @@ function focusOn(at: Vec2): void {
 
 let saved = true;
 let planning: PlanningPanel | null = null;
+
+// Scenery pieces are built from these, so they have to be in before the editor.
+await loadSceneryModels();
 
 const editor = new Editor(scene, camera, orbit, {
   canvas: container,

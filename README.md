@@ -50,6 +50,12 @@ Live site: https://kylebible.github.io/track-builder/
 Layout files are JSON (`src/planning/file.ts`): each piece's catalog id,
 position in mm and heading in degrees.
 
+- Scenery (tunnel, station, level crossing, bridge pier, signal, trees,
+  cottage) is at the bottom of the palette. It drags, rotates, flips and
+  deletes like track. Drag a tunnel, station or pier near the middle of a
+  straight and it lines up over it. The level crossing is a real track piece
+  (a medium straight) and joins like one.
+
 Joints are never stored. Two ends count as joined whenever they mate within
 the joint play, so a loop that closes in the app closes on the floor.
 
@@ -129,6 +135,28 @@ piece flipped over (`mirrorPiece`), as with real double-sided Brio track.
   the side (`PARALLEL_SWITCH_OFFSET`).
 - **Switch letters.** Each switch shape comes as a pair that differ in where
   the pegs are; which letter has the peg on the trunk isn't confirmed.
+
+## Scenery models
+
+The scenery models are original, generic designs in the style of the
+accessories wooden railway brands sell, built at real size in millimetres
+to match the 40 x 12 mm track. Each is made from simple solids in
+`src/scenery/models.ts` and exported to `public/models/scenery/*.glb`,
+which is what the app loads:
+
+```sh
+npm run scenery   # rebuild the GLB files from src/scenery/models.ts
+```
+
+Each file is one mesh per paint colour with no textures, 6 to 46 kB. The
+GLB files can also be opened in Blender, reworked and exported over the
+generated ones (glTF Binary, +Y up, scale 1 unit = 1 mm). Models that sit on
+track are centred on the track centerline, running along x; the level
+crossing starts at its piece's first end. Running `npm run scenery` again
+overwrites hand-edited files.
+
+The bridge pier is placed on the floor only for now: track can't be raised
+onto it yet.
 
 Dimensions come from the
 [woodenrailway.info Brio track guide](https://woodenrailway.info/track/brio-track-guide).

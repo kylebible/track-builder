@@ -3,6 +3,7 @@ import { pathLength, poseAt } from '../geometry/path';
 import { applyPose, type Pose } from '../geometry/pose';
 import * as D from '../pieces/dimensions';
 import type { Connector, PieceDef, TrackPath } from '../pieces/types';
+import { sceneryModel } from './sceneryModels';
 
 // Plan coordinates (x, y) in mm map to three.js (x, height, -y), so a
 // counter-clockwise turn in plan is counter-clockwise seen from above.
@@ -203,6 +204,12 @@ export function buildPieceObject(piece: PieceDef): THREE.Group {
   });
   for (const c of piece.connectors) group.add(connectorMesh(c));
   if (piece.category === 'buffer') group.add(bufferBarrier(piece));
+  if (piece.model) {
+    const model = sceneryModel(piece.model);
+    // Turned over, the model mirrors across the piece's own x axis.
+    if (piece.mirrored) model.scale.z = -1;
+    group.add(model);
+  }
   group.traverse((o) => {
     if (o instanceof THREE.Mesh) {
       o.castShadow = true;
