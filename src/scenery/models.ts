@@ -314,6 +314,42 @@ export function cottage(): THREE.Group {
   );
 }
 
+// ---- engine shed -------------------------------------------------------------
+
+export const ENGINE_SHED = {
+  length: D.LONG_STRAIGHT,
+  /** Inside: room for the tallest engine, with a little to spare. */
+  innerWidth: 64,
+  innerHeight: 96,
+};
+
+/** A brick engine shed over a straight: open at both ends, with a smoke vent along the roof. */
+export function engineShed(): THREE.Group {
+  const { length, innerWidth, innerHeight } = ENGINE_SHED;
+  const wall = 6;
+  const sides = [-1, 1].map((s) => box('red', [length, innerHeight, wall], [0, 0, s * (innerWidth / 2 + wall / 2)]));
+  const windows = [-1, 1].flatMap((s) =>
+    [-60, 0, 60].map((x) => box('glass', [24, 26, 1], [x, 46, s * (innerWidth / 2 + wall + 0.5)])),
+  );
+  const roof = gableRoof('darkWood', innerWidth + 2 * wall + 12, 34, length + 10, [0, innerHeight, 0]);
+  const vent = box('black', [length - 40, 8, 14], [0, innerHeight + 30, 0]);
+  const ventCap = box('darkWood', [length - 30, 3, 22], [0, innerHeight + 38, 0]);
+  // Arched portals round each open end.
+  const r = innerWidth / 2;
+  const portal = new THREE.Shape()
+    .moveTo(-r - wall - 4, 0)
+    .lineTo(-r, 0)
+    .lineTo(-r, innerHeight - r)
+    .absarc(0, innerHeight - r, r, Math.PI, 0, true)
+    .lineTo(r, 0)
+    .lineTo(r + wall + 4, 0)
+    .lineTo(r + wall + 4, innerHeight + 4)
+    .lineTo(-r - wall - 4, innerHeight + 4)
+    .closePath();
+  const portals = [-1, 1].map((side) => extrudeAlongX('cream', portal, 4, side * (length / 2 + 1)));
+  return group('engine-shed', ...sides, ...windows, roof, vent, ventCap, ...portals);
+}
+
 /** Every scenery model by file name, for the exporter. */
 export const SCENERY_MODELS: Record<string, () => THREE.Group> = {
   tunnel,
@@ -324,4 +360,5 @@ export const SCENERY_MODELS: Record<string, () => THREE.Group> = {
   'leafy-tree': leafyTree,
   'pine-tree': pineTree,
   cottage,
+  'engine-shed': engineShed,
 };

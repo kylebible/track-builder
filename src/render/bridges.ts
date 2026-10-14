@@ -1,11 +1,13 @@
 import * as THREE from 'three';
+import { heightAt, pathLength, poseAt } from '../geometry/path';
 import * as D from '../pieces/dimensions';
-import type { BridgeStyle } from '../pieces/types';
+import type { BridgeStyle, PieceDef, TrackPath } from '../pieces/types';
 
 // The structure of a bridge span: what holds the deck up, and what stands
 // round it. Drawn in the piece's own frame, three.js axes: the deck runs
 // along +x from 0 to `length`, its bottom `deck` mm up, and plan +y is -z.
 // Through bridges (truss, covered) leave room for the tallest train.
+// Also the helix tower's column and the turntable's pit.
 
 /** Inside clearance of a through bridge: half width and height above the deck bottom. */
 const CLEAR_HALF_WIDTH = 26;
@@ -199,6 +201,97 @@ function covered(length: number, deck: number): THREE.Object3D[] {
     parts.push(box(TIMBER, [8, 6, 2 * half], [x, deck - 3, 0]));
   }
   return parts;
+}
+
+/** Plan (x, y) and height to three.js, as pieceMesh does. */
+const at = (x: number, y: number, h = 0) => new THREE.Vector3(x, h, -y);
+
+/** A viaduct along a curved deck: one arch per stretch, each set along its chord. */
+function curvedViaduct(path: TrackPath, deck: number): THREE.Object3D[] {
+  const length = pathLength(path);
+  const count = Math.max(2, Math.round(length / 110));
+  const parts: THREE.Object3D[] = [];
+  for (let i = 0; i < count; i++) {
+    const p0 = poseAt(path, (length * i) / count);
+    const p1 = poseAt(path, (length * (i + 1)) / count);
+    // A little longer than the chord, so neighbours meet round the outside.
+    const chord = Math.hypot(p1.x - p0.x, p1.y - p0.y) * 1.04;
+    const segment = new THREE.Group();
+    const pieces = viaduct(chord, deck, 1);
+    for (const piece of pieces) piece.position.x -= chord / 2;
+    segment.add(...pieces);
+    segment.position.copy(at((p0.x + p1.x) / 2, (p0.y + p1.y) / 2));
+    segment.rotation.y = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+    parts.push(segment);
+  }
+  return parts;
+}
+
+/** A helix tower's column, with an arm out under the track every sixth of a turn. */
+function helixColumn(path: TrackPath): THREE.Object3D[] {
+  if (path.kind !== 'arc') return [];
+  const centre = at(0, path.radius * Math.sign(path.sweep));
+  const length = pathLength(path);
+  const top = heightAt(path, length);
+  const column = new THREE.Mesh(new THREE.CylinderGeometry(26, 30, top, 24), TIMBER);
+  column.position.copy(centre).setY(top / 2);
+  const parts: THREE.Object3D[] = [column];
+  const arms = Math.round((Math.abs(path.sweep) / (2 * Math.PI)) * 6);
+  for (let i = 1; i <= arms; i++) {
+    const s = (length * i) / arms;
+    const h = heightAt(path, s);
+    if (h < 10) continue;
+    const p = poseAt(path, s);
+    // Out to just past the far edge of the track.
+    const out = at(p.x, p.y, h - 4);
+    const dir = out.clone().sub(centre).setY(0).normalize();
+    const end = out.clone().addScaledVector(dir, D.TRACK_WIDTH / 2);
+    parts.push(bar(TIMBER, centre.clone().setY(h - 4), end, 8));
+    // And a post down to the floor at the end of the arm.
+    parts.push(box(TIMBER, [6, h - 8, 6], [end.x, (h - 8) / 2, end.z]));
+  }
+  return parts;
+}
+
+/** A turntable pit: a stone ring round a dark floor, with a circular rail for the bridge's wheels. */
+function turntablePit(diameter: number): THREE.Object3D[] {
+  const r = diameter / 2;
+  const floor = new THREE.Mesh(new THREE.CylinderGeometry(r - 2, r - 2, 2, 48), material(0x4b4239, 0.95));
+  floor.position.set(r, 1, 0);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(r - 10, r, 48), STONE);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(r, D.TRACK_HEIGHT - 0.5, 0);
+  const wall = new THREE.Mesh(new THREE.CylinderGeometry(r, r, D.TRACK_HEIGHT - 0.5, 48, 1, true), STONE);
+  wall.position.set(r, (D.TRACK_HEIGHT - 0.5) / 2, 0);
+  const rail = new THREE.Mesh(new THREE.TorusGeometry(r - 22, 1.5, 6, 64), STEEL_GREY);
+  rail.rotation.x = Math.PI / 2;
+  rail.position.set(r, 3, 0);
+  const pivot = new THREE.Mesh(new THREE.CylinderGeometry(10, 10, 4, 24), STEEL_GREY);
+  pivot.position.set(r, 2, 0);
+  // Girders along the turning bridge, and a little cabin on one side.
+  const girders = [-1, 1].map((side) => box(STEEL_RED, [diameter - 14, 8, 3], [r, D.TRACK_HEIGHT + 2, side * (D.TRACK_WIDTH / 2 + 2)]));
+  const cabin = box(BARN_RED, [16, 22, 12], [r, D.TRACK_HEIGHT + 11, D.TRACK_WIDTH / 2 + 10]);
+  const roof = box(ROOF, [20, 3, 16], [r, D.TRACK_HEIGHT + 23, D.TRACK_WIDTH / 2 + 10]);
+  return [floor, ring, wall, rail, pivot, ...girders, cabin, roof];
+}
+
+/** What a piece with a structure of its own stands on or sits in, in its own frame. */
+export function pieceStructure(piece: PieceDef): THREE.Group {
+  const group = new THREE.Group();
+  const path = piece.paths[0];
+  if (piece.structure === 'helix') {
+    group.name = 'helix';
+    group.add(...helixColumn(path));
+  } else if (piece.structure === 'turntable') {
+    group.name = 'turntable';
+    group.add(...turntablePit(pathLength(path)));
+  } else if (piece.bridge === 'viaduct' && path.kind === 'arc') {
+    group.name = 'bridge-viaduct-curved';
+    group.add(...curvedViaduct(path, path.z ?? 0));
+  } else if (piece.bridge) {
+    return bridgeStructure(piece.bridge, pathLength(path), path.z ?? 0);
+  }
+  return group;
 }
 
 /** The structure for a bridge span `length` mm long with its deck bottom `deck` mm up. */

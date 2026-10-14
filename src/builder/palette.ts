@@ -106,7 +106,7 @@ function detail(shape: Shape, piece: PieceDef): string {
   const parts = [letters.join(' / ')];
   if (shape.category === 'straight') parts.push(`${Math.round(pathLength(piece.paths[0]))} mm`);
   if (piece.bridge) parts.push(`${Math.round(pathLength(piece.paths[0]))} mm span`);
-  else if (shape.category === 'ramp') parts.push(piece.paths.length > 1 ? `${D.LEVEL_HEIGHT} mm under` : `up ${D.RAMP_RISE} mm`);
+  else if (shape.category === 'ramp') parts.push(piece.paths.length > 1 ? `${D.LEVEL_HEIGHT} mm under` : `up ${Math.max(...piece.connectors.map((c) => c.z ?? 0))} mm`);
   if (shape.category === 'double') parts.push(`${D.DOUBLE_TRACK_SPACING} mm apart`);
   if (shape.ids.some((id) => getPiece(id).partOf)) parts.push('bends to 45°');
   return parts.filter(Boolean).join(' · ');

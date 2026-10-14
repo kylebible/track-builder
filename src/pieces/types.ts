@@ -20,15 +20,20 @@ export interface Connector {
  * `rise` is how much it climbs from start to end (a ramp; negative goes
  * down). `z` is how high it starts above the bottom of the piece, for
  * track carried up on a piece's own legs (a bridge deck); missing is level
- * with the bottom.
+ * with the bottom. `bumps` humps along the way make a bumpy track. A
+ * `spiral` climb (a helix) rises the same amount every full turn, so each
+ * turn clears the one below it all the way round.
  */
 export type TrackPath =
-  | { kind: 'straight'; from: Pose; length: number; rise?: number; z?: number }
+  | { kind: 'straight'; from: Pose; length: number; rise?: number; z?: number; bumps?: number; spiral?: boolean }
   /** `sweep` is signed: positive turns left (counter-clockwise). */
-  | { kind: 'arc'; from: Pose; radius: number; sweep: number; rise?: number; z?: number };
+  | { kind: 'arc'; from: Pose; radius: number; sweep: number; rise?: number; z?: number; bumps?: number; spiral?: boolean };
 
 /** How a bridge span is built, for its model. */
 export type BridgeStyle = 'viaduct' | 'suspension' | 'truss' | 'covered';
+
+/** A piece drawn round a structure of its own rather than as plain track. */
+export type Structure = 'helix' | 'turntable';
 
 export type PieceCategory = 'straight' | 'curve' | 'double' | 'ramp' | 'switch' | 'crossing' | 'buffer' | 'scenery';
 
@@ -61,6 +66,11 @@ export interface PieceDef {
    * needs no support blocks, and nor does track joined to its ends.
    */
   bridge?: BridgeStyle;
+  /**
+   * A helix tower (stands on its own column, so needs no support blocks) or
+   * a turntable (a pit with a turning bridge, drawn instead of its paths).
+   */
+  structure?: Structure;
   /** How far a bendy track is bent, degrees, before any flip. */
   bend?: number;
   /** Turned over from the catalog piece, see `mirrorPiece`. */

@@ -222,3 +222,126 @@ describe('bridge spans', () => {
     expect(lines.find((l) => l.pieceId === 'bridge-covered')).toMatchObject({ name: 'Covered bridge', category: 'ramp', count: 1 });
   });
 });
+
+describe('more track types', () => {
+  it('half curves turn a sixteenth of a circle, with peg and hole versions', () => {
+    for (const id of ['curve-large-half', 'curve-short-half']) {
+      expect(getPiece(id).connectors[1].pose.angle).toBeCloseTo(D.HALF_CURVE_ANGLE, 9);
+      expect(shape(id).ids).toEqual([id, `${id}-pp`, `${id}-hh`]);
+    }
+    // Two half curves make a curve.
+    let layout = addPiece(EMPTY_LAYOUT, 'curve-large-half', IDENTITY).layout;
+    layout = extendFrom(layout, { uid: 'p1', connectorId: 'b' }, 'curve-large-half')!.layout;
+    const end = worldEnd(layout, { uid: 'p2', connectorId: 'b' }).connector.pose;
+    const curve = getPiece('curve-large').connectors[1].pose;
+    expect(distance(end, curve)).toBeLessThan(1e-9);
+  });
+
+  it('the curved ramp climbs a level over a quarter turn', () => {
+    const piece = getPiece('ramp-curve');
+    expect(piece.connectors.map((c) => c.z ?? 0)).toEqual([0, D.LEVEL_HEIGHT]);
+    expect(piece.connectors[1].pose.angle).toBeCloseTo(Math.PI / 2, 9);
+    expect(shape('ramp-curve').ids).toEqual(['ramp-curve', 'ramp-curve-pp']);
+  });
+
+  it('the helix comes out two levels right over where it went in, with no supports', () => {
+    const piece = getPiece('helix');
+    const [a, b] = piece.connectors;
+    expect(distance(a.pose, b.pose)).toBeLessThan(1e-6);
+    expect(b.z).toBe(2 * D.LEVEL_HEIGHT);
+    let layout = addPiece(EMPTY_LAYOUT, 'straight-long', IDENTITY).layout;
+    const up = extendFrom(layout, { uid: 'p1', connectorId: 'b' }, 'helix')!;
+    layout = extendFrom(up.layout, up.next!, 'straight-long')!.layout;
+    expect(supportsOf(layout).filter((s) => s.uids.includes(up.uid))).toEqual([]);
+    // Each turn clears the one below it.
+    expect(checkLayout(layout).filter((i) => i.kind !== 'open-end')).toEqual([]);
+  });
+
+  it('a battery engine climbs the helix', () => {
+    let layout = addPiece(EMPTY_LAYOUT, 'straight-long', IDENTITY).layout;
+    const up = extendFrom(layout, { uid: 'p1', connectorId: 'b' }, 'helix')!;
+    layout = up.layout;
+    const sim = new TrainSim(layout);
+    const train = sim.addTrain([{ stockId: 'battery-engine', reversed: false }], { edgeKey: 'p1:0', s: 100, reversed: false }) as Train;
+    sim.setThrottle(train.id, 1);
+    let highest = 0;
+    for (let i = 0; i < 60 * 60 && !train.wrecked && train.status.kind !== 'stuck'; i++) {
+      sim.advance(1 / 60);
+      highest = Math.max(highest, train.vehicles[0].geo.z);
+    }
+    expect(highest).toBeGreaterThan(2 * D.LEVEL_HEIGHT - 2);
+  });
+
+  it('the five-point switch is Q, an A long, with five ways on', () => {
+    const piece = getPiece('switch-five-point');
+    expect(piece.brioIds).toEqual(['Q']);
+    expect(getPiece('switch-five-point-peg').brioIds).toEqual([]);
+    const angles = piece.connectors.slice(1).map((c) => (c.pose.angle * 180) / Math.PI).sort((x, y) => x - y);
+    expect(angles.map((x) => Math.round(x * 10) / 10)).toEqual([-45, -22.5, 0, 22.5, 45]);
+    for (const c of piece.connectors.slice(1)) expect(Math.abs(c.pose.x - D.MEDIUM_STRAIGHT)).toBeLessThan(2);
+    const net = new TrackNetwork(addPiece(EMPTY_LAYOUT, 'switch-five-point', IDENTITY).layout);
+    expect(net.switches()[0].choices).toHaveLength(5);
+  });
+
+  it('the newer parallel switches are an A long and line up with double track', () => {
+    const single = getPiece('switch-parallel-new');
+    expect(single.brioIds).toEqual(['F1']);
+    expect(single.connectors[2].pose).toMatchObject({ x: expect.closeTo(D.MEDIUM_STRAIGHT, 9), y: expect.closeTo(D.DOUBLE_TRACK_SPACING, 9) });
+    const triple = getPiece('switch-parallel-triple');
+    expect(triple.brioIds).toEqual(['F2']);
+    expect(triple.connectors.slice(1).map((c) => Math.round(c.pose.y))).toEqual([0, 46, -46]);
+    for (const c of triple.connectors.slice(1)) expect(normalizeAngle(c.pose.angle)).toBeCloseTo(0, 9);
+  });
+
+  it('the curved crossing is two E curves crossing, entered from the same side', () => {
+    const piece = getPiece('cross-curved');
+    expect(piece.brioIds).toEqual(['H3']);
+    const [a, b, c, d] = piece.connectors;
+    expect(a.pose.angle).toBeCloseTo(Math.PI, 9);
+    expect(c.pose.angle).toBeCloseTo(Math.PI, 9);
+    expect(distance(b.pose, { ...c.pose, x: b.pose.x })).toBeLessThan(1e-9);
+    expect(distance(d.pose, { ...a.pose, x: d.pose.x })).toBeLessThan(1e-9);
+    expect(turnFrom(piece, 'a')).toBeCloseTo(0, 9);
+  });
+
+  it('the double crossover (K) lets a train change tracks', () => {
+    const piece = getPiece('double-crossover');
+    expect(piece.brioIds).toEqual(['K']);
+    const net = new TrackNetwork(addPiece(EMPTY_LAYOUT, 'double-crossover', IDENTITY).layout);
+    // A switch where the crossover leaves the near track, and where it joins the far one.
+    expect(net.switches()).toHaveLength(2);
+  });
+
+  it('bumpy track rises and falls but starts and ends level', () => {
+    const path = getPiece('bumpy').paths[0];
+    const length = pathLength(path);
+    expect(heightAt(path, 0)).toBe(0);
+    expect(heightAt(path, length)).toBeCloseTo(0, 9);
+    expect(heightAt(path, length / (2 * D.BUMPY_COUNT))).toBeCloseTo(D.BUMP_HEIGHT, 9);
+    const layout = addPiece(EMPTY_LAYOUT, 'bumpy', IDENTITY).layout;
+    expect(supportsOf(layout)).toEqual([]);
+  });
+
+  it('the turntable has eight ends an eighth of a turn apart, straight across from each other', () => {
+    const piece = getPiece('turntable');
+    expect(piece.connectors).toHaveLength(8);
+    const centre = { x: D.TURNTABLE_DIAMETER / 2, y: 0 };
+    for (const c of piece.connectors) expect(Math.hypot(c.pose.x - centre.x, c.pose.y - centre.y)).toBeCloseTo(D.TURNTABLE_DIAMETER / 2, 9);
+    const net = new TrackNetwork(addPiece(EMPTY_LAYOUT, 'turntable', IDENTITY).layout);
+    expect(net.edges).toHaveLength(4);
+  });
+
+  it('the curved viaduct is a span a level up that needs no supports', () => {
+    const piece = getPiece('bridge-viaduct-curved');
+    expect(piece.bridge).toBe('viaduct');
+    expect(piece.connectors.map((c) => c.z)).toEqual([D.LEVEL_HEIGHT, D.LEVEL_HEIGHT]);
+    let layout = addPiece(EMPTY_LAYOUT, 'straight-long', IDENTITY).layout;
+    const up = extendFrom(layout, { uid: 'p1', connectorId: 'b' }, 'ramp')!;
+    layout = extendFrom(up.layout, up.next!, 'bridge-viaduct-curved')!.layout;
+    expect(supportsOf(layout)).toEqual([]);
+  });
+
+  it('the engine shed seats over a straight', () => {
+    expect(getPiece('engine-shed')).toMatchObject({ category: 'scenery', seatsOnTrack: true, model: 'engine-shed' });
+  });
+});

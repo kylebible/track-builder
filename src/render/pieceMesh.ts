@@ -3,7 +3,7 @@ import { heightAt, pathLength, poseAt } from '../geometry/path';
 import { applyPose, type Pose } from '../geometry/pose';
 import * as D from '../pieces/dimensions';
 import type { Connector, PieceDef, TrackPath } from '../pieces/types';
-import { bridgeStructure } from './bridges';
+import { pieceStructure } from './bridges';
 import { sceneryModel } from './sceneryModels';
 
 // Plan coordinates (x, y) in mm map to three.js (x, height, -y), so a
@@ -112,7 +112,7 @@ function capTriangles(ring: THREE.Vector3[], out: Buffers, facingBack: boolean):
 /** Sweep the track profile along one running path. */
 function sweepGeometry(path: TrackPath): THREE.BufferGeometry {
   const length = pathLength(path);
-  const steps = path.kind === 'straight' && !path.rise ? 1 : Math.max(2, Math.ceil(length / SAMPLE_STEP_MM));
+  const steps = path.kind === 'straight' && !path.rise && !path.bumps ? 1 : Math.max(2, Math.ceil(length / SAMPLE_STEP_MM));
   // A ramp's profile is lifted, not tilted: the slope is gentle enough that
   // the shear doesn't show, and the ends stay square to join flat track.
   const rings = Array.from({ length: steps + 1 }, (_, i) => {
@@ -240,7 +240,9 @@ export function buildSupport(x: number, y: number, angle: number, height: number
 export function buildPieceObject(piece: PieceDef): THREE.Group {
   const group = new THREE.Group();
   group.name = piece.id;
-  piece.paths.forEach((path, i) => {
+  // A turntable draws its turning bridge, lined up with its first line, over its pit.
+  const paths = piece.structure === 'turntable' ? piece.paths.slice(0, 1) : piece.paths;
+  paths.forEach((path, i) => {
     // Paths of a switch overlap near the trunk; nudge later paths' depth so
     // the shared top surface doesn't flicker.
     const material = i === 0 ? woodMaterial : woodMaterial.clone();
@@ -254,12 +256,9 @@ export function buildPieceObject(piece: PieceDef): THREE.Group {
   for (const c of piece.connectors) group.add(connectorMesh(c));
   // Track carried up on the piece's own legs (a bridge deck) stands on a
   // leg at each end of the raised stretch.
-  if (piece.bridge) {
-    const deck = piece.paths[0];
-    const structure = bridgeStructure(piece.bridge, pathLength(deck), deck.z ?? 0);
-    // Turned over, the structure mirrors across the piece's own x axis.
-    if (piece.mirrored) structure.scale.z = -1;
-    group.add(structure);
+  if (piece.bridge || piece.structure) {
+    // Built from the piece's own paths, so it is already turned over with them.
+    group.add(pieceStructure(piece));
   }
   for (const path of piece.paths.filter((p) => p.z && !p.rise && !piece.bridge)) {
     for (const s of [0, pathLength(path)]) {
