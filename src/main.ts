@@ -10,6 +10,7 @@ import { loadSceneryModels } from './render/sceneryModels';
 import { DEFAULT_ENVIRONMENT, type EnvironmentId } from './environments/environments';
 import { EnvironmentPicker } from './environments/picker';
 import { EnvironmentScene } from './environments/scene';
+import { TemplatePicker } from './templates/picker';
 import './style.css';
 
 const container = document.getElementById('app')!;
@@ -117,8 +118,18 @@ planning = new PlanningPanel(editor, {
   saved: () => saved,
   environment: () => environment,
   onEnvironment: (id) => setEnvironment(id),
+  onTemplates: () => templatesPanel.showPopover(),
 });
 planning.update(editor.layout);
+
+const templatesPanel = document.getElementById('templates-panel')!;
+new TemplatePicker(templatesPanel, (template) => {
+  const hadOwn = editor.layout.pieces.length > 0;
+  editor.load(template.build());
+  templatesPanel.hidePopover();
+  editor.flash(hadOwn ? `Started from the ${template.name.toLowerCase()}. Undo brings back yours.` : `Started from the ${template.name.toLowerCase()}.`);
+  fitView();
+});
 
 /** Open the layout a share link carries, then tidy the address so a reload keeps later edits. */
 async function openSharedLayout(): Promise<void> {
