@@ -173,6 +173,41 @@ describe('supports', () => {
   });
 });
 
+describe('supports under buildings', () => {
+  const raisedWith = (pieceId: string) => {
+    let { layout } = addPiece(EMPTY_LAYOUT, 'straight-long', IDENTITY);
+    layout = addPiece(layout, pieceId, { x: D.LONG_STRAIGHT / 2, y: 0, angle: 0 }).layout;
+    return raisePieces(layout, new Set(['p1', 'p2']), D.LEVEL_HEIGHT)!;
+  };
+
+  it('a station on raised track stands on its own stacks beside the track', () => {
+    const layout = raisedWith('station');
+    const under = supportsOf(layout).filter((s) => s.uids.includes('p2'));
+    expect(under.length).toBeGreaterThanOrEqual(2);
+    for (const s of under) {
+      expect(s.flat).toBe(true);
+      expect(s.height).toBe(D.LEVEL_HEIGHT);
+      // On the platform side, clear of the track.
+      expect(s.at.y).toBeGreaterThan(D.TRACK_WIDTH / 2);
+    }
+    expect(partsList(layout).supports).toBe(2 + under.length);
+  });
+
+  it('a tunnel on raised track has stacks under both walls', () => {
+    const under = supportsOf(raisedWith('tunnel')).filter((s) => s.uids.includes('p2'));
+    expect(under.some((s) => s.at.y > D.TRACK_WIDTH / 2)).toBe(true);
+    expect(under.some((s) => s.at.y < -D.TRACK_WIDTH / 2)).toBe(true);
+  });
+
+  it('a building on the floor, and a bridge pier, need none', () => {
+    let { layout } = addPiece(EMPTY_LAYOUT, 'cottage', IDENTITY);
+    expect(supportsOf(layout)).toEqual([]);
+    layout = raisePieces(layout, new Set(['p1']), D.LEVEL_HEIGHT)!;
+    expect(supportsOf(layout).length).toBeGreaterThan(0);
+    expect(supportsOf(raisedWith('bridge-pier')).filter((s) => s.uids.includes('p2'))).toEqual([]);
+  });
+});
+
 describe('layout check with levels', () => {
   it('track a full level over other track is a bridge, not an overlap', () => {
     const { layout, top } = upAndOver();
@@ -188,11 +223,53 @@ describe('layout check with levels', () => {
     expect(overlaps[0].message).toMatch(/too low/);
   });
 
-  it('a support standing on lower track is flagged', () => {
+  it('a support over lower track becomes an arch, not a problem', () => {
     const { layout, top } = upAndOver();
     const joint = worldEnd(layout, { uid: top, connectorId: 'a' }).connector.pose;
-    const issues = checkLayout(crossingUnder(layout, joint));
-    expect(issues.some((i) => i.kind === 'support')).toBe(true);
+    const crossed = crossingUnder(layout, joint);
+    const issues = checkLayout(crossed);
+    expect(issues.some((i) => i.kind === 'support')).toBe(false);
+    const arch = supportsOf(crossed).find((s) => s.arch)!;
+    expect(arch.uids).toContain(top);
+    // Legs either side of the lower track, clear of it, with the beam over the joint.
+    const under = crossed.pieces[crossed.pieces.length - 1];
+    for (const leg of arch.arch!.legs) {
+      const off = Math.abs((leg.x - under.pose.x) * Math.sin(under.pose.angle) - (leg.y - under.pose.y) * Math.cos(under.pose.angle));
+      expect(off).toBeGreaterThanOrEqual(D.ARCH_CLEARANCE + D.SUPPORT_LENGTH / 2 - 1);
+    }
+    expect(arch.blocks).toBe(2);
+    const list = partsList(crossed);
+    expect(list.beams).toEqual([{ length: Math.ceil(arch.arch!.span / 10) * 10, count: 1 }]);
+    expect(partsText(list)).toContain('1 × Arch beam');
+  });
+
+  it('a support over more lower track than an arch can span is flagged', () => {
+    const { layout, top } = upAndOver();
+    const joint = worldEnd(layout, { uid: top, connectorId: 'a' }).connector.pose;
+    let crossed = layout;
+    for (const k of [-2, -1, 0, 1, 2]) {
+      const along = k * 50;
+      crossed = crossingUnder(crossed, { ...joint, x: joint.x + along * Math.cos(joint.angle), y: joint.y + along * Math.sin(joint.angle) });
+    }
+    const issues = checkLayout(crossed).filter((i) => i.kind === 'support');
+    expect(issues.length).toBeGreaterThan(0);
+    expect(issues[0].message).toMatch(/no room for an arch/);
+  });
+
+  it('a helix built from curved ramps arches over its own lower turn', () => {
+    let layout = addPiece(EMPTY_LAYOUT, 'straight-long', IDENTITY).layout;
+    let end: EndRef = { uid: 'p1', connectorId: 'b' };
+    const uids: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const next = extendFrom(layout, end, 'ramp-curve')!;
+      layout = next.layout;
+      end = next.next!;
+      uids.push(next.uid);
+    }
+    // Four quarter turns climb four levels and come round over the start.
+    const over = supportsOf(layout).filter((s) => s.arch);
+    expect(over.length).toBeGreaterThan(0);
+    expect(checkLayout(layout).filter((i) => i.kind === 'support')).toEqual([]);
   });
 
   it('ends that line up at different heights are flagged', () => {

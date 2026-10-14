@@ -20,6 +20,15 @@ function supportIcon(): SVGSVGElement {
   return svg;
 }
 
+/** An arch: two stacks and a beam across their tops. */
+function beamIcon(): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 40 34');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.innerHTML = '<rect class="icon-support" x="4" y="6" width="32" height="5" rx="1.5"/><rect class="icon-support" x="6" y="13" width="7" height="18" rx="1.5"/><rect class="icon-support" x="27" y="13" width="7" height="18" rx="1.5"/>';
+  return svg;
+}
+
 // The planning panels behind the toolbar's Parts, Check and Save buttons.
 // Each one redraws from the layout whenever it changes.
 
@@ -44,7 +53,8 @@ export interface PlanningDom {
 const CATEGORY_NAMES: Record<PieceCategory, string> = {
   straight: 'Straights',
   curve: 'Curves',
-  ramp: 'Ramps',
+  double: 'Double track',
+  ramp: 'Ramps and bridges',
   switch: 'Switches',
   crossing: 'Crossings',
   buffer: 'Buffer stops',
@@ -185,6 +195,13 @@ export class PlanningPanel {
       text.append(el('span', 'part-name', 'Support block'), el('span', 'part-detail', `${LEVEL_HEIGHT} mm tall, stacked under raised track`));
       row.append(supportIcon(), text, el('span', 'part-count', `×${list.supports}`));
       rows.append(row);
+      for (const beam of list.beams) {
+        const row = el('li');
+        const text = el('div', 'part-text');
+        text.append(el('span', 'part-name', 'Arch beam'), el('span', 'part-detail', `${beam.length} mm plank across two stacks, over lower track`));
+        row.append(beamIcon(), text, el('span', 'part-count', `×${beam.count}`));
+        rows.append(row);
+      }
       section.append(rows);
       sections.push(section);
     }

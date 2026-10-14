@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "scenery": "node scripts/scenery.mjs"
+    "scenery": "node scripts/scenery.mjs",
+    "perf": "node scripts/perf.mjs"
   },
   "dependencies": {
     "three": "^0.186.1"

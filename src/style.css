@@ -267,3 +267,27 @@ body.touring #empty { visibility: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .tour-ring, .tour-card { transition: none; }
 }
+
+/* ---- generate a section ------------------------------------------------ */
+
+#generate-panel { position: absolute; top: 60px; right: 12px; margin: 0; max-height: calc(100% - 130px); z-index: 1; }
+#generate-panel[hidden] { display: none; }
+.generate-form { display: grid; gap: 8px; }
+.generate-form .setting { display: grid; gap: 4px; }
+.generate-form .setting-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.generate-form output { color: var(--ink); font-variant-numeric: tabular-nums; }
+.generate-form input[type='range'] { width: 100%; accent-color: var(--accent); }
+.generate-form .seg button:disabled { opacity: 0.45; cursor: default; }
+.generate-result { margin: 10px 0 0; font-weight: 600; }
+.generate-result[data-state='problem'] { color: var(--danger); }
+.fill-actions .action:disabled { opacity: 0.5; cursor: default; }
+@media (max-width: 760px) {
+  /* Buttons and what came out on top, settings scrolling under them, the track in view above. */
+  #generate-panel:not([hidden]) { display: flex; flex-direction: column; top: auto; left: 8px; right: 8px; bottom: 54px; width: auto; max-height: 45%; padding: 10px 12px; }
+  #generate-panel .panel-head { display: none; }
+  #generate-panel .generate-result { order: -1; margin: 0 0 6px; }
+  #generate-panel .fill-actions { order: -2; margin: 0 0 6px; }
+  #generate-panel .panel-sub { display: none; }
+  #generate-panel .setting-label { display: block; }
+  .generate-form { gap: 5px; }
+}

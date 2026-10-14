@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { canMate } from '../geometry/joint';
 import { IDENTITY } from '../geometry/pose';
 import { checkLayout } from '../planning/check';
-import { findFills, MAX_PIECES } from './fill';
+import { findFills, NEAR_PIECES } from './fill';
 import { addPiece, EMPTY_LAYOUT, extendFrom, findJoints, openEnds, removePieces, worldEnd, type EndRef, type Extension, type Layout } from './layout';
 
 /** Keep adding pieces from the open end the last one left. */
@@ -24,6 +24,12 @@ function gap(layout: Layout): [EndRef, EndRef] {
   const open = openEnds(layout);
   expect(open).toHaveLength(2);
   return [ref(open[0]), ref(open[1])];
+}
+
+/** A fill joins the two ends: only the far ends of the end pieces left open, nothing else the check objects to. */
+function expectJoined(layout: Layout): void {
+  expect(openEnds(layout)).toHaveLength(2);
+  expect(checkLayout(layout).filter((i) => i.kind !== 'open-end')).toEqual([]);
 }
 
 /** A fill closes the gap: no open ends left, nothing the check objects to, every joint seated. */
@@ -103,18 +109,56 @@ describe('auto-fill between two open ends', () => {
     // A straight lying across where the missing curves would go.
     const [a, b] = gap(broken);
     const blocker = addPiece(broken, 'straight-long', { x: 120, y: 330, angle: -Math.PI / 4 }).layout;
-    for (const fill of findFills(blocker, a, b)) {
+    for (const fill of findFills(blocker, a, b, { budgetMs: 800 })) {
       expect(checkLayout(fill.layout).filter((i) => i.kind === 'overlap')).toEqual([]);
     }
   });
 
-  it('gives up on ends too far apart', () => {
+  it('has no limit on pieces: joins ends far apart', () => {
     const first = addPiece(EMPTY_LAYOUT, 'straight-medium', IDENTITY);
-    const second = addPiece(first.layout, 'straight-medium', { x: 216 * MAX_PIECES + 1000, y: 0, angle: 0 });
+    const second = addPiece(first.layout, 'straight-medium', { x: 216 * 14 + 144, y: 0, angle: 0 });
     const open = openEnds(second.layout);
     const a = open.find((e) => e.uid === first.uid && e.connector.gender === 'peg')!;
     const b = open.find((e) => e.uid === second.uid && e.connector.gender === 'hole')!;
-    expect(findFills(second.layout, ref(a), ref(b))).toEqual([]);
+    const fills = findFills(second.layout, ref(a), ref(b), { wanted: 1, budgetMs: 8000 });
+    expect(fills.length).toBeGreaterThan(0);
+    expect(fills[0].uids.length).toBeGreaterThan(NEAR_PIECES);
+    expectJoined(fills[0].layout);
+  });
+
+  it('finds long runs that have to turn round', () => {
+    // Two ends side by side a metre apart, both facing the same way: the run has to go out and come back.
+    const first = addPiece(EMPTY_LAYOUT, 'straight-medium', IDENTITY);
+    const second = addPiece(first.layout, 'straight-medium', { x: 144, y: 1000, angle: Math.PI });
+    const open = openEnds(second.layout);
+    const a = open.find((e) => e.uid === first.uid && e.connector.gender === 'peg')!;
+    const b = open.find((e) => e.uid === second.uid && e.connector.gender === 'hole')!;
+    const fills = findFills(second.layout, ref(a), ref(b), { wanted: 1, budgetMs: 8000 });
+    expect(fills.length).toBeGreaterThan(0);
+    expectJoined(fills[0].layout);
+  });
+
+  it('finds a way round track in the way', () => {
+    // Two ends a metre and a bit apart, with a wall of track across the middle.
+    let layout = addPiece(EMPTY_LAYOUT, 'straight-medium', IDENTITY).layout;
+    layout = addPiece(layout, 'straight-medium', { x: 1400, y: 0, angle: 0 }).layout;
+    for (let i = 0; i < 4; i++) layout = addPiece(layout, 'straight-long', { x: 700, y: -432 + i * 216, angle: Math.PI / 2 }).layout;
+    const open = openEnds(layout);
+    const a = open.find((e) => e.uid === 'p1' && e.connector.gender === 'peg')!;
+    const b = open.find((e) => e.uid === 'p2' && e.connector.gender === 'hole')!;
+    const fills = findFills(layout, ref(a), ref(b), { wanted: 1 });
+    expect(fills.length).toBeGreaterThan(0);
+    expect(openEnds(fills[0].layout)).toHaveLength(4);
+    expect(checkLayout(fills[0].layout).filter((i) => i.kind !== 'open-end')).toEqual([]);
+  });
+
+  it('gives up when it runs out of time', () => {
+    const first = addPiece(EMPTY_LAYOUT, 'straight-medium', IDENTITY);
+    const second = addPiece(first.layout, 'straight-medium', { x: 20000, y: 0, angle: 0 });
+    const open = openEnds(second.layout);
+    const a = open.find((e) => e.uid === first.uid && e.connector.gender === 'peg')!;
+    const b = open.find((e) => e.uid === second.uid && e.connector.gender === 'hole')!;
+    expect(findFills(second.layout, ref(a), ref(b), { budgetMs: 50 })).toEqual([]);
   });
 
   it('every joint a fill makes is peg into hole and within play', () => {

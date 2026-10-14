@@ -48,13 +48,57 @@ Live site: https://kylebible.github.io/track-builder/
 - Trains feel the slope: a battery engine gets up a ramp pulling one car,
   but a heavy train stalls partway and slides back down.
 
+## More track types
+
+- **Middle straight** (A3, 72 mm), alongside the mini, short, medium and
+  long straights.
+- **Bendy track**: put it down straight, then Bend (B) it 7.5° at a time up
+  to 45°, the way the Curves turn setting says (Shift+B straightens it). It
+  bends about the end it's joined by. Every bend counts as one bendy track
+  on the parts list.
+- **Double track**: double straight (K1), large double curve (EE) and short
+  double curve (EE1), two tracks 46 mm apart. A piece goes on by its first
+  track; Reverse (S) moves it across to join by the other.
+- **Arch bridge**: climbs a level over an N-length slope, runs across a
+  144 mm top on its own legs and comes back down, so floor track can pass
+  under the top. It needs no support blocks.
+- **Bridge spans**: a stone viaduct (three arches, 432 mm), a suspension
+  bridge (towers and cables, 432 mm), a steel truss bridge (216 mm) and a
+  red covered bridge (288 mm). Each is level track a level up on its own
+  structure, with a hole at both ends: climb to it with an N ramp and come
+  down with an N1, like the C straight in an up and over. No support blocks
+  go under a span or the ramp tops joined to it, and floor track can run
+  underneath (`src/render/bridges.ts` draws them).
+
+## Even more track types
+
+- **Half curves** (large and short): a sixteenth of a circle, for awkward gaps.
+- **Bumpy track**: an A length with three 4 mm humps that rock a train.
+- **Curved ramp**: a quarter turn on the E radius that climbs a level.
+- **Helix tower**: two turns round a central column, climbing a level per
+  turn and coming out right over where it went in. It eases off where each
+  turn passes over the one below, so every turn clears by a full level. No
+  support blocks.
+- **Curved viaduct**: a stone viaduct span turning an eighth of a circle.
+- **Five-point switch** (Q), **parallel switch** (F1/G1, an A long) and
+  **triple parallel switch** (F2/G2).
+- **Curved crossing** (H3): two E curves crossing in the middle.
+- **Double crossover** (K): a double straight with a crossover between
+  its tracks.
+- **Turntable**: a pit with eight ends round it. Trains run straight across
+  any line; the turning itself isn't simulated. An **engine shed** (scenery)
+  seats over a straight like the station does.
+
 **T switch** (T) and **star switch** (X) are built on a D straight with
 quarter curves into its ends. Every end where paths split has its own lever
 when trains run: three on a T, four on a star.
 
 Unmeasured guesses, all in `src/pieces/dimensions.ts` and
 `src/pieces/catalog.ts`: the ramp's exact profile (a smooth S here),
-the support block size, and which ends of N, T and X are pegs.
+the support block size, which ends of N, T and X are pegs, the bendy
+track's length and bend limit, the double curves' radii, and the sizes
+of the arch bridge and the bridge spans, and everything in "Even more track
+types" apart from the Brio letters' lengths and angles from the guide.
 
 ## Planning tools
 
@@ -129,6 +173,33 @@ Each train carries its own controls, floating over it: ◀ ■ ▶ for the
 engines, ⇄ to turn the whole train round and ✕ to take it off. The panel
 keeps Pause, the speed and Reset. Tap a switch's yellow knob to change
 which way it sends trains; the yellow stripe shows the way it is set.
+
+### Autoroute
+
+Turn on **Autoroute** in the Trains panel and trains set the switches
+themselves and wait for each other instead of colliding
+(`src/trains/dispatch.ts`). Every piece of track is a block: a train holds
+the pieces it stands on and reserves the way ahead, throwing each facing
+switch its way as it does. It reserves on through the next switch that
+splits the line and down the way it takes, to the switch at the far end,
+so it never waits halfway along single track where a train coming the
+other way could meet it. A piece another train holds stops it just short,
+showing "Waiting for Train 2". At a facing switch whose lever points at
+taken track, a train takes the other way if that one is free and leads on
+(not into a siding), so trains pass each other on passing loops, going
+the same way or opposite ways. With nothing set, it follows the levers;
+levers no train has reserved still change with a tap. It also stops a
+train before it runs off an open end.
+
+**Go to** on a train's card sends it to a station, the cargo loader, a
+crane or a trackside place by the shortest way, setting switches as it
+goes (pieces other trains hold count as longer, so it picks the free side
+of a loop). It runs whichever way round is shorter, backing up if need
+be, and stops with its middle on the spot, after any loading or
+unloading there; a blue pin marks where it's going. Trains can still
+deadlock: two passing loops can't let four trains through each other.
+Code can do the same with `sim.routeTo(trainId, destination)`;
+`sim.arrivals` lists the trains that got there.
 
 ### Accessories that work
 
@@ -232,7 +303,15 @@ npm install
 npm run dev     # local dev server
 npm test        # geometry and layout tests
 npm run build   # type-check and build to dist/
+npm run perf    # frame and edit timings for a 250-piece layout with trains
 ```
+
+`npm run perf` drives the app in headless Chromium, so it needs Playwright
+(`npm i -D playwright`, not installed by default). It reports draw calls,
+the JS time of a frame's train update, an edit and the layout check, on
+desktop and on a 4x CPU-throttled phone. Its frame rate uses software WebGL,
+so compare it between runs on the same machine rather than reading it as
+real-world fps.
 
 Pushes to `main` run the tests and deploy to GitHub Pages. In the repo's
 Settings → Pages, set **Source** to **GitHub Actions** once.
