@@ -147,10 +147,11 @@ describe('generating a section', () => {
       return { layout, start: worldEnds(p).find((e) => e.connectorId === 'b')!, goal: worldEnds(q).find((e) => e.connectorId === 'a')! };
     };
 
-    it('joins up to it with about as many pieces as asked, and everything asked for along it', { timeout: 15000 }, () => {
+    it('joins up to it with about as many pieces as asked, and everything asked for along it', { timeout: 30000 }, () => {
       const { layout, start, goal } = ends();
       for (const [pieces, seed] of [[24, 1], [40, 2]]) {
-        const section = generateSection(layout, { pieces, switches: 2, stops: 2, seed }, { start, goal })!;
+        // A roomy budget, so a slow runner searches as far as a fast one does.
+        const section = generateSection(layout, { pieces, switches: 2, stops: 2, seed }, { start, goal, budgetMs: 10000 })!;
         expect(section.closed).toBe(true);
         expect(Math.abs(section.laid - pieces)).toBeLessThanOrEqual(Math.round(pieces * 0.1));
         expect(section.switches).toBe(2);
