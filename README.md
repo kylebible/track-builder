@@ -8,16 +8,47 @@ Live site: https://kylebible.github.io/track-builder/
 ## Building a layout
 
 - Tap a piece in the palette to put it down. Open ends show as dots: blue
-  for pegs, orange for holes.
+  for pegs, orange for holes, green for the end you're building from.
 - Tap an open end, then palette pieces, to keep extending from it. Pieces
   that have no end that fits are greyed out.
+- **Curves turn** (Left / Right, or T) sets which way new curves and
+  switches turn as you build outward. Mirror (F) flips one already placed.
+- **Ends** picks the peg and hole pattern for straights and curves: one of
+  each, two pegs or two holes. Switches go on trunk first and buffer stops
+  pick whichever version fits; Reverse (S) turns a switch round, swapping it
+  for its twin with the pegs the other way if it has to.
 - Drag a piece to move it. Bring an end within 30 mm and 25 degrees of an
   open end of the other gender and it snaps on (`DEFAULT_SNAP_RANGE` in
   `src/layout/layout.ts`). Shift-drag, or double-click then drag, moves the
   whole connected section.
-- Toolbar and keys: rotate 45° (R, Shift+R), flip so curves and switches turn
-  the other way (F), attach by a different end (S), select the whole section
-  (A), delete (Delete), undo and redo (Ctrl+Z, Ctrl+Shift+Z).
+- Dragging a piece that's joined into track flexes its joints instead, the
+  way you nudge real track: each joint gives up to its play, the far end of
+  the track holds still, and the piece stops once the joints run out. If
+  that brings an open end within snap range of another and the joints can
+  give enough to reach it, a loop that nearly meets closes. Pull 25 mm past
+  the limit and the piece unclips and moves freely (`src/layout/flex.ts`).
+- Toolbar and keys: rotate 45° (R, Shift+R), select connected (A), delete
+  (Delete), fit the layout in view (V), undo and redo (Ctrl+Z,
+  Ctrl+Shift+Z). The ? button lists them all.
+
+## Planning tools
+
+- **Parts** lists how many of each piece the layout uses, with every peg and
+  hole version on its own line (left and right curves are the same piece
+  turned over, so they count together). Copy puts the list on the
+  clipboard as text.
+- **Check** looks for what would go wrong on the floor: ends that nearly
+  meet but sit outside the joint play (a loop that doesn't quite close),
+  two pegs or two holes meeting, track running into other track, and open
+  ends. Tap an item to fly to it; problems show as red rings while the
+  check is open. Thresholds live in `src/planning/check.ts`.
+- **Save & share**: the layout saves in the browser as you build. Download
+  a layout file, open one, start afresh (undo brings the old layout back),
+  or copy a share link. The link carries the whole layout in its `#layout=`
+  part, so nothing is uploaded anywhere.
+
+Layout files are JSON (`src/planning/file.ts`): each piece's catalog id,
+position in mm and heading in degrees.
 
 - Scenery (tunnel, station, level crossing, bridge pier, signal, trees,
   cottage) is at the bottom of the palette. It drags, rotates, flips and
@@ -27,6 +58,48 @@ Live site: https://kylebible.github.io/track-builder/
 
 Joints are never stored. Two ends count as joined whenever they mate within
 the joint play, so a loop that closes in the app closes on the floor.
+
+## Running trains
+
+Open **Trains** in the toolbar (Y) and drag engines and cars onto the
+track. Drop one by the end of a train (a green ring shows where) and it
+couples on; drop it anywhere else on the track and it starts a new train.
+On the track, tap a car to turn it round, or drag it to lift it off and put
+it somewhere else; drop it off the track to take it away. Trains that run
+into each other nose to tail couple up.
+
+Each train carries its own controls, floating over it: ◀ ■ ▶ for the
+engines, ⇄ to turn the whole train round and ✕ to take it off. The panel
+keeps Pause, the speed and Reset. Tap a switch's yellow knob to change
+which way it sends trains; the yellow stripe shows the way it is set.
+
+The models (`src/trains/trainMesh.ts`) are built in code to look like
+wooden Brio trains: painted beech bodies, red plastic wheels and magnet
+couplers. No 3D scans are used, since none could be found with a licence
+that allows it.
+
+Each vehicle has a north magnet at the front and a south one at the back
+(red and blue on the models), so a car turned the wrong way pushes away
+instead of coupling, like the real ones.
+
+The simulation (`src/trains/sim.ts`) keeps every axle on the track
+centreline, since the grooves do, and works out each vehicle's motion
+along the track from its motor, rolling drag, flange drag on curves (worse
+for a long rigid wheelbase on a tight curve), the pull and push through
+each magnet, and wheels climbing over gaps and rough joints. It flags a
+train, with a red ring where it happened, when it:
+
+- runs off an open end, or comes off at a gap or a badly lined-up joint,
+- stops against a buffer stop,
+- stalls: the motor is on but the drag is more than it can pull, with the
+  numbers and the main cause (a tight curve, a gap, or just too much load),
+- spins its wheels, or its engines push against each other,
+- crashes into another train or its own tail.
+
+It also says when a coupling comes apart, pulled too hard or with the
+magnets slid off each other on a bend. Every force figure in `PHYSICS` and
+every vehicle size in `src/trains/stock.ts` is an estimate to tune against
+real trains, not a measurement.
 
 ## Development
 

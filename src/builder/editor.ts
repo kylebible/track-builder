@@ -1,15 +1,18 @@
 import * as THREE from 'three';
 import { deg, IDENTITY, type Pose, type Vec2 } from '../geometry/pose';
 import { getPiece } from '../pieces/catalog';
+import type { Gender } from '../pieces/types';
 import { History } from '../layout/history';
 import {
   addPiece,
   anchorPoints,
   canExtend,
+  centerOf,
   dragContext,
   EMPTY_LAYOUT,
   extendFrom,
   findJoints,
+  findPiece,
   findSeat,
   findSnap,
   flipPiece,
@@ -21,13 +24,16 @@ import {
   sectionOf,
   swapEnd,
   transformPieces,
+  worldEnd,
   worldEnds,
   type DragContext,
   type EndRef,
   type Layout,
   type Snap,
 } from '../layout/layout';
+import { flexContext, flexDrag, type FlexContext, type FlexResult } from '../layout/flex';
 import { Palette } from './palette';
+import { attachEnd, flipFor, hasEndsChoice, isLoose, SHAPES, variantFor, type Shape } from './variants';
 import { LayoutView } from './view';
 
 // Turns pointer, keyboard and toolbar input into layout edits. Every edit
@@ -50,23 +56,64 @@ interface Drag {
   active: boolean;
   transform: Pose;
   snap: Snap | null;
+  /** Set when the dragged pieces are joined into track, whose joints flex. */
+  flex: FlexContext | null;
+  /** The flexed track, while the drag is held by its joints. */
+  flexed: FlexResult | null;
   /** Lined up over a straight, for scenery that sits on track. */
   seated: boolean;
 }
+
+/** A piece being dragged out of the palette, and where it would go if let go now. */
+interface PaletteDrag {
+  pointerId: number;
+  shape: Shape;
+  /** Null while the pointer is off the floor (over the palette or a panel). */
+  drop: Drop | null;
+}
+
+interface Drop {
+  layout: Layout;
+  uid: string;
+  /** What to select once it's down: the end to keep building from. */
+  after: Selection;
+  /** The open end it joins, if it was brought near one. */
+  joins: EndRef | null;
+}
+
+/**
+ * A piece dragged from the palette joins an open end when the pointer is
+ * this close to where the joined piece's middle would be, or to the end itself.
+ */
+const DROP_CAPTURE_MM = { middle: 110, end: 70 };
 
 export interface EditorDom {
   canvas: HTMLElement;
   palette: HTMLElement;
   status: HTMLElement;
-  buttons: Record<'undo' | 'redo' | 'rotateLeft' | 'rotateRight' | 'flip' | 'swap' | 'section' | 'remove', HTMLButtonElement>;
+  /** Shown while the layout is empty. */
+  empty: HTMLElement;
+  buttons: Record<'undo' | 'redo' | 'rotateLeft' | 'rotateRight' | 'flip' | 'swap' | 'section' | 'remove' | 'fit', HTMLButtonElement>;
+  /** Frame the whole layout in the view. */
+  onFit: () => void;
+  /** The layout to start with, such as the one saved last time. */
+  initial?: Layout;
+  /** Called whenever the layout itself changes: an edit, undo or redo, or a layout loaded. */
+  onChange?: (layout: Layout) => void;
+}
+
+/** A spot the layout check wants looked at. */
+export interface Mark {
+  at: Vec2;
+  /** Highlighted, because it is the one being looked at. */
+  focused: boolean;
 }
 
 export class Editor {
-  private readonly history = new History(EMPTY_LAYOUT);
+  private readonly history: History;
   private selection: Selection = NONE;
   private drag: Drag | null = null;
-  /** Remember flips per piece, so a run of right-hand curves stays right-handed. */
-  private readonly flipPreference = new Map<string, boolean>();
+  private paletteDrag: PaletteDrag | null = null;
   private readonly view: LayoutView;
   private readonly palette: Palette;
   private readonly raycaster = new THREE.Raycaster();
@@ -78,8 +125,14 @@ export class Editor {
     private readonly controls: { enabled: boolean; target: THREE.Vector3 },
     private readonly dom: EditorDom,
   ) {
+    this.history = new History(dom.initial ?? EMPTY_LAYOUT);
     this.view = new LayoutView(scene);
-    this.palette = new Palette(dom.palette, (id) => this.pick(id));
+    this.palette = new Palette(
+      dom.palette,
+      (shape) => this.pick(shape),
+      () => this.refresh(),
+      (shape, e) => this.startPaletteDrag(shape, e),
+    );
     // Capture phase on the canvas's container, so a press on a piece is
     // claimed before the orbit controls on the canvas start turning the camera.
     dom.canvas.addEventListener('pointerdown', (e) => this.pointerDown(e), { capture: true });
@@ -97,11 +150,55 @@ export class Editor {
     b.swap.onclick = () => this.swap();
     b.section.onclick = () => this.selectSection();
     b.remove.onclick = () => this.remove();
+    b.fit.onclick = () => dom.onFit();
     this.refresh();
   }
 
   get layout(): Layout {
     return this.history.current;
+  }
+
+  /** Per-frame animation; `time` in ms. */
+  tick(time: number): void {
+    this.view.tick(time);
+  }
+
+  /** The placed pieces' three.js objects, for framing the view. */
+  get pieceObjects(): THREE.Object3D {
+    return this.view.pickables[1];
+  }
+
+  /** Replace the whole layout, as one step that undo can take back. */
+  load(layout: Layout): void {
+    this.commit(layout, NONE);
+  }
+
+  /** Frame the whole layout in the view. */
+  fit(): void {
+    this.dom.onFit();
+  }
+
+  /** Select some pieces, as if they had been clicked. */
+  selectPieces(uids: Iterable<string>): void {
+    const exists = new Set(this.layout.pieces.map((p) => p.uid));
+    const set = new Set([...uids].filter((u) => exists.has(u)));
+    this.selection = set.size ? { kind: 'pieces', uids: set } : NONE;
+    this.refresh();
+  }
+
+  /** Select an open end to build from. */
+  selectEnd(end: EndRef): void {
+    this.selection = { kind: 'end', end };
+    this.selection = this.validSelection();
+    this.refresh();
+  }
+
+  private marks: Mark[] = [];
+
+  /** Show rings where the layout check found problems. */
+  setMarks(marks: Mark[]): void {
+    this.marks = marks;
+    this.refresh();
   }
 
   // ---- edits -------------------------------------------------------------
@@ -113,23 +210,74 @@ export class Editor {
     this.refresh();
   }
 
-  /** A palette tile was tapped: add onto the selected end, or drop the piece loose. */
-  pick(pieceId: string): void {
-    const ends = getPiece(pieceId).connectors;
-    if (this.selection.kind === 'end' && ends.length) {
+  /**
+   * A palette tile was tapped: add onto the selected end, or drop the piece
+   * loose. The palette's Turn and Ends settings pick the exact version.
+   * Scenery that isn't track always goes down loose.
+   */
+  pick(shape: Shape): void {
+    const hand = this.palette.hand;
+    if (isLoose(shape)) {
+      const { layout, uid } = addPiece(this.layout, shape.ids[0], { ...this.freeSpot(), angle: 0 });
+      this.commit(layout, { kind: 'pieces', uids: new Set([uid]) });
+      return;
+    }
+    if (this.selection.kind === 'end') {
       const end = this.selection.end;
+      const target = this.genderOf(end);
+      const pieceId = variantFor(shape, this.palette.ends, target);
       if (!canExtend(this.layout, end, pieceId)) {
-        this.flash(`A ${getPiece(pieceId).name.toLowerCase()} has no end that fits this ${this.genderOf(end)}.`);
+        this.flash(`A ${getPiece(pieceId).name.toLowerCase()} has no end that fits this ${target ?? 'end'}.`);
         return;
       }
-      const ext = extendFrom(this.layout, end, pieceId, this.flipPreference.get(pieceId) ?? false)!;
+      const attach = attachEnd(pieceId, target);
+      const ext = extendFrom(this.layout, end, pieceId, flipFor(pieceId, attach, hand), attach)!;
       this.commit(ext.layout, ext.next ? { kind: 'end', end: ext.next } : { kind: 'pieces', uids: new Set([ext.uid]) });
       return;
     }
+    const pieceId = variantFor(shape, this.palette.ends, null);
+    const ends = getPiece(pieceId).connectors;
     const spot = this.freeSpot();
-    const { layout, uid } = addPiece(this.layout, pieceId, { ...spot, angle: 0 }, this.flipPreference.get(pieceId) ?? false);
+    const { layout, uid } = addPiece(this.layout, pieceId, { ...spot, angle: 0 }, flipFor(pieceId, ends[0].id, hand));
     const next = ends[1] ?? ends[0];
-    this.commit(layout, next ? { kind: 'end', end: { uid, connectorId: next.id } } : { kind: 'pieces', uids: new Set([uid]) });
+    this.commit(layout, { kind: 'end', end: { uid, connectorId: next.id } });
+  }
+
+  /**
+   * Where a palette piece would go if let go at `at`: onto the nearest open
+   * end it fits, placed exactly as a tap on that end would, or loose with
+   * its middle under the pointer.
+   */
+  private dropAt(shape: Shape, at: Vec2): Drop {
+    const hand = this.palette.hand;
+    let best: (Drop & { distance: number }) | null = null;
+    for (const end of openEnds(this.layout)) {
+      const target = end.connector.gender;
+      const pieceId = variantFor(shape, this.palette.ends, target);
+      if (!canExtend(this.layout, end, pieceId)) continue;
+      const attach = attachEnd(pieceId, target);
+      const ext = extendFrom(this.layout, end, pieceId, flipFor(pieceId, attach, hand), attach);
+      if (!ext) continue;
+      const middle = centerOf(ext.layout, new Set([ext.uid]));
+      const distance = Math.hypot(middle.x - at.x, middle.y - at.y);
+      const toEnd = Math.hypot(end.connector.pose.x - at.x, end.connector.pose.y - at.y);
+      if (distance > DROP_CAPTURE_MM.middle && toEnd > DROP_CAPTURE_MM.end) continue;
+      if (best && distance >= best.distance) continue;
+      const joins = { uid: end.uid, connectorId: end.connectorId };
+      const after: Selection = ext.next ? { kind: 'end', end: ext.next } : { kind: 'pieces', uids: new Set([ext.uid]) };
+      best = { layout: ext.layout, uid: ext.uid, after, joins, distance };
+    }
+    if (best) return best;
+
+    const pieceId = variantFor(shape, this.palette.ends, null);
+    const ends = getPiece(pieceId).connectors;
+    const flipped = ends.length ? flipFor(pieceId, ends[0].id, hand) : false;
+    const placed = addPiece(this.layout, pieceId, IDENTITY, flipped);
+    const middle = centerOf(placed.layout, new Set([placed.uid]));
+    const { layout, uid } = addPiece(this.layout, pieceId, { x: at.x - middle.x, y: at.y - middle.y, angle: 0 }, flipped);
+    const next = ends[1] ?? ends[0];
+    const after: Selection = next ? { kind: 'end', end: { uid, connectorId: next.id } } : { kind: 'pieces', uids: new Set([uid]) };
+    return { layout, uid, after, joins: null };
   }
 
   /** The pieces the toolbar acts on: the selection, or the piece with the selected end. */
@@ -149,10 +297,7 @@ export class Editor {
     if (!uids.size) return;
     if (uids.size === 1) {
       const [uid] = uids;
-      const next = flipPiece(this.layout, uid);
-      const piece = next.pieces.find((p) => p.uid === uid)!;
-      this.flipPreference.set(piece.pieceId, piece.flipped);
-      this.commit(next);
+      this.commit(flipPiece(this.layout, uid));
     } else {
       this.commit(mirrorPieces(this.layout, uids));
     }
@@ -162,14 +307,40 @@ export class Editor {
     const uids = this.targets();
     if (uids.size !== 1) return;
     const [uid] = uids;
-    const next = swapEnd(this.layout, uid);
-    if (!next) {
+    const swapped = swapEnd(this.layout, uid);
+    const result = swapped ? { layout: swapped, uid } : this.swapVariant(uid);
+    if (!result) {
       this.flash('This piece only fits one way round here.');
       return;
     }
+    const next = result.layout;
     // Keep building from the new piece's open end.
-    const open = openEnds(next).find((e) => e.uid === uid);
+    const open = openEnds(next).find((e) => e.uid === result.uid);
     this.commit(next, open ? { kind: 'end', end: open } : this.selection);
+  }
+
+  /**
+   * Turn a switch round where its own pegs and holes won't allow it, by
+   * swapping it for its twin with the pegs the other way round.
+   */
+  private swapVariant(uid: string): { layout: Layout; uid: string } | null {
+    const piece = findPiece(this.layout, uid);
+    const shape = SHAPES.find((s) => s.ids.includes(piece.pieceId));
+    if (!shape || hasEndsChoice(shape)) return null;
+    const joints = findJoints(this.layout);
+    const joined = worldEnds(piece).filter((e) => partnerOf(joints, e));
+    if (joined.length !== 1) return null;
+    const partner = partnerOf(joints, joined[0])!;
+    const rest = removePieces(this.layout, new Set([uid]));
+    const target = worldEnd(rest, partner).connector.gender;
+    for (const id of shape.ids.filter((i) => i !== piece.pieceId)) {
+      for (const c of getPiece(id).connectors) {
+        if (c.gender === target || c.id === joined[0].connectorId) continue;
+        const ext = extendFrom(rest, partner, id, flipFor(id, c.id, this.palette.hand), c.id);
+        if (ext) return { layout: ext.layout, uid: ext.uid };
+      }
+    }
+    return null;
   }
 
   remove(): void {
@@ -240,7 +411,7 @@ export class Editor {
     const [markers, pieces] = this.view.pickables;
     // Objects added since the last frame have no world matrix yet.
     this.view.root.updateMatrixWorld();
-    const m = this.raycaster.intersectObject(markers, true)[0];
+    const m = this.raycaster.intersectObject(markers, true).find((i) => i.object.userData.end);
     if (m) return { end: m.object.userData.end as EndRef };
     const p = this.raycaster.intersectObject(pieces, true)[0];
     if (p) return { uid: p.object.userData.uid as string };
@@ -255,6 +426,37 @@ export class Editor {
   }
 
   private pressStart: Vec2 | null = null;
+
+  /** Whether the pointer is over the 3D view itself, not the palette or a panel on top. */
+  private overFloor(e: PointerEvent): boolean {
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    return under instanceof HTMLCanvasElement && this.dom.canvas.contains(under);
+  }
+
+  private startPaletteDrag(shape: Shape, e: PointerEvent): void {
+    if (this.drag || this.paletteDrag) return;
+    this.paletteDrag = { pointerId: e.pointerId, shape, drop: null };
+    document.body.classList.add('dragging-piece');
+    this.movePaletteDrag(e);
+  }
+
+  private movePaletteDrag(e: PointerEvent): void {
+    const drag = this.paletteDrag!;
+    const at = this.overFloor(e) ? this.floorPoint(e) : null;
+    drag.drop = at && this.dropAt(drag.shape, at);
+    this.refresh();
+  }
+
+  private endPaletteDrag(e: PointerEvent): void {
+    const drag = this.paletteDrag!;
+    this.paletteDrag = null;
+    document.body.classList.remove('dragging-piece');
+    // Let go over the palette or a panel, or cancelled: put it back.
+    const at = e.type === 'pointerup' && this.overFloor(e) ? this.floorPoint(e) : null;
+    const drop = at && this.dropAt(drag.shape, at);
+    if (drop) this.commit(drop.layout, drop.after);
+    else this.refresh();
+  }
 
   private pointerDown(e: PointerEvent): void {
     if (e.button !== 0) return;
@@ -287,11 +489,17 @@ export class Editor {
       active: false,
       transform: IDENTITY,
       snap: null,
+      flex: flexContext(this.layout, uids, grab),
+      flexed: null,
       seated: false,
     };
   }
 
   private pointerMove(e: PointerEvent): void {
+    if (this.paletteDrag?.pointerId === e.pointerId) {
+      this.movePaletteDrag(e);
+      return;
+    }
     const drag = this.drag;
     if (!drag || e.pointerId !== drag.pointerId) return;
     if (!drag.active) {
@@ -301,15 +509,22 @@ export class Editor {
     }
     const at = this.floorPoint(e);
     if (!at) return;
+    // Joined track flexes within its joint play; pulled well past that,
+    // the pieces unclip and move freely.
+    drag.flexed = drag.flex && flexDrag(drag.flex, at);
     const moved: Pose = { x: at.x - drag.grab.x, y: at.y - drag.grab.y, angle: 0 };
-    drag.snap = findSnap(drag.context, moved);
-    const seat = !drag.snap && drag.uids.size === 1 ? findSeat(drag.start, [...drag.uids][0], moved) : null;
+    drag.snap = drag.flexed ? null : findSnap(drag.context, moved);
+    const seat = !drag.flexed && !drag.snap && drag.uids.size === 1 ? findSeat(drag.start, [...drag.uids][0], moved) : null;
     drag.seated = seat !== null;
     drag.transform = drag.snap?.transform ?? seat ?? moved;
     this.refresh();
   }
 
   private pointerUp(e: PointerEvent): void {
+    if (this.paletteDrag?.pointerId === e.pointerId) {
+      this.endPaletteDrag(e);
+      return;
+    }
     const drag = this.drag;
     const press = this.pressStart;
     this.pressStart = null;
@@ -317,7 +532,7 @@ export class Editor {
     if (drag && e.pointerId === drag.pointerId) {
       this.drag = null;
       if (drag.active) {
-        this.commit(transformPieces(drag.start, drag.uids, drag.transform), { kind: 'pieces', uids: drag.uids });
+        this.commit(this.dragged(drag), { kind: 'pieces', uids: drag.uids });
       } else {
         // A click on a piece selects it.
         this.selection = { kind: 'pieces', uids: drag.uids };
@@ -358,6 +573,10 @@ export class Editor {
       this.swap();
     } else if (k === 'a') {
       this.selectSection();
+    } else if (k === 't') {
+      this.palette.setHand(this.palette.hand === 'left' ? 'right' : 'left');
+    } else if (k === 'v') {
+      this.dom.onFit();
     } else if (k === 'delete' || k === 'backspace') {
       this.remove();
     } else if (k === 'escape') {
@@ -371,8 +590,8 @@ export class Editor {
 
   // ---- helpers -----------------------------------------------------------
 
-  private genderOf(end: EndRef): string {
-    return openEnds(this.layout).find((e) => e.uid === end.uid && e.connectorId === end.connectorId)?.connector.gender ?? 'end';
+  private genderOf(end: EndRef): Gender | null {
+    return openEnds(this.layout).find((e) => e.uid === end.uid && e.connectorId === end.connectorId)?.connector.gender ?? null;
   }
 
   /** A spot near the middle of the view that no piece is sitting on. */
@@ -392,7 +611,8 @@ export class Editor {
   private flashTimer = 0;
   private flashText = '';
 
-  private flash(text: string): void {
+  /** Show a message in the status bar for a few seconds. */
+  flash(text: string): void {
     this.flashText = text;
     window.clearTimeout(this.flashTimer);
     this.flashTimer = window.setTimeout(() => {
@@ -402,24 +622,42 @@ export class Editor {
     this.refresh();
   }
 
+  private notified: Layout | null = null;
+
   private refresh(): void {
     const drag = this.drag?.active ? this.drag : null;
-    const layout = drag ? transformPieces(drag.start, drag.uids, drag.transform) : this.layout;
+    const drop = this.paletteDrag?.drop ?? null;
+    const layout = drop ? drop.layout : drag ? this.dragged(drag) : this.layout;
     const joints = findJoints(layout);
     const open = openEnds(layout, joints);
     const s = this.selection;
-    const snapAt = drag?.snap ? this.snapPoint(drag) : null;
+    const snapAt = drop
+      ? drop.joins && worldEnd(layout, drop.joins).connector.pose
+      : drag?.snap
+        ? this.snapPoint(drag)
+        : drag?.flexed?.closed
+          ? worldEnd(layout, drag.flexed.closed.b).connector.pose
+          : null;
     this.view.update({
       layout,
       openEnds: open,
-      selectedPieces: s.kind === 'pieces' ? s.uids : new Set(),
-      selectedEnd: s.kind === 'end' ? s.end : null,
+      selectedPieces: drop ? new Set([drop.uid]) : s.kind === 'pieces' ? s.uids : new Set(),
+      selectedEnd: drop ? null : s.kind === 'end' ? s.end : null,
       snapAt,
+      marks: drag || drop ? [] : this.marks,
     });
+    if (this.layout !== this.notified) {
+      this.notified = this.layout;
+      this.dom.onChange?.(this.layout);
+    }
 
     const end = s.kind === 'end' ? s.end : null;
+    const target = end && this.genderOf(end);
     // Loose scenery can always be put down; it never joins the selected end.
-    this.palette.setEnabled((id) => !end || !getPiece(id).connectors.length || canExtend(this.layout, end, id));
+    this.palette.setEnabled(
+      (shape) => !end || isLoose(shape) || canExtend(this.layout, end, variantFor(shape, this.palette.ends, target)),
+    );
+    this.dom.empty.hidden = layout.pieces.length > 0;
 
     const has = this.targets().size > 0;
     const b = this.dom.buttons;
@@ -427,8 +665,22 @@ export class Editor {
     b.redo.disabled = !this.history.canRedo;
     for (const button of [b.rotateLeft, b.rotateRight, b.flip, b.section, b.remove]) button.disabled = !has;
     b.swap.disabled = this.targets().size !== 1;
+    b.fit.disabled = layout.pieces.length === 0;
 
-    this.dom.status.textContent = this.flashText || this.describe(layout, open.length, joints.length);
+    const [hint, counts] = this.flashText ? [this.flashText, ''] : this.describe(layout, open.length, joints.length);
+    const hintEl = document.createElement('span');
+    hintEl.textContent = hint;
+    const countsEl = document.createElement('span');
+    countsEl.className = 'counts';
+    countsEl.textContent = counts;
+    this.dom.status.replaceChildren(hintEl, countsEl);
+    this.dom.status.classList.toggle('flash', !!this.flashText);
+    this.dom.status.hidden = !hint;
+  }
+
+  /** The layout as the drag has it now: flexed, or with the pieces moved. */
+  private dragged(drag: Drag): Layout {
+    return drag.flexed?.layout ?? transformPieces(drag.start, drag.uids, drag.transform);
   }
 
   private snapPoint(drag: Drag): Vec2 {
@@ -436,17 +688,34 @@ export class Editor {
     return fixed.connector.pose;
   }
 
-  private describe(layout: Layout, open: number, joints: number): string {
+  /** A hint for what to do next, and the layout's counts. */
+  private describe(layout: Layout, open: number, joints: number): [string, string] {
     const s = this.selection;
-    const count = `${layout.pieces.length} piece${layout.pieces.length === 1 ? '' : 's'}, ${joints} joint${joints === 1 ? '' : 's'}, ${open} open end${open === 1 ? '' : 's'}.`;
-    if (this.drag?.active) {
-      if (this.drag.snap) return 'Snapping on. Let go to join.';
-      if (this.drag.seated) return 'Lined up over the track. Let go to place it.';
-      return 'Drag near an open end to snap on.';
+    const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+    const counts = layout.pieces.length
+      ? [plural(layout.pieces.length, 'piece'), plural(joints, 'joint'), plural(open, 'open end')].join(' · ')
+      : '';
+    if (this.paletteDrag) {
+      const drop = this.paletteDrag.drop;
+      if (!drop) return ['Drag it onto the floor, or near an open end to join it on.', counts];
+      return [drop.joins ? 'Let go to join.' : 'Let go to put it down, or bring it near an open end.', counts];
     }
-    if (s.kind === 'end') return `${this.genderOf(s.end) === 'peg' ? 'Peg' : 'Hole'} end selected: tap a piece to add it. ${count}`;
-    if (s.kind === 'pieces') return `${s.uids.size} selected: drag to move, or rotate, flip, delete. ${count}`;
-    if (!layout.pieces.length) return 'Tap a piece in the palette to start.';
-    return `Tap an open end to build from it. ${count}`;
+    const drag = this.drag?.active ? this.drag : null;
+    if (drag?.flexed) {
+      if (drag.flexed.closed) return ['The joints give enough to close it: let go to join.', counts];
+      const stuck = drag.flexed.atLimit.length;
+      return [stuck ? `Flexing: ${plural(stuck, 'joint')} at the limit. Pull harder to unclip.` : 'Flexing the joints.', counts];
+    }
+    if (drag?.seated) return ['Lined up over the track: let go to place it.', counts];
+    if (drag) return [drag.snap ? 'Let go to join.' : 'Drag near an open end to snap on.', counts];
+    if (s.kind === 'end') {
+      const what = this.genderOf(s.end) === 'peg' ? 'peg' : 'hole';
+      return [`Building from this ${what}: tap a piece to add it.`, counts];
+    }
+    if (s.kind === 'pieces') {
+      return [`${plural(s.uids.size, 'piece')} selected: drag to move, or use the toolbar.`, counts];
+    }
+    if (!layout.pieces.length) return ['', ''];
+    return ['Tap a dot on an open end to build from it.', counts];
   }
 }

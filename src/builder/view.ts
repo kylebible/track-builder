@@ -13,16 +13,24 @@ export interface ViewState {
   selectedEnd: EndRef | null;
   /** Where a dragged piece is snapping on, shown as a ring. */
   snapAt: { x: number; y: number } | null;
+  /** Problems the layout check found, shown as red rings on the track. */
+  marks: { at: { x: number; y: number }; focused: boolean }[];
 }
 
 const MARKER_RADIUS = 11;
-const markerGeometry = new THREE.CylinderGeometry(MARKER_RADIUS, MARKER_RADIUS, 3, 32);
-const ringGeometry = new THREE.TorusGeometry(MARKER_RADIUS + 5, 2, 8, 40);
+/** Markers float a little above the track top, so they read as buttons. */
+const MARKER_LIFT = 6;
+const markerGeometry = new THREE.CylinderGeometry(MARKER_RADIUS, MARKER_RADIUS, 4, 40);
+const rimGeometry = new THREE.TorusGeometry(MARKER_RADIUS, 1.8, 10, 40);
+const ringGeometry = new THREE.TorusGeometry(MARKER_RADIUS + 6, 2.2, 10, 48);
+const markGeometry = new THREE.TorusGeometry(34, 3, 10, 64);
+const rimMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 });
 const markerMaterial = {
-  peg: new THREE.MeshStandardMaterial({ color: 0x2f6fd6, roughness: 0.5 }),
-  hole: new THREE.MeshStandardMaterial({ color: 0xe0832b, roughness: 0.5 }),
+  peg: new THREE.MeshStandardMaterial({ color: 0x2f6fd6, roughness: 0.45 }),
+  hole: new THREE.MeshStandardMaterial({ color: 0xe0832b, roughness: 0.45 }),
   selected: new THREE.MeshStandardMaterial({ color: 0x1f9d55, emissive: 0x1f9d55, emissiveIntensity: 0.4 }),
   snap: new THREE.MeshStandardMaterial({ color: 0x1f9d55, emissive: 0x1f9d55, emissiveIntensity: 0.8 }),
+  problem: new THREE.MeshStandardMaterial({ color: 0xc8352b, emissive: 0xc8352b, emissiveIntensity: 0.5 }),
 };
 
 /** Highlighted copies of piece materials, made once per material. */
@@ -32,8 +40,8 @@ function highlight(material: THREE.Material): THREE.Material {
   if (!copy) {
     copy = material.clone();
     if (copy instanceof THREE.MeshStandardMaterial) {
-      copy.emissive.set(0x2f6fd6);
-      copy.emissiveIntensity = 0.35;
+      copy.emissive.set(0x1f9d55);
+      copy.emissiveIntensity = 0.3;
     }
     highlighted.set(material, copy);
   }
@@ -55,6 +63,8 @@ export class LayoutView {
   private readonly markersRoot = new THREE.Group();
   private readonly entries = new Map<string, PieceEntry>();
   private readonly templates = new Map<string, THREE.Group>();
+  /** Rings that gently pulse: the selected end and the snap target. */
+  private pulsing: THREE.Object3D[] = [];
 
   constructor(scene: THREE.Scene) {
     this.root.add(this.piecesRoot, this.markersRoot);
@@ -113,30 +123,52 @@ export class LayoutView {
     this.updateMarkers(state);
   }
 
+  /** Animate the pulsing rings; call once a frame with the time in ms. */
+  tick(time: number): void {
+    const s = 1 + 0.12 * Math.sin(time / 220);
+    for (const ring of this.pulsing) ring.scale.setScalar(ring.userData.baseScale * s);
+  }
+
   private updateMarkers(state: ViewState): void {
     this.markersRoot.clear();
+    this.pulsing = [];
     for (const end of state.openEnds) {
       const isSelected = state.selectedEnd !== null && sameEnd(state.selectedEnd, end);
       const material = isSelected ? markerMaterial.selected : markerMaterial[end.connector.gender];
       const marker = new THREE.Mesh(markerGeometry, material);
       const { x, y } = end.connector.pose;
-      marker.position.copy(toWorld(x, y, D.TRACK_HEIGHT + 4));
+      marker.position.copy(toWorld(x, y, D.TRACK_HEIGHT + MARKER_LIFT));
       marker.userData.end = { uid: end.uid, connectorId: end.connectorId } satisfies EndRef;
-      this.markersRoot.add(marker);
-      if (isSelected) {
-        const ring = new THREE.Mesh(ringGeometry, material);
-        ring.rotation.x = Math.PI / 2;
-        ring.position.copy(marker.position);
-        ring.userData.end = marker.userData.end;
-        this.markersRoot.add(ring);
-      }
+      const rim = new THREE.Mesh(rimGeometry, rimMaterial);
+      rim.rotation.x = Math.PI / 2;
+      rim.position.copy(marker.position);
+      rim.userData.end = marker.userData.end;
+      this.markersRoot.add(marker, rim);
+      if (isSelected) this.addRing(marker.position, material, 1, marker.userData.end);
+    }
+    for (const mark of state.marks) {
+      const at = toWorld(mark.at.x, mark.at.y, D.TRACK_HEIGHT + 2);
+      const ring = new THREE.Mesh(markGeometry, markerMaterial.problem);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.copy(at);
+      ring.userData.baseScale = 1;
+      this.markersRoot.add(ring);
+      // Only the one being looked at pulses, so a busy layout stays calm.
+      if (mark.focused) this.pulsing.push(ring);
     }
     if (state.snapAt) {
-      const ring = new THREE.Mesh(ringGeometry, markerMaterial.snap);
-      ring.rotation.x = Math.PI / 2;
-      ring.scale.setScalar(1.4);
-      ring.position.copy(toWorld(state.snapAt.x, state.snapAt.y, D.TRACK_HEIGHT + 4));
-      this.markersRoot.add(ring);
+      this.addRing(toWorld(state.snapAt.x, state.snapAt.y, D.TRACK_HEIGHT + MARKER_LIFT), markerMaterial.snap, 1.4);
     }
+  }
+
+  private addRing(at: THREE.Vector3, material: THREE.Material, scale: number, end?: EndRef): void {
+    const ring = new THREE.Mesh(ringGeometry, material);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.copy(at);
+    ring.scale.setScalar(scale);
+    ring.userData.baseScale = scale;
+    if (end) ring.userData.end = end;
+    this.markersRoot.add(ring);
+    this.pulsing.push(ring);
   }
 }
