@@ -129,6 +129,14 @@ engines, ⇄ to turn the whole train round and ✕ to take it off. The panel
 keeps Pause, the speed and Reset. Tap a switch's yellow knob to change
 which way it sends trains; the yellow stripe shows the way it is set.
 
+The eye button on a train's controls (or C) rides along: the view moves to
+the front of the train, over an engine's cab or over the leading car when
+it is being pushed, looking down the track ahead (`src/trains/cab.ts`).
+When the train backs up, the view moves to its other end. Drag to look
+around; the view drifts back to straight ahead when you let go. Switch
+knobs still work from the cab. Get off, or Esc, goes back to the view you
+had.
+
 The models (`src/trains/trainMesh.ts`) are built in code to look like
 wooden Brio trains: painted beech bodies, red plastic wheels and magnet
 couplers. No 3D scans are used, since none could be found with a licence
