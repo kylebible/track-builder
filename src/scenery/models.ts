@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import * as D from '../pieces/dimensions';
+import { TRACKSIDE_MODELS } from './trackside';
 
 // Scenery models, built from simple solids at real size in millimetres.
 // `npm run scenery` exports each one to public/models/scenery/<name>.glb,
@@ -324,4 +325,5 @@ export const SCENERY_MODELS: Record<string, () => THREE.Group> = {
   'leafy-tree': leafyTree,
   'pine-tree': pineTree,
   cottage,
+  ...TRACKSIDE_MODELS,
 };

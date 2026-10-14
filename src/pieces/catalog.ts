@@ -1,6 +1,7 @@
 import { pathEnd } from '../geometry/path';
 import { deg, normalizeAngle, type Pose } from '../geometry/pose';
 import * as D from './dimensions';
+import { PLACES } from '../trains/stops';
 import type { Connector, Gender, PieceCategory, PieceDef, TrackPath } from './types';
 
 // Every piece is defined in its own frame: the first connector sits at the
@@ -288,7 +289,14 @@ const scenery: PieceDef[] = [
   loose('cottage', 'Cottage'),
 ];
 
-export const CATALOG: readonly PieceDef[] = [...straights, ...curves, ...ramps, ...switches, ...bigSwitches, ...crossings, ...buffers, ...scenery];
+/** Places beside the track that trains stop at; see src/trains/stops.ts. Each sits over a straight. */
+const trackside: PieceDef[] = PLACES.filter((p) => p.id !== 'station').map((p) => ({
+  ...loose(p.id, p.name),
+  category: 'trackside',
+  seatsOnTrack: true,
+}));
+
+export const CATALOG: readonly PieceDef[] = [...straights, ...curves, ...ramps, ...switches, ...bigSwitches, ...crossings, ...buffers, ...scenery, ...trackside];
 
 const byId = new Map(CATALOG.map((p) => [p.id, p]));
 
