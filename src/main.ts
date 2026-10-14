@@ -11,6 +11,7 @@ import { DEFAULT_ENVIRONMENT, getEnvironment, inWater, offArea, type Environment
 import { EnvironmentPicker } from './environments/picker';
 import { EnvironmentScene } from './environments/scene';
 import { TemplatePicker } from './templates/picker';
+import { Tour, markTourSeen, tourSeen } from './tour/tour';
 import './style.css';
 
 const container = document.getElementById('app')!;
@@ -210,6 +211,15 @@ renderer.setAnimationLoop((time) => {
   environmentScene.tick(time);
   renderer.render(scene, camera);
 });
+
+const tour = new Tour();
+button('take-tour').onclick = () => {
+  document.getElementById('help')!.hidePopover();
+  tour.start();
+};
+// Shown once, to someone with nothing built yet; a returning builder has seen enough.
+if (restored) markTourSeen();
+else if (!tourSeen()) tour.start();
 
 if (codeFromHash(location.hash)) openSharedLayout();
 else if (editor.layout.pieces.length) fitView();
