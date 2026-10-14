@@ -1,7 +1,7 @@
 import { heightGap } from '../geometry/joint';
 import { gradeAt, heightAt, pathEnd, pathLength } from '../geometry/path';
 import { applyPose, distance, normalizeAngle, rotate, type Pose, type Vec2 } from '../geometry/pose';
-import { baseOf, defOf, findJoints, openEnds, type Layout, type PlacedPiece } from '../layout/layout';
+import { baseOf, defOf, findJoints, nearbyPairs, openEnds, type Layout, type PlacedPiece } from '../layout/layout';
 import type { TrackPath } from '../pieces/types';
 
 // The layout as something wheels can run along: every running path of every
@@ -121,7 +121,7 @@ export class TrackNetwork {
       this.edges.push(edge);
       this.byKey.set(edge.key, edge);
     });
-    const mine = this.edges.filter((e) => e.uid === piece.uid);
+    const mine = this.edges.slice(this.edges.length - def.paths.length);
     const connectors = def.connectors.map((c) => ({ id: c.id, pose: applyPose(piece.pose, c.pose) }));
     for (const edge of mine) {
       for (const end of [0, 1] as const) {
@@ -149,13 +149,11 @@ export class TrackNetwork {
     // Loose ends that nearly meet: the closest pairs first.
     const open = openEnds(this.layout, joints);
     const pairs: { i: number; j: number; gap: number }[] = [];
-    for (let i = 0; i < open.length; i++) {
-      for (let j = i + 1; j < open.length; j++) {
-        if (open[i].uid === open[j].uid) continue;
-        if (heightGap(open[i].connector, open[j].connector) > 1) continue;
-        const fit = fitBetween(open[i].connector.pose, open[j].connector.pose, true);
-        if (fit.gapMm <= GAP_RANGE.mm && fit.angleDeg <= GAP_RANGE.deg) pairs.push({ i, j, gap: fit.gapMm });
-      }
+    for (const [i, j] of nearbyPairs(open, GAP_RANGE.mm)) {
+      if (open[i].uid === open[j].uid) continue;
+      if (heightGap(open[i].connector, open[j].connector) > 1) continue;
+      const fit = fitBetween(open[i].connector.pose, open[j].connector.pose, true);
+      if (fit.gapMm <= GAP_RANGE.mm && fit.angleDeg <= GAP_RANGE.deg) pairs.push({ i, j, gap: fit.gapMm });
     }
     pairs.sort((p, q) => p.gap - q.gap);
     const used = new Set<number>();

@@ -408,8 +408,9 @@ function starSwitch(): PieceDef {
 /**
  * Turntable: a pit with eight track ends round it, an eighth of a turn
  * apart. The bridge across it turns to line up any end with the one
- * opposite; we model it as all four lines across at once, so a train runs
- * straight over from any end. Each line has a hole one end and a peg the other.
+ * opposite. The track is all four lines across; which one the bridge lies
+ * along is the trains' business (src/trains/turntable.ts), so a train only
+ * runs over the line it's turned to. Each line has a hole one end and a peg the other.
  */
 function turntable(): PieceDef {
   const r = D.TURNTABLE_DIAMETER / 2;

@@ -10,6 +10,7 @@ import { attracts, CRATE_KG, getStock, supplyLevel, WHEEL_RADIUS, type CargoKind
 import { doWork, getPlace, planWork, workSeconds, workSpan, type PlaceDef, type Work } from './stops';
 import { ACCESSORY, findAccessories, onRoute, type Accessory, type AccessoryKind, type Job } from './accessories';
 import { Dispatcher, type Arrival, type Destination, type DestinationPoint, type Dispatch, type RouteOptions } from './dispatch';
+import { findTurntables, headingToward, lineAt, lineToward, turn, turnPoint, TURNTABLE, type Turntable, type TurntableState } from './turntable';
 
 // A small, purpose-built simulation of wooden trains. The grooves keep every
 // axle on the track centreline, so each vehicle only moves along the track:
@@ -182,6 +183,7 @@ const REASONS: Record<AccessoryKind, string> = {
   station: 'Stopped at the station',
   loader: 'Loading',
   crane: 'Unloading',
+  turntable: 'Waiting for the turntable',
 };
 
 const DWELL: Partial<Record<AccessoryKind, number>> = {
@@ -329,6 +331,9 @@ export class TrainSim {
   readonly redSignals = new Set<string>();
   /** Lifting bridges: whether each is set to go up, and how far up it is (0 to 1). */
   readonly bridges = new Map<string, { up: boolean; lift: number }>();
+  /** Turntables in the layout, found afresh whenever the layout changes, and how each bridge stands. */
+  turntables: Turntable[] = [];
+  readonly tables = new Map<string, TurntableState>();
   /** Crates each crane has stacked beside it. */
   readonly piles = new Map<string, number>();
   /** Loading and unloading in progress, by accessory uid. */
@@ -400,6 +405,11 @@ export class TrainSim {
     const uids = new Set(this.accessories.map((a) => a.uid));
     for (const map of [this.bridges, this.piles, this.jobs]) for (const uid of map.keys()) if (!uids.has(uid)) map.delete(uid);
     for (const uid of this.redSignals) if (!uids.has(uid)) this.redSignals.delete(uid);
+    this.turntables = findTurntables(this.network.layout);
+    for (const uid of this.tables.keys()) if (!this.turntables.some((t) => t.uid === uid)) this.tables.delete(uid);
+    for (const t of this.turntables) {
+      if (!this.tables.has(t.uid)) this.tables.set(t.uid, { angle: t.lines[0].angle, target: t.lines[0].angle, riders: [], from: t.lines[0].angle });
+    }
     this.places = this.findPlaces();
   }
 
@@ -441,6 +451,8 @@ export class TrainSim {
   addTrain(consist: ConsistEntry[], placement: Placement, name?: string): Train | string {
     const edge = this.network.edge(placement.edgeKey);
     if (!edge) return 'That track has gone.';
+    const table = this.turntables.find((t) => t.uid === edge.uid);
+    if (table && !this.linedUp(table.uid, edge.index)) return 'Turn the turntable to that line first.';
     const mid = placement.reversed ? edge.length - placement.s : placement.s;
     return this.spawn(new Route(edge, placement.reversed, 0), consist, mid, { name });
   }
@@ -576,6 +588,7 @@ export class TrainSim {
       train.dispatch = null;
       this.replace(train, train.placement, false);
     }
+    for (const state of this.tables.values()) Object.assign(state, { angle: state.target, from: state.target, riders: [] });
     this.notices.length = 0;
     this.events.length = 0;
     for (const k of Object.keys(this.delivered)) delete this.delivered[k as CargoKind];
@@ -785,6 +798,7 @@ export class TrainSim {
     const steps = Math.round(Math.min(seconds, 0.1) / PHYSICS.dt);
     for (let i = 0; i < steps; i++) this.step(PHYSICS.dt);
     this.moveBridges(steps * PHYSICS.dt);
+    this.moveTurntables(steps * PHYSICS.dt);
     this.forgetStations();
     this.coupleTouching();
     for (const train of this.trains) {
@@ -851,6 +865,7 @@ export class TrainSim {
   }
 
   private stepTrain(train: Train, dt: number): void {
+    if (this.riding(train)) return;
     const P = PHYSICS;
     const { route, vehicles, couplings } = train;
     const lo = Math.min(...vehicles.map((v) => v.u - v.def.length / 2));
@@ -1298,6 +1313,86 @@ export class TrainSim {
     }
   }
 
+  /** Whether a turntable's bridge stands still lined up with `line`, so trains can run across. */
+  linedUp(uid: string, line: number): boolean {
+    const table = this.turntables.find((t) => t.uid === uid);
+    const state = this.tables.get(uid);
+    return !!table && !!state && state.angle === state.target && lineAt(table, state.angle) === line;
+  }
+
+  /**
+   * Turn a turntable's bridge to the end nearest `point`, or on to the next
+   * line for a point by the pivot (unless `middleSteps` is off, as while
+   * dragging). A train standing wholly on the bridge turns with it; one
+   * partly on stops it turning. Returns an error message.
+   */
+  turnTurntable(uid: string, point: Vec2, middleSteps = true): string | null {
+    const table = this.turntables.find((t) => t.uid === uid);
+    const state = this.tables.get(uid);
+    if (!table || !state) return null;
+    const line = lineToward(table, point, state.target, middleSteps);
+    if (lineAt(table, state.target) === line) return null;
+    const still = state.angle === state.target;
+    const lines = this.accessories.filter((a) => a.kind === 'turntable' && a.uid === uid);
+    const riders: number[] = [];
+    for (const train of this.trains) {
+      if (state.riders.includes(train.id)) continue;
+      const { front, back } = span(train);
+      for (const acc of lines) {
+        for (const [a, z] of onRoute(train.route, acc)) {
+          if (z <= back || a >= front) continue;
+          const aboard = still && !train.wrecked && back >= a - 1 && front <= z + 1 && acc.line === lineAt(table, state.angle);
+          if (!aboard) return `${train.name} is partly on the turntable. Turn it once the train is clear, or all the way on.`;
+          riders.push(train.id);
+        }
+      }
+    }
+    if (still) Object.assign(state, { from: state.angle, riders });
+    state.target = headingToward(table, line, state.angle);
+    return null;
+  }
+
+  private moveTurntables(dt: number): void {
+    for (const table of this.turntables) {
+      const state = this.tables.get(table.uid)!;
+      if (!turn(state, dt)) continue;
+      // At rest: trains that rode round go on along the line the bridge now lies on.
+      const delta = state.angle - state.from;
+      const line = lineAt(table, state.angle);
+      for (const id of state.riders) {
+        const train = this.trains.find((t) => t.id === id);
+        const seg = train?.route.segments.find((s) => s.edge.uid === table.uid);
+        const edge = this.network.edge(table.lines[line]?.edgeKey ?? '');
+        if (!train || !seg || !edge) continue;
+        const heading = table.lines[seg.edge.index].angle + delta;
+        const flip = Math.cos(heading - table.lines[line].angle) < 0;
+        train.route.rebase([{ edge, reversed: seg.reversed !== flip, u0: seg.u0 }]);
+        train.hold = null;
+        this.measure(train);
+      }
+      Object.assign(state, { from: state.angle, riders: [] });
+    }
+  }
+
+  /** A train turning round on a turntable: it holds still on the bridge and swings round with it. */
+  private riding(train: Train): boolean {
+    const table = this.turntables.find((t) => this.tables.get(t.uid)?.riders.includes(train.id));
+    if (!table) return false;
+    const state = this.tables.get(table.uid)!;
+    const delta = state.angle - state.from;
+    this.measure(train);
+    for (const v of train.vehicles) {
+      v.v = 0;
+      const g = v.geo;
+      for (const k of ['center', 'frontAxle', 'rearAxle', 'aheadFace', 'behindFace'] as const) g[k] = turnPoint(table, g[k], delta);
+      g.heading = normalizeAngle(g.heading + delta);
+    }
+    train.hold = null;
+    train.stillFor = 0;
+    train.status = { kind: 'waiting', message: 'Turning on the turntable' };
+    return true;
+  }
+
   /** Let go of stations a train has left behind, so it stops there again next time round. */
   private forgetStations(): void {
     for (const train of this.trains) {
@@ -1336,6 +1431,9 @@ export class TrainSim {
           }
           case 'bridge':
             if (this.bridgeOpen(acc.uid)) consider(acc, ((dir > 0 ? a : z) - front) * dir - ACCESSORY.bridgeGapMm);
+            break;
+          case 'turntable':
+            if (!this.linedUp(acc.uid, acc.line!)) consider(acc, ((dir > 0 ? a : z) - front) * dir - TURNTABLE.gapMm);
             break;
           case 'station':
             if (!train.served.has(acc.uid)) consider(acc, (a - mid) * dir);

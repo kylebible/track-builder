@@ -253,7 +253,7 @@ function helixColumn(path: TrackPath): THREE.Object3D[] {
   return parts;
 }
 
-/** A turntable pit: a stone ring round a dark floor, with a circular rail for the bridge's wheels. */
+/** A turntable pit: a stone ring round a dark floor, with a circular rail for the bridge's wheels. The bridge itself turns; see `turntableDeck`. */
 function turntablePit(diameter: number): THREE.Object3D[] {
   const r = diameter / 2;
   const floor = new THREE.Mesh(new THREE.CylinderGeometry(r - 2, r - 2, 2, 48), material(0x4b4239, 0.95));
@@ -268,11 +268,19 @@ function turntablePit(diameter: number): THREE.Object3D[] {
   rail.position.set(r, 3, 0);
   const pivot = new THREE.Mesh(new THREE.CylinderGeometry(10, 10, 4, 24), STEEL_GREY);
   pivot.position.set(r, 2, 0);
-  // Girders along the turning bridge, and a little cabin on one side.
+  return [floor, ring, wall, rail, pivot];
+}
+
+/**
+ * What turns with a turntable's bridge, besides its track: girders along
+ * it and a little cabin on one side. Laid along the first line, like the track.
+ */
+export function turntableDeck(diameter: number): THREE.Object3D[] {
+  const r = diameter / 2;
   const girders = [-1, 1].map((side) => box(STEEL_RED, [diameter - 14, 8, 3], [r, D.TRACK_HEIGHT + 2, side * (D.TRACK_WIDTH / 2 + 2)]));
   const cabin = box(BARN_RED, [16, 22, 12], [r, D.TRACK_HEIGHT + 11, D.TRACK_WIDTH / 2 + 10]);
   const roof = box(ROOF, [20, 3, 16], [r, D.TRACK_HEIGHT + 23, D.TRACK_WIDTH / 2 + 10]);
-  return [floor, ring, wall, rail, pivot, ...girders, cabin, roof];
+  return [...girders, cabin, roof];
 }
 
 /** What a piece with a structure of its own stands on or sits in, in its own frame. */

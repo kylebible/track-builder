@@ -167,6 +167,8 @@ interface Press {
 
 export class Trains {
   readonly sim: TrainSim;
+  /** The view's size in CSS pixels, for placing cards and bubbles over the 3D view. */
+  private viewSize: { width: number; height: number };
   private readonly root = new THREE.Group();
   private readonly vehiclesRoot = new THREE.Group();
   private readonly leversRoot = new THREE.Group();
@@ -185,6 +187,8 @@ export class Trains {
   private noticesSeen = 0;
   private carry: Carry | null = null;
   private press: Press | null = null;
+  /** A turntable being turned by a drag round its pit. */
+  private turning: { pointerId: number; uid: string } | null = null;
   private thumbnails: Map<string, string> | null = null;
   private readonly accessories: AccessoryView;
   readonly sounds: TrainSounds;
@@ -216,6 +220,10 @@ export class Trains {
     private readonly controls: ViewControls,
   ) {
     this.layout = host.layout;
+    // Measuring the page every frame, after the cards have moved, makes the browser lay it out again.
+    const measure = () => ({ width: container.clientWidth, height: container.clientHeight });
+    this.viewSize = measure();
+    new ResizeObserver(() => (this.viewSize = measure())).observe(container);
     this.sim = new TrainSim(this.layout);
     this.accessories = new AccessoryView(this.sim, host.pieceObjects);
     this.root.add(this.vehiclesRoot, this.leversRoot, this.markersRoot, this.accessories.root);
@@ -456,7 +464,7 @@ export class Trains {
 
   /** Bubbles over engines passing signs, and the tally of deliveries. */
   private drawPlaces(time: number): void {
-    const rect = this.container.getBoundingClientRect();
+    const rect = this.viewSize;
     const screen = (at: THREE.Vector3): string | null => {
       const p = at.clone().project(this.camera);
       if (p.z >= 1 || Math.abs(p.x) > 1.1 || Math.abs(p.y) > 1.1) return null;
@@ -594,7 +602,7 @@ export class Trains {
 
   /** Keep a card floating over each train, and its buttons current. */
   private drawCards(): void {
-    const rect = this.container.getBoundingClientRect();
+    const rect = this.viewSize;
     const seen = new Set<number>();
     for (const t of this.sim.trains) {
       seen.add(t.id);
@@ -689,12 +697,14 @@ export class Trains {
   }
 
   /** What's under the pointer: a lever, or a vehicle (train and its place in it). */
-  private hit(e: PointerEvent): { lever: string } | { accessory: string } | { trainId: number; index: number } | null {
+  private hit(e: PointerEvent): { lever: string } | { accessory: string; at: Vec2 } | { trainId: number; index: number } | null {
     this.raycaster.setFromCamera(this.ndc(e), this.camera);
     this.root.updateMatrixWorld();
     if (this.leversRoot.visible) {
       const accessory = this.accessories.hit(this.raycaster);
-      if (accessory) return { accessory };
+      // A vehicle standing on a turntable is nearer than the pit under it.
+      const vehicle = accessory && this.raycaster.intersectObject(this.vehiclesRoot, true)[0];
+      if (accessory && !(vehicle && vehicle.distance < accessory.distance)) return { accessory: accessory.uid, at: { x: accessory.point.x, y: -accessory.point.z } };
     }
     if (this.leversRoot.visible) {
       const lever = this.raycaster.intersectObject(this.leversRoot, true)[0];
@@ -728,6 +738,13 @@ export class Trains {
       this.drawLevers();
       return;
     }
+    if ('accessory' in hit && this.sim.tables.has(hit.accessory)) {
+      // Tap an end to turn the bridge to it, or by the pivot for the next line; or drag it round.
+      const error = this.sim.turnTurntable(hit.accessory, hit.at);
+      if (error) this.say(error);
+      this.turning = { pointerId: e.pointerId, uid: hit.accessory };
+      return;
+    }
     if ('accessory' in hit) {
       const error = this.sim.toggleAccessory(hit.accessory);
       if (error) this.say(error);
@@ -741,6 +758,11 @@ export class Trains {
     if (look && e.pointerId === look.pointerId) {
       this.ride!.lookYaw = look.yaw + (e.clientX - look.x) * LOOK_PER_PX;
       this.ride!.lookPitch = THREE.MathUtils.clamp(look.pitch + (e.clientY - look.y) * LOOK_PER_PX, -1.2, 1.2);
+      return;
+    }
+    if (this.turning?.pointerId === e.pointerId) {
+      const at = this.planAt(e);
+      if (at) this.sim.turnTurntable(this.turning.uid, at, false);
       return;
     }
     const press = this.press;
@@ -757,6 +779,10 @@ export class Trains {
   }
 
   private pointerUp(e: PointerEvent): void {
+    if (this.turning?.pointerId === e.pointerId) {
+      this.turning = null;
+      return;
+    }
     if (this.ride?.look?.pointerId === e.pointerId) {
       this.ride.look = null;
       return;
@@ -779,6 +805,7 @@ export class Trains {
   }
 
   private cancel(e: PointerEvent): void {
+    if (this.turning?.pointerId === e.pointerId) this.turning = null;
     if (this.ride?.look?.pointerId === e.pointerId) this.ride.look = null;
     if (this.press?.pointerId === e.pointerId) this.press = null;
     if (this.carry?.pointerId === e.pointerId) this.drop(false);
@@ -802,6 +829,13 @@ export class Trains {
     const train = this.sim.addTrain([{ stockId: carry.stockId, reversed: false }], { edgeKey: target.edgeKey, s: target.s, reversed: false });
     if (typeof train === 'string') this.say(train);
     else if (getStock(carry.stockId).motor && !carry.lifted) this.say(`${train.name} is on the track. Drag cars next to it to couple them on, then press ▶.`);
+  }
+
+  /** The point on the track top under the pointer, in plan. */
+  private planAt(e: PointerEvent): Vec2 | null {
+    this.raycaster.setFromCamera(this.ndc(e), this.camera);
+    const point = this.raycaster.ray.intersectPlane(this.trackTop, new THREE.Vector3());
+    return point && { x: point.x, y: -point.z };
   }
 
   /** Where a vehicle carried to the pointer would go. */

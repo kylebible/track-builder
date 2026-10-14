@@ -380,7 +380,7 @@ export class Dispatcher {
     }
     const { start, remaining } = this.startOf(train, dir);
     const plan = this.graph.plan(start, remaining, target, {
-      cost: (e) => (this.heldByOther(e.uid, train.id) ? DISPATCH.busyCost : 0),
+      cost: (e) => (this.heldByOther(e.uid, train.id) || this.turnedAway(e) ? DISPATCH.busyCost : 0),
       fixed: control?.sticky,
       behind: align === 'front' ? DISPATCH.arriveMm * 2 : 0,
     });
@@ -396,6 +396,11 @@ export class Dispatcher {
     const start: Heading = { edge: seg.edge, leave: (dir > 0) !== seg.reversed ? 1 : 0 };
     const remaining = Math.max(0, dir > 0 ? seg.u0 + seg.edge.length - f : f - seg.u0);
     return { start, remaining, f };
+  }
+
+  /** A line across a turntable whose bridge isn't turned to it: the train would wait there. */
+  private turnedAway(edge: Edge): boolean {
+    return this.sim.turntables.some((t) => t.uid === edge.uid) && !this.sim.linedUp(edge.uid, edge.index);
   }
 
   private heldByOther(uid: string, trainId: number): boolean {
