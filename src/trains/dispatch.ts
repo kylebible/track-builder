@@ -57,6 +57,8 @@ export interface RouteOptions {
   align?: 'middle' | 'front';
   /** Leave the engines on at the destination instead of switching them off. */
   keepRunning?: boolean;
+  /** Only go the way its engines face, never backing up. */
+  ahead?: boolean;
 }
 
 /** A train that got where it was sent. */
@@ -338,7 +340,7 @@ export class Dispatcher {
     const align = opts.align ?? 'middle';
     // Whichever way round is shorter: on ahead, or backing up.
     let best: { dir: 1 | -1; distance: number } | null = null;
-    for (const dir of [1, -1] as const) {
+    for (const dir of opts.ahead ? [facing as 1 | -1] : ([1, -1] as const)) {
       const way = this.wayTo(train, dir, target, align, null);
       if (way && (!best || Math.abs(way.distance) < Math.abs(best.distance))) best = { dir, distance: way.distance };
     }
@@ -349,6 +351,42 @@ export class Dispatcher {
     this.controls.delete(train.id);
     this.sim.setThrottle(train.id, (best.dir * facing) as 1 | -1);
     return null;
+  }
+
+  /** How far a train has to go to a place or accessory (by uid), the shorter way (or only ahead), or null if it can't get there. */
+  distanceTo(train: Train, uid: string, opts: { ahead?: boolean } = {}): number | null {
+    const target = this.target({ kind: 'place', uid });
+    if (!target) return null;
+    const facing = Math.sign(train.vehicles.reduce((s, v) => s + (v.def.motor ? v.facing : 0), 0)) as 1 | -1 | 0;
+    let best: number | null = null;
+    for (const dir of opts.ahead ? (facing ? [facing] : []) : ([1, -1] as const)) {
+      const way = this.wayTo(train, dir, target, 'middle', null);
+      if (way && (best === null || Math.abs(way.distance) < best)) best = Math.abs(way.distance);
+    }
+    return best;
+  }
+
+  /**
+   * Whether `b`, running the way its engines face, is on a way `a` could get
+   * to running forwards: the same way round the layout. Trains that all go
+   * the same way round never meet head on.
+   */
+  sameWayRound(a: Train, b: Train): boolean {
+    const fa = Math.sign(a.vehicles.reduce((s, v) => s + (v.def.motor ? v.facing : 0), 0)) as 1 | -1 | 0;
+    const fb = Math.sign(b.vehicles.reduce((s, v) => s + (v.def.motor ? v.facing : 0), 0)) as 1 | -1 | 0;
+    if (!fa || !fb) return true;
+    const target = headingKey(this.startOf(b, fb).start);
+    const seen = new Set<string>();
+    const queue = [this.startOf(a, fa).start];
+    while (queue.length) {
+      const h = queue.pop()!;
+      const key = headingKey(h);
+      if (key === target) return true;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      queue.push(...this.graph.ways(h).next);
+    }
+    return false;
   }
 
   /** Forget where a train was going. It runs on under the dispatcher's care. */

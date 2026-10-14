@@ -108,6 +108,9 @@ export interface ConsistEntry {
   load?: 'crate';
   /** How much of its cargo it carries now, in the cargo's units. Missing means empty. */
   units?: number;
+  /** Workers riding in a coach: fresh ones going to work, tired ones going home. Counted in `units` too. */
+  crew?: number;
+  tired?: number;
   /** An engine's (or tender's) stores, 0 to 1. Missing means full. */
   water?: number;
   coal?: number;

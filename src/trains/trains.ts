@@ -11,6 +11,8 @@ import { edgeGrade, edgeHeight } from './network';
 import { TrainSim, type StuckKind, type Train, type VehicleGeometry } from './sim';
 import { AXLE_HEIGHT, buildVehicle, showLoad } from './trainMesh';
 import { AccessoryView } from './accessoryView';
+import { EconomyView } from './economyView';
+import { freshAboard, getJob, JOBS, tiredAboard, type JobId } from './jobs';
 import { Synth } from '../sound/synth';
 import { TrainSounds } from '../sound/trainSounds';
 import './trains.css';
@@ -226,6 +228,7 @@ export class Trains {
   private readonly bubbles: { el: HTMLElement; at: THREE.Vector3; until: number }[] = [];
   private eventsSeen = 0;
   private readonly deliveries: HTMLElement;
+  private readonly economyView: EconomyView;
   private readonly autorouteBox: HTMLInputElement;
   private leverVersion = 0;
 
@@ -286,6 +289,7 @@ export class Trains {
       checked: this.sim.keepCoupled,
       onchange: () => saveFlag(KEEP_COUPLED_KEY, (this.sim.keepCoupled = keepCoupled.checked)),
     });
+    this.economyView = new EconomyView(this.sim, this.hud, camera, container, { addJobTrain: (job) => this.addJobTrain(job) });
     this.autorouteBox = el('input', { type: 'checkbox', checked: this.sim.autoroute, onchange: () => this.sim.setAutoroute(this.autorouteBox.checked) });
     this.panel = el(
       'section',
@@ -298,6 +302,8 @@ export class Trains {
       el('label', { class: 'tr-check', title: 'Magnets never let go on their own, however long the train or tight the bend, so job trains and long trains stay in one piece. Off, they pull or slide apart like real ones (more readily in Basic mode).' }, keepCoupled, ' Keep trains coupled'),
       el('label', { class: 'tr-check', title: 'Each train reserves the track ahead of it and sets the switches its way. A train waits short of track another train is on instead of running into it, and takes the free side of a passing loop.' }, this.autorouteBox, ' Autoroute: trains set switches and wait for each other'),
       this.deliveries,
+      this.economyView.section,
+      el('h3', { textContent: 'Tips' }),
       el('ul', { class: 'tr-hint' },
         el('li', { innerHTML: '<b>Tap a car</b> on the track to turn it round. Red and blue ends are the magnets: red pulls blue.' }),
         el('li', { innerHTML: '<b>Drag a car</b> to lift it off. Drop it off the track to take it away.' }),
@@ -305,7 +311,7 @@ export class Trains {
         el('li', { innerHTML: '<b>Tap a signal</b> to turn it red or green. Trains stop at stations, and under the cargo loader and by the crane to load and unload open wagons. The lifting bridge’s knob raises it.' }),
         el('li', { innerHTML: '<b>Ride along</b> (C) watches from the cab. Drag to look around; Esc gets off.' }),
         el('li', { innerHTML: '<b>Go to</b> on a train’s card sends it to a station or trackside place by the shortest way, setting switches as it goes. It backs up if that’s quicker.' }),
-        el('li', { innerHTML: 'Put <b>trackside</b> places from the parts palette over a straight: trains stop at water towers, mines and more when there’s work for them.' }),
+        el('li', { innerHTML: 'Put <b>trackside</b> places from the parts palette over a straight: trains stop at water towers, mines and more when there’s work for them. <b>Jobs</b> above says what each place needs.' }),
       ),
     );
     container.append(this.hud, this.panel, this.toast);
@@ -377,6 +383,16 @@ export class Trains {
     this.eventsSeen = 0;
   }
 
+  private addJobTrain(job: JobId): void {
+    const train = this.sim.addJobTrain(job);
+    if (typeof train === 'string') {
+      this.say(train);
+      return;
+    }
+    this.setPaused(false);
+    this.say(`${train.name} is on its way. ${getJob(job).blurb}`);
+  }
+
   private say(message: string): void {
     this.toast.textContent = message;
     this.toast.hidden = false;
@@ -416,8 +432,9 @@ export class Trains {
       { class: 'tr-card' },
       el('div', { class: 'tr-card-head' }, el('b', { textContent: t.name }), el('span', { class: 'tr-card-status' })),
       el('div', { class: 'tr-card-load' }),
+      t.vehicles.some((v) => v.def.motor) ? this.jobRow(t) : '',
       el('div', { class: 'tr-card-work', hidden: true }, el('span'), el('i', {}, el('i'))),
-      this.destinationPicker(t),
+      t.job === 'free' ? this.destinationPicker(t) : '',
       el('div', { class: 'tr-card-row' },
         t.wrecked
           ? act('Put back on the rails', 'Put it back where it was built', () => this.restore(t), 'wide')
@@ -430,6 +447,25 @@ export class Trains {
         act('✕', 'Take the train off the track', () => this.sim.removeTrain(t.id), 'danger'),
       ),
     );
+  }
+
+  /** The job picker, and where the train is heading for it. */
+  private jobRow(t: Train): HTMLElement {
+    const select = el(
+      'select',
+      { class: 'tr-job', title: 'What this train is for. With a job it picks its own stops and sets the switches.', onchange: () => this.sim.setJob(t.id, select.value as JobId) },
+      ...JOBS.map((j) => el('option', { value: j.id, textContent: `${j.icon} ${j.name}`, selected: j.id === t.job, title: j.blurb })),
+    );
+    return el('div', { class: 'tr-card-job' }, select, el('span', { class: 'tr-card-dest' }));
+  }
+
+  /** Where a job train is heading, for its card. */
+  private destText(t: Train): string {
+    if (t.job === 'free') return '';
+    if (!this.sim.useEconomy) return 'Places need nothing';
+    if (!t.destination) return 'Nothing to do';
+    const site = this.sim.economy.site(t.destination);
+    return site ? `→ ${site.place.name}` : '';
   }
 
   /** "Go to…": send the train to a station or a place beside the track. */
@@ -484,9 +520,17 @@ export class Trains {
       const kind = getStock(entry.stockId).cargo?.kind;
       if (kind) cargo.set(kind, (cargo.get(kind) ?? 0) + (entry.units ?? 0));
     }
+    if (t.job === 'workers' && cargo.has('passengers')) {
+      // Workers rather than passengers.
+      const fresh = freshAboard(t.consist);
+      const tired = tiredAboard(t.consist);
+      cargo.set('passengers', cargo.get('passengers')! - fresh - tired);
+      if (fresh) parts.push(`${fresh} going to work`);
+      if (tired) parts.push(`${tired} tired, going home`);
+    }
     const carried = [...cargo].filter(([, n]) => n);
     if (carried.length) for (const [kind, n] of carried) parts.push(cargoCount(kind, n));
-    else if (cargo.size) parts.push('Cars empty');
+    else if (cargo.size && parts.every((p) => !/going/.test(p))) parts.push('Cars empty');
     return parts.join(' · ');
   }
 
@@ -636,7 +680,7 @@ export class Trains {
       seen.add(t.id);
       const riding = this.ride?.trainId === t.id;
       const dest = t.dispatch?.dest.kind === 'place' ? t.dispatch.dest.uid : '';
-      const key = `${t.throttle}/${t.wrecked}/${t.name}/${t.vehicles.some((v) => v.def.motor)}/${riding}/${dest}/${this.sim.destinations().length}`;
+      const key = `${t.throttle}/${t.wrecked}/${t.name}/${t.vehicles.some((v) => v.def.motor)}/${riding}/${dest}/${this.sim.destinations().length}/${t.job}`;
       let entry = this.cards.get(t.id);
       if (!entry || entry.key !== key) {
         const card = this.makeCard(t);
@@ -674,6 +718,11 @@ export class Trains {
         const span = work.querySelector('span')!;
         if (span.textContent !== doing.summary) span.textContent = doing.summary;
         work.querySelector<HTMLElement>('i i')!.style.width = `${doing.total ? Math.round((100 * doing.done) / doing.total) : 100}%`;
+      }
+      const heading = card.querySelector<HTMLElement>('.tr-card-dest');
+      if (heading) {
+        const text = this.destText(t);
+        if (heading.textContent !== text) heading.textContent = text;
       }
       const status = card.querySelector<HTMLElement>('.tr-card-status')!;
       status.textContent = this.statusText(t);
@@ -937,6 +986,7 @@ export class Trains {
     this.drawPlaces(time);
     this.updateLeverVisibility();
     this.accessories.update(this.layout, time, this.leversRoot.visible);
+    this.economyView.update(time, !this.ride && (this.open || this.sim.trains.length > 0));
     const notices = this.sim.notices;
     if (notices.length && notices[notices.length - 1].time !== this.noticesSeen) {
       this.noticesSeen = notices[notices.length - 1].time;

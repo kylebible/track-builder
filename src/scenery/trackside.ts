@@ -126,6 +126,30 @@ export function waterTower(): THREE.Group {
   );
 }
 
+/** A brick pump house with a pipe running back to the water, a tank, and a pipe over the track to fill tank cars. */
+export function pumpHouse(): THREE.Group {
+  const z = -(FACE + 34);
+  const tankZ = -(FACE + 16);
+  return group(
+    'pump-house',
+    base(100, 76, 'stone'),
+    box('brick', [44, 40, 36], [-20, 3, z]),
+    gableRoof('slate', 40, 16, 48, [-20, 43, z]),
+    box('glass', [14, 12, 1], [-20, 22, z + 18.2]),
+    box('darkWood', [10, 20, 1], [-34, 3, z + 18.2]),
+    // The intake pipe, out of the back toward the river or lake.
+    lying('steel', 4, 40, [-20, 10, z - 36], 'z', 10),
+    // A wheel on the pump.
+    lying('red', 9, 3, [4, 24, z], 'z', 18),
+    // The tank it pumps into, and the pipe that reaches over the train.
+    cylinder('sky', 15, 34, [26, 3, tankZ - 10], 15, 24),
+    cylinder('steel', 15.6, 1.5, [26, 30, tankZ - 10], 15.6, 24),
+    lying('black', 3, Math.abs(tankZ - 10) + 4, [26, OVERHEAD + 6, (tankZ - 10) / 2], 'z', 10),
+    cylinder('black', 2, OVERHEAD + 6 - 37, [26, 37, tankZ - 10], 2, 8),
+    cylinder('black', 4, 12, [26, OVERHEAD - 6, 0], 3, 10),
+  );
+}
+
 /** A wooden coal bunker with a chute over the track. */
 export function coalingStage(): THREE.Group {
   const z = -(FACE + 26);
@@ -451,6 +475,7 @@ export function slowBoard(): THREE.Group {
 
 export const TRACKSIDE_MODELS: Record<string, () => THREE.Group> = {
   'water-tower': waterTower,
+  'pump-house': pumpHouse,
   'coaling-stage': coalingStage,
   'charging-post': chargingPost,
   'coal-mine': coalMine,

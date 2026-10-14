@@ -20,6 +20,7 @@ export const MODEL_FOOTPRINTS: Record<string, Footprint> = {
   'cargo-loader': [-54, 54, -54, 54],
   'lift-bridge': [7, 197, -41, 59],
   'water-tower': [-45, 45, -4, 90],
+  'pump-house': [-50, 50, -4, 116],
   'coaling-stage': [-48, 48, 1, 82],
   'charging-post': [-22, 22, 23, 56],
   'coal-mine': [-95, 95, 5, 116],

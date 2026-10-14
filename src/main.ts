@@ -145,6 +145,8 @@ const templatesPanel = document.getElementById('templates-panel')!;
 new TemplatePicker(templatesPanel, (template) => {
   const hadOwn = editor.layout.pieces.length > 0;
   editor.load(template.build());
+  // A template too big for the table comes with the scene it's laid out for.
+  if (template.environment) setEnvironment(template.environment);
   templatesPanel.hidePopover();
   editor.flash(hadOwn ? `Started from the ${template.name.toLowerCase()}. Undo brings back yours.` : `Started from the ${template.name.toLowerCase()}.`);
   fitView();
@@ -169,6 +171,15 @@ async function openSharedLayout(): Promise<void> {
 window.addEventListener('hashchange', openSharedLayout);
 
 const trains = new Trains(scene, camera, editor, container, document.getElementById('toolbar')!, orbit);
+// A pump house in a scene with a river or lake has to be by the water.
+trains.sim.economy.waterNear = (at, reach) => {
+  const water = getEnvironment(environment).water;
+  if (!water) return null;
+  for (let r = 0; r <= reach; r += 50) {
+    for (let a = 0; a < 16; a++) if (water.contains({ x: at.x + r * Math.cos((a * Math.PI) / 8), y: at.y + r * Math.sin((a * Math.PI) / 8) })) return true;
+  }
+  return false;
+};
 
 const hemisphere = new THREE.HemisphereLight(0xffffff, 0xcfc4b0, 1.5);
 scene.add(hemisphere);

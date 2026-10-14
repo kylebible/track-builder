@@ -25,7 +25,7 @@ describe('scene dressing', () => {
       }
       expect(inside).toBeNull();
     }
-  });
+  }, 30000); // walks every vertex of four scenes, which takes several seconds
 
   it('keeps buildings out of the middle town block', () => {
     let tall = 0;

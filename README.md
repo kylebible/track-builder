@@ -246,19 +246,50 @@ straight like the station (`src/trains/stops.ts`). A train with its engines
 on stops at one only when there's work for it there, lines up the cars that
 need it, waits while the work is done, and carries on:
 
-- **Water tower**, **coaling stage**, **charging post**: top up engines (and
-  tenders and water tank cars).
-- **Coal mine** fills coal hoppers; the **power station** empties them.
-- **Farm** loads cows and milk; the **market** unloads them.
-- **Post office** swaps the mail van's bags.
-- **Lumber camp** loads logs; the **sawmill** takes them and loads crates of
-  planks; the **toy factory** loads toy cars and crates; the **goods shed**
-  unloads crates and toy cars.
+
+- **Coal mine** digs coal; the **coaling stage** tops up steam engines and
+  tenders from its pile; the **power station** burns coal to power the
+  **charging posts** (with no power station they run off the mains).
+- **Pump house** pumps water (by a river or lake, in scenes that have one);
+  the **water tower** fills boilers from its tank.
+- **Farm** makes milk and cows; the **market** sells them.
+- **Post office** sorts mail; mail trains swap bags between post offices.
+- **Lumber camp** fells logs; the **sawmill** saws each into two crates of
+  planks; the **toy factory** makes toy cars from planks; the **goods shed**
+  takes crates and toy cars.
 - **Whistle board**: engines whistle as they pass. **Slow board**: trains
   slow down past it.
 
 The train's controls show what's happening while it waits, and the panel
 keeps a tally of what has been delivered. Work rates are in `WORK`.
+
+### Jobs, goods and workers
+
+Every place keeps a store and needs workers (`src/trains/economy.ts`, rates
+and sizes on each place in `src/trains/stops.ts`). Places make goods only
+while staffed, and only load what they have or unload what they have room
+for. Workers tire after a shift (`ECONOMY.shiftSeconds`) and wait for a ride
+home; with nobody at work a place stops. The panel's **Places need goods and
+workers** switch turns this off.
+
+A train's **job** (picked on its card, `src/trains/jobs.ts`) decides what it
+carries and where it goes: coal, water, farm, timber, goods, mail or
+workers. A job train handles only its own goods, chooses its next stop by
+what places need and how far away they are, tops up its own engine when it
+runs low, and gets there by autoroute (`routeTo`), only ever driving
+forwards. New job trains are put on facing the same way round as the others,
+so they follow each other and never meet head on; with nothing to do, one
+runs on to the next station and looks again. Goods trains run through stations; workers trains
+take tired people from places to the station and bring fresh people back.
+**Free** trains behave as before. The Jobs buttons add a standard train
+(engine, tender and `JOB_TRAIN.cars` cars, 3 by default) on free track.
+
+A badge over each place shows its stock (a bar per good: amber when low, red
+when empty or full with nothing collecting it) and its workers (a dot each,
+fading as they tire; 😴 for tired workers waiting). Its outline is red, with
+the job train it needs, when no train has that job, and amber when one does.
+Tap a badge for what the place does; the panel's **Needs** list says what's
+short and adds the train that fixes it.
 
 The eye button on a train's controls (or C) rides along: the view moves to
 the front of the train, over an engine's cab or over the leading car when
