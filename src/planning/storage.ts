@@ -1,5 +1,4 @@
-import type { Layout } from '../layout/layout';
-import { layoutFromJson, layoutToJson } from './file';
+import { layoutFromJson, layoutToJson, type LayoutFile } from './file';
 
 // The browser autosave: the current layout, kept in localStorage after every
 // change. Storage can be missing or full (private windows, blocked site
@@ -7,7 +6,7 @@ import { layoutFromJson, layoutToJson } from './file';
 
 const KEY = 'track-builder:layout';
 
-export function loadAutosave(): Layout | null {
+export function loadAutosave(): LayoutFile | null {
   try {
     const text = localStorage.getItem(KEY);
     return text ? layoutFromJson(text) : null;
@@ -17,7 +16,7 @@ export function loadAutosave(): Layout | null {
 }
 
 /** Save the layout; false if the browser wouldn't keep it. */
-export function autosave(layout: Layout): boolean {
+export function autosave(layout: LayoutFile): boolean {
   try {
     localStorage.setItem(KEY, layoutToJson(layout));
     return true;

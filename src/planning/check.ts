@@ -12,8 +12,10 @@ import { defOf, findJoints, openEnds, worldEnd, type EndRef, type Layout, type W
 //   close, or two pegs (or two holes) meeting.
 // - An open end is any other end with nothing on it.
 // - An overlap is two pieces whose track runs into each other.
+// - Off the area is track past the edge of a table or rug (added by the
+//   panel, which knows what the layout is built on).
 
-export type IssueKind = 'near-miss' | 'same-gender' | 'overlap' | 'open-end';
+export type IssueKind = 'near-miss' | 'same-gender' | 'overlap' | 'open-end' | 'off-area';
 
 export interface Issue {
   kind: IssueKind;

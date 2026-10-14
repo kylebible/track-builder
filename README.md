@@ -48,7 +48,19 @@ Live site: https://kylebible.github.io/track-builder/
   part, so nothing is uploaded anywhere.
 
 Layout files are JSON (`src/planning/file.ts`): each piece's catalog id,
-position in mm and heading in degrees.
+position in mm and heading in degrees, plus the environment it's built on.
+
+## Scenes
+
+The **Scene** button picks what the track sits on, at real size
+(`src/environments/`): a play table (1220 × 820 mm with a 20 mm rim, about
+400 mm high), a 2 × 1.4 m living room rug on a wooden floor, a hardwood
+floor, outdoor grass, or the original grid mat with 10 cm squares. The choice
+saves with the layout, in files and share links. On the table or rug the
+check reports track that runs past the edge. The table size is a guess at a
+common train table (`TABLE` in `src/environments/environments.ts`). New
+layouts start on the table; layouts saved before scenes existed stay on the
+grid mat.
 
 - Scenery (tunnel, station, level crossing, bridge pier, signal, trees,
   cottage) is at the bottom of the palette. It drags, rotates, flips and
