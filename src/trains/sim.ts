@@ -7,7 +7,10 @@ import { edgeHeight, TrackNetwork, type Edge } from './network';
 import { Route, type Chooser } from './route';
 import { baseOf } from '../layout/layout';
 import { attracts, CRATE_KG, getStock, supplyLevel, WHEEL_RADIUS, type CargoKind, type ConsistEntry, type StockDef, type Supply } from './stock';
-import { doWork, getPlace, planWork, workSeconds, workSpan, type PlaceDef, type Work } from './stops';
+import { doWork, getPlace, planWork, workSeconds, workSpan, type PlaceDef, type Visit, type Work } from './stops';
+import { Economy, type Site } from './economy';
+import { freshAboard, jobConsist, nextStop, type JobId } from './jobs';
+import { shortestWay, type Way } from './paths';
 import { ACCESSORY, findAccessories, onRoute, type Accessory, type AccessoryKind, type Job } from './accessories';
 
 // A small, purpose-built simulation of wooden trains. The grooves keep every
@@ -84,6 +87,11 @@ export const STOPPING = {
   /** For this far past the board, beyond the train's own length. */
   slowMm: 250,
 };
+
+/** How often job trains look again at where to go, seconds. */
+const DISPATCH_SECONDS = 0.5;
+/** Job trains set the levers this far ahead of them, mm. */
+const STEER_AHEAD_MM = 1500;
 
 const AXLE_HEIGHT_MM = D.TRACK_HEIGHT - D.GROOVE_DEPTH + WHEEL_RADIUS;
 
@@ -264,6 +272,12 @@ export interface Train {
   ignore: Map<string, number>;
   /** Held to a slow speed until the odometer reaches this. */
   slowUntil: number;
+  /** What it's for: a job train picks its own stops and sets the levers to get there. */
+  job: JobId;
+  /** The place it's heading for, by uid. */
+  destination: string | null;
+  /** The last place it worked at. */
+  lastStop: string | null;
 }
 
 const ZERO_DRAG = (): Drag => ({ rolling: 0, curve: 0, joint: 0, jointAt: null, buffer: 0, slope: 0, brake: 0 });
@@ -308,6 +322,8 @@ export class TrainSim {
   readonly trains: Train[] = [];
   /** Which way each switch lever points, by switch point (`uid:connectorId`). */
   readonly levers = new Map<string, number>();
+  /** Goes up whenever a lever moves, for the view to redraw them. */
+  leverVersion = 0;
   readonly notices: Notice[] = [];
   /** Signs passed, newest last, for the view. */
   readonly events: PassEvent[] = [];
@@ -317,6 +333,10 @@ export class TrainSim {
   useSupplies = true;
   /** Units unloaded at places so far, by cargo. */
   readonly delivered: Partial<Record<CargoKind, number>> = {};
+  /** Stock and staff at every place. Off, places have everything and need nobody. */
+  readonly economy = new Economy();
+  useEconomy = true;
+  private dispatchClock = 0;
   time = 0;
   /** Accessories with track to work on, found afresh whenever the layout changes. */
   accessories: Accessory[] = [];
@@ -346,6 +366,29 @@ export class TrainSim {
     for (const map of [this.bridges, this.piles, this.jobs]) for (const uid of map.keys()) if (!uids.has(uid)) map.delete(uid);
     for (const uid of this.redSignals) if (!uids.has(uid)) this.redSignals.delete(uid);
     this.places = this.findPlaces();
+    const station = getPlace('station')!;
+    this.economy.sync([
+      ...this.places,
+      ...this.accessories.filter((a) => a.kind === 'station').map((a) => ({ uid: a.uid, place: station, at: a.at })),
+    ]);
+  }
+
+  /** Stations, as places in the economy. */
+  get stations(): Site[] {
+    return this.economy.all('station');
+  }
+
+  /** What the economy has to say about `train` working at `uid`, if it's running. */
+  private visit(train: Train, uid: string): Visit | undefined {
+    if (!this.useEconomy) return undefined;
+    const site = this.economy.site(uid);
+    if (!site) return undefined;
+    let wanted: number | undefined;
+    if (site.place.id === 'station' && train.job === 'workers') {
+      const coming = this.trains.filter((t) => t.job === 'workers').reduce((n, t) => n + freshAboard(t.consist), 0);
+      wanted = Math.max(0, this.economy.openSlots() - coming);
+    }
+    return { economy: this.economy, site, job: train.job, wanted };
   }
 
   /** Every place piece that sits on the track, and where. */
@@ -383,15 +426,52 @@ export class TrainSim {
   }
 
   /** Put a train on the track with its middle at `placement`. Returns an error message if it won't fit. */
-  addTrain(consist: ConsistEntry[], placement: Placement, name?: string): Train | string {
+  addTrain(consist: ConsistEntry[], placement: Placement, name?: string, job?: JobId): Train | string {
     const edge = this.network.edge(placement.edgeKey);
     if (!edge) return 'That track has gone.';
     const mid = placement.reversed ? edge.length - placement.s : placement.s;
-    return this.spawn(new Route(edge, placement.reversed, 0), consist, mid, { name });
+    return this.spawn(new Route(edge, placement.reversed, 0), consist, mid, { name, job });
+  }
+
+  /**
+   * A standard train for a job (engine, tender and cars) put on free track,
+   * by a place it works at if there's room, and set going. Returns an error message if there's nowhere.
+   */
+  addJobTrain(job: JobId, cars?: number): Train | string {
+    const consist = jobConsist(job, cars);
+    const name = `${job[0].toUpperCase()}${job.slice(1)} train ${this.nextId}`;
+    // Track by the places first, then anywhere, longest pieces first.
+    const near = [...this.places.map((p) => p.edgeKey), ...this.accessories.filter((a) => a.kind === 'station').map((a) => a.edgeKey)];
+    const edges = [...new Set([...near, ...[...this.network.edges].sort((a, b) => b.length - a.length).map((e) => e.key)])];
+    const clear = (t: Train) =>
+      this.trains.every((o) => o === t || o.vehicles.every((v) => t.vehicles.every((w) => distance(v.geo.center, w.geo.center) > (v.def.length + w.def.length) / 2 + 60)));
+    for (const edgeKey of edges) {
+      const edge = this.network.edge(edgeKey);
+      if (!edge) continue;
+      for (const reversed of [false, true]) {
+        const train = this.addTrain(consist, { edgeKey, s: edge.length / 2, reversed }, name, job);
+        if (typeof train === 'string') continue;
+        // Too close to another train: try somewhere else.
+        if (!clear(train)) {
+          this.removeTrain(train.id);
+          continue;
+        }
+        this.setThrottle(train.id, 1);
+        return train;
+      }
+    }
+    return 'There’s no free track long enough for a train. Lay more track or move a train.';
+  }
+
+  setJob(id: number, job: JobId): void {
+    const train = this.train(id);
+    if (!train) return;
+    train.job = job;
+    train.destination = null;
   }
 
   /** A new train laid on `route` with its middle at `mid`. */
-  private spawn(route: Route, consist: ConsistEntry[], mid: number, options: { name?: string; speeds?: number[]; throttle?: Train['throttle'] } = {}): Train | string {
+  private spawn(route: Route, consist: ConsistEntry[], mid: number, options: { name?: string; speeds?: number[]; throttle?: Train['throttle']; job?: JobId } = {}): Train | string {
     const laid = this.layOn(route, consist, mid);
     if (typeof laid === 'string') return laid;
     const id = this.nextId++;
@@ -410,6 +490,9 @@ export class TrainSim {
       odometer: 0,
       ignore: new Map(),
       slowUntil: 0,
+      job: options.job ?? 'free',
+      destination: null,
+      lastStop: null,
     };
     options.speeds?.forEach((v, i) => (train.vehicles[i].v = v));
     this.trains.push(train);
@@ -521,6 +604,11 @@ export class TrainSim {
     this.notices.length = 0;
     this.events.length = 0;
     for (const k of Object.keys(this.delivered)) delete this.delivered[k as CargoKind];
+    for (const train of this.trains) {
+      train.destination = null;
+      train.lastStop = null;
+    }
+    this.economy.reset();
   }
 
   private replace(train: Train, placement: Placement, turn: boolean): string | null {
@@ -667,6 +755,7 @@ export class TrainSim {
   toggleLever(key: string): void {
     const keys = key.includes(':') ? [key] : this.network.switches().filter((sw) => sw.uid === key).map((sw) => sw.key);
     for (const k of keys) this.levers.set(k, (this.levers.get(k) ?? 0) + 1);
+    this.leverVersion++;
     for (const train of this.trains) {
       const ahead = Math.max(...train.vehicles.map((v) => v.u + v.def.length / 2));
       const behind = Math.min(...train.vehicles.map((v) => v.u - v.def.length / 2));
@@ -718,6 +807,12 @@ export class TrainSim {
   /** Run the world on by `seconds`. */
   advance(seconds: number): void {
     const steps = Math.round(Math.min(seconds, 0.1) / PHYSICS.dt);
+    if (this.useEconomy) this.economy.tick(steps * PHYSICS.dt);
+    this.dispatchClock -= steps * PHYSICS.dt;
+    if (this.dispatchClock <= 0) {
+      this.dispatchClock = DISPATCH_SECONDS;
+      for (const train of this.trains) this.dispatch(train);
+    }
     for (let i = 0; i < steps; i++) this.step(PHYSICS.dt);
     this.moveBridges(steps * PHYSICS.dt);
     this.forgetStations();
@@ -946,6 +1041,85 @@ export class TrainSim {
     this.updateStatus(train, dt);
   }
 
+  // ---- jobs -----------------------------------------------------------------
+
+  /** Pick where a job train goes next, and set the levers ahead of it to get there. */
+  private dispatch(train: Train): void {
+    if (train.job === 'free' || train.wrecked || !train.vehicles.some((v) => v.def.motor)) return;
+    // Up against a buffer stop: back out and carry on the other way.
+    if (train.status.kind === 'stuck' && train.status.stuck === 'buffer' && train.throttle) {
+      train.throttle = train.throttle === 1 ? -1 : 1;
+      train.stillFor = 0;
+      train.status = { kind: 'stopped' };
+      train.destination = null;
+      return;
+    }
+    if (!this.useEconomy || train.stop || train.hold?.until != null) return;
+    const dir = travelDir(train);
+    if (!dir) return;
+    const start = this.frontStart(train, dir as 1 | -1);
+    const ways = new Map<string, Way | null>();
+    const wayTo = (uid: string): Way | null => {
+      if (!ways.has(uid)) {
+        const spot = this.spotOf(uid);
+        ways.set(uid, spot ? shortestWay(this.network, start, spot) : null);
+      }
+      return ways.get(uid)!;
+    };
+    const dest = nextStop(train.job, train.consist, this.economy, this.stations, (uid) => wayTo(uid)?.distance ?? null, train.lastStop);
+    train.destination = dest;
+    const way = dest ? wayTo(dest) : null;
+    if (way) this.steer(train, way);
+  }
+
+  /** Where a train's front is, running `dir` along its route, for finding its way. */
+  private frontStart(train: Train, dir: 1 | -1): { edge: Edge; leave: 0 | 1; left: number } {
+    const { front, back } = span(train);
+    const u = dir > 0 ? front : back;
+    const seg = train.route.segmentAt(u);
+    const along = Math.min(Math.max(u - seg.u0, 0), seg.edge.length);
+    if (dir > 0) return { edge: seg.edge, leave: seg.reversed ? 0 : 1, left: seg.edge.length - along };
+    return { edge: seg.edge, leave: seg.reversed ? 1 : 0, left: along };
+  }
+
+  /** The spot on the track a place (or station) works at. */
+  private spotOf(uid: string): { edgeKey: string; s: number } | null {
+    const point = this.places.find((p) => p.uid === uid);
+    if (point) return { edgeKey: point.edgeKey, s: point.s };
+    const acc = this.accessories.find((a) => a.uid === uid);
+    return acc ? { edgeKey: acc.edgeKey, s: (acc.from + acc.to) / 2 } : null;
+  }
+
+  /**
+   * Throw the levers on a job train's way, as far ahead as `STEER_AHEAD_MM`.
+   * A lever with another train standing on its switch is left alone.
+   */
+  private steer(train: Train, way: Way): void {
+    let changed = false;
+    for (const sw of way.switches) {
+      if (sw.at > STEER_AHEAD_MM) break;
+      if (((this.levers.get(sw.key) ?? 0) % sw.count) === sw.choice) continue;
+      const uid = sw.key.slice(0, sw.key.indexOf(':'));
+      const busy = this.trains.some((o) => o !== train && o.vehicles.some((v) => o.route.segmentAt(v.u).edge.uid === uid));
+      if (busy) continue;
+      this.levers.set(sw.key, sw.choice);
+      changed = true;
+    }
+    if (!changed) return;
+    this.leverVersion++;
+    for (const t of this.trains) {
+      const { front, back } = span(t);
+      t.route.cut(back, front);
+    }
+  }
+
+  /** A train has finished at a place: choose where next. */
+  private arrived(train: Train, uid: string): void {
+    train.lastStop = uid;
+    train.destination = null;
+    this.dispatchClock = 0;
+  }
+
   // ---- supplies and places beside the track --------------------------------
 
   /** Engines under power use up their stores; a tender's coal goes first, and a water tank car tops the boiler up. */
@@ -973,7 +1147,7 @@ export class TrainSim {
           else use(entry, 'coal', S.coalMm, name);
         } else if (supply === 'water') {
           use(entry, 'water', S.waterMm, name);
-          if (supplyLevel(entry, 'water') < S.topUpBelow) {
+          if (supplyLevel(entry, 'water') < S.topUpBelow && train.job !== 'water') {
             const tank = train.consist.find((c) => getStock(c.stockId).cargo?.kind === 'water' && (c.units ?? 0) > 0);
             if (tank) {
               tank.units = (tank.units ?? 0) - 1;
@@ -1036,6 +1210,7 @@ export class TrainSim {
       if (done) {
         train.ignore.set(stop.uid, train.odometer + length + STOPPING.lookAhead);
         train.stop = null;
+        this.arrived(train, stop.uid);
       }
       return;
     }
@@ -1059,7 +1234,7 @@ export class TrainSim {
       if (u === null) continue;
       const d = (u - front) * dir;
       if (d <= -length || d > STOPPING.lookAhead) continue;
-      const work = planWork(point.place, train.consist, this.rand);
+      const work = planWork(point.place, train.consist, this.rand, this.visit(train, point.uid));
       const span = work && workSpan(work);
       const lineUp: [number, number] = span ?? [0, train.vehicles.length - 1];
       if (!work || (u - this.middleOf(train, lineUp)) * dir <= 0) {
@@ -1258,7 +1433,8 @@ export class TrainSim {
             if (this.bridgeOpen(acc.uid)) consider(acc, ((dir > 0 ? a : z) - front) * dir - ACCESSORY.bridgeGapMm);
             break;
           case 'station':
-            if (!train.served.has(acc.uid)) consider(acc, (a - mid) * dir);
+            // Goods trains run through; workers trains and free trains stop.
+            if (!train.served.has(acc.uid) && (train.job === 'free' || train.job === 'workers')) consider(acc, (a - mid) * dir);
             break;
           case 'loader':
           case 'crane':
@@ -1309,7 +1485,7 @@ export class TrainSim {
       if (job && job.trainId !== train.id) return true;
       hold!.until = this.time + dwell;
       if (acc.kind === 'station') {
-        hold!.work = planWork(getPlace('station')!, train.consist, this.rand) ?? undefined;
+        hold!.work = planWork(getPlace('station')!, train.consist, this.rand, this.visit(train, acc.uid)) ?? undefined;
         if (hold!.work) hold!.until = this.time + Math.max(dwell, workSeconds(hold!.work));
       }
       if (acc.kind !== 'station') this.jobs.set(acc.uid, { trainId: train.id, vehicle, start: this.time, end: hold!.until });
@@ -1320,7 +1496,10 @@ export class TrainSim {
 
   private finish(train: Train, { acc, vehicle }: Stop): void {
     this.jobs.delete(acc.uid);
-    if (acc.kind === 'station') train.served.add(acc.uid);
+    if (acc.kind === 'station') {
+      train.served.add(acc.uid);
+      this.arrived(train, acc.uid);
+    }
     if (acc.kind === 'loader' || acc.kind === 'crane') {
       const load = acc.kind === 'loader' ? 'crate' : undefined;
       for (const entry of [train.consist[vehicle], train.vehicles[vehicle].entry]) {
