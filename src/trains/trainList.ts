@@ -11,6 +11,10 @@ export interface TrainListHost {
   goTo(id: number): void;
   /** The train being followed, if any. */
   readonly following: number | null;
+  /** The train whose controls are open in the list, if any. */
+  readonly selected: number | null;
+  /** Open a train's controls (and go to it), or close them. */
+  select(id: number | null): void;
   /** Light a train up on the map, or none. */
   highlight(id: number | null): void;
   setThrottle(id: number, throttle: 1 | 0 | -1): void;
@@ -20,13 +24,14 @@ export interface TrainListHost {
 
 /**
  * The sidebar's Trains tab: every train with what it's doing. Hover a row to
- * light the train up on the map; tap it to go there and follow it.
+ * light the train up on the map; tap it to go there, follow it, and open
+ * its controls.
  */
 export class TrainList {
   readonly el: HTMLElement;
   private readonly list: HTMLElement;
   private readonly empty: HTMLElement;
-  private readonly rows = new Map<number, { row: HTMLElement; key: string; status: HTMLElement; detail: HTMLElement; run: HTMLButtonElement }>();
+  private readonly rows = new Map<number, { row: HTMLElement; key: string; status: HTMLElement; detail: HTMLElement; run: HTMLButtonElement; more: HTMLElement }>();
   private hovered: number | null = null;
 
   constructor(private readonly host: TrainListHost) {
@@ -75,6 +80,9 @@ export class TrainList {
       entry.row.classList.toggle('stuck', t.status.kind === 'stuck' || t.wrecked);
       entry.row.classList.toggle('waiting', t.status.kind === 'waiting');
       entry.row.classList.toggle('following', this.host.following === t.id);
+      const open = this.host.selected === t.id;
+      entry.row.classList.toggle('selected', open);
+      entry.more.hidden = !open;
       const running = t.throttle !== 0;
       if (entry.run.dataset.on !== String(running)) {
         entry.run.dataset.on = String(running);
@@ -96,7 +104,7 @@ export class TrainList {
     const row = document.createElement('div');
     row.className = 'tl-row';
     row.tabIndex = 0;
-    row.title = 'Go to this train and follow it';
+    row.title = 'Go to this train, follow it, and open its controls';
     const icon = document.createElement('span');
     icon.className = 'tl-icon';
     icon.textContent = job.icon;
@@ -122,19 +130,39 @@ export class TrainList {
       const train = this.host.trains.find((x) => x.id === id);
       if (train) this.host.setThrottle(id, train.throttle ? 0 : 1);
     };
-    row.append(icon, text, run);
-    row.onclick = () => this.host.goTo(id);
+    // The train's own controls, open while it's selected.
+    const more = document.createElement('div');
+    more.className = 'tl-more';
+    more.hidden = true;
+    more.onclick = (e) => e.stopPropagation();
+    more.onkeydown = (e) => e.stopPropagation();
+    const top = document.createElement('div');
+    top.className = 'tl-top';
+    top.append(icon, text, run);
+    row.append(top, more);
+    const toggle = () => this.host.select(this.host.selected === id ? null : id);
+    row.onclick = toggle;
     row.onkeydown = (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        this.host.goTo(id);
+        toggle();
       }
     };
     row.onpointerenter = () => this.hover(id);
     row.onpointerleave = () => this.hover(null);
     row.onfocus = () => this.hover(id);
     row.onblur = () => this.hover(null);
-    return { row, key, status, detail, run };
+    return { row, key, status, detail, run, more };
+  }
+
+  /** Where the selected train's controls go: inside its row. */
+  slot(id: number): HTMLElement | null {
+    return this.rows.get(id)?.more ?? null;
+  }
+
+  /** Bring a train's row into view. */
+  reveal(id: number): void {
+    this.rows.get(id)?.row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 
   private hover(id: number | null): void {

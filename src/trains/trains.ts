@@ -206,6 +206,10 @@ export class Trains {
   highlighted: number | null = null;
   /** The train the view follows, if any. */
   following: number | null = null;
+  /** The train whose controls are open in the sidebar's list, if any. */
+  selected: number | null = null;
+  /** Shows the sidebar's list of trains; set by the page. */
+  onShowList: (() => void) | null = null;
   /** Moves the view to a spot; set by the page. */
   onFocus: ((at: Vec2) => void) | null = null;
   private readonly meshes = new Map<string, THREE.Group>();
@@ -280,6 +284,10 @@ export class Trains {
       get following() {
         return self.following;
       },
+      get selected() {
+        return self.selected;
+      },
+      select: (id) => this.select(id),
       highlight: (id) => (this.highlighted = id),
       setThrottle: (id, throttle) => {
         this.sim.setThrottle(id, throttle);
@@ -340,7 +348,7 @@ export class Trains {
       this.economyView.section,
       el('h3', { textContent: 'Tips' }),
       el('ul', { class: 'tr-hint' },
-        el('li', { innerHTML: '<b>Tap a car</b> on the track to turn it round. Red and blue ends are the magnets: red pulls blue.' }),
+        el('li', { innerHTML: 'With this panel open, <b>tap a car</b> on the track to turn it round. Red and blue ends are the magnets: red pulls blue. With it shut, tapping a train opens it in the sidebar’s Trains list.' }),
         el('li', { innerHTML: '<b>Drag a car</b> to lift it off. Drop it off the track to take it away.' }),
         el('li', { innerHTML: 'Each train has its own controls. Tap a switch’s <b>yellow knob</b> to change its way.' }),
         el('li', { innerHTML: '<b>Tap a signal</b> to turn it red or green. Trains stop at stations, and under the cargo loader and by the crane to load and unload open wagons. The lifting bridge’s knob raises it.' }),
@@ -708,40 +716,34 @@ export class Trains {
   }
 
   /** Keep a card floating over each train, and its buttons current. */
+  /**
+   * The open train's controls: in its row in the sidebar's list, or, riding
+   * along, pinned to the foot of the view. No cards float over trains.
+   */
   private drawCards(): void {
-    const rect = this.viewSize;
     const seen = new Set<number>();
+    if (this.selected !== null && !this.sim.train(this.selected)) this.selected = null;
+    const shown = this.ride ? this.ride.trainId : this.selected;
     for (const t of this.sim.trains) {
-      seen.add(t.id);
+      if (t.id !== shown) continue;
       const riding = this.ride?.trainId === t.id;
+      const home = riding ? this.hud : this.list.slot(t.id);
+      if (!home) continue;
+      seen.add(t.id);
       const dest = t.dispatch?.dest.kind === 'place' ? t.dispatch.dest.uid : '';
       const key = `${t.throttle}/${t.wrecked}/${t.name}/${t.vehicles.some((v) => v.def.motor)}/${riding}/${dest}/${this.sim.destinations().length}/${t.job}`;
       let entry = this.cards.get(t.id);
-      if (!entry || entry.key !== key) {
+      if (!entry || entry.key !== key || entry.card.parentElement !== home) {
         const card = this.makeCard(t);
-        if (entry) entry.card.replaceWith(card);
-        else this.hud.append(card);
+        entry?.card.remove();
+        home.append(card);
         entry = { card, key };
         this.cards.set(t.id, entry);
       }
       const { card } = entry;
       card.classList.toggle('pinned', riding);
-      if (this.ride) {
-        // Riding along: the ridden train's controls sit at the foot of the view, the rest stay out of it.
-        card.hidden = !riding;
-        card.style.transform = '';
-      } else {
-        // Over the middle of the train, above its tallest roof.
-        const xs = t.vehicles.map((v) => v.geo.center.x);
-        const ys = t.vehicles.map((v) => v.geo.center.y);
-        const mid = toWorld((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...t.vehicles.map((v) => v.geo.z + v.def.height)) + AXLE_HEIGHT + 14);
-        const p = mid.project(this.camera);
-        const visible = p.z < 1 && Math.abs(p.x) < 1.1 && Math.abs(p.y) < 1.1;
-        card.hidden = !visible;
-        if (visible) card.style.transform = `translate(${((p.x + 1) / 2) * rect.width}px, ${((1 - p.y) / 2) * rect.height}px) translate(-50%, -100%)`;
-      }
+      card.classList.toggle('in-list', !riding);
       card.classList.toggle('stuck', t.status.kind === 'stuck');
-      card.classList.toggle('lit', this.highlighted === t.id);
       const load = card.querySelector<HTMLElement>('.tr-card-load')!;
       const loadText = this.loadText(t);
       if (load.textContent !== loadText) load.textContent = loadText;
@@ -902,10 +904,14 @@ export class Trains {
     }
     const press = this.press;
     if (press && e.pointerId === press.pointerId) {
-      // A tap on a vehicle turns it round.
       this.press = null;
-      const error = this.sim.turnVehicle(press.trainId, press.index);
-      if (error) this.say(error);
+      // Building trains (the panel open), a tap turns a car round; otherwise it opens the train in the sidebar.
+      if (this.open) {
+        const error = this.sim.turnVehicle(press.trainId, press.index);
+        if (error) this.say(error);
+      } else {
+        this.select(press.trainId);
+      }
       return;
     }
     const carry = this.carry;
@@ -1002,6 +1008,16 @@ export class Trains {
   }
 
   // ---- every frame ---------------------------------------------------------
+
+  /** Open a train's controls in the sidebar and go to it, or close them. */
+  select(id: number | null): void {
+    this.selected = id;
+    if (id === null) return;
+    this.goTo(id);
+    this.onShowList?.();
+    this.list.update();
+    this.list.reveal(id);
+  }
 
   /** Fly the view to a train and follow it as it runs. */
   goTo(id: number): void {

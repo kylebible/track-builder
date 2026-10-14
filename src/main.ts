@@ -189,6 +189,7 @@ function showTab(which: 'track' | 'trains'): void {
     // Private windows can refuse; the tab just isn't remembered.
   }
 }
+trains.onShowList = () => showTab('trains');
 tabs.track.onclick = () => showTab('track');
 tabs.trains.onclick = () => showTab('trains');
 try {
