@@ -5,7 +5,8 @@ import { getPiece } from '../pieces/catalog';
 import { poseAt } from '../geometry/path';
 import { edgeHeight, TrackNetwork, type Edge } from './network';
 import { Route, type Chooser } from './route';
-import { attracts, getStock, WHEEL_RADIUS, type ConsistEntry, type StockDef } from './stock';
+import { attracts, CRATE_KG, getStock, WHEEL_RADIUS, type ConsistEntry, type StockDef } from './stock';
+import { ACCESSORY, findAccessories, onRoute, type Accessory, type AccessoryKind, type Job } from './accessories';
 
 // A small, purpose-built simulation of wooden trains. The grooves keep every
 // axle on the track centreline, so each vehicle only moves along the track:
@@ -99,6 +100,8 @@ export interface Drag {
   buffer: number;
   /** Gravity's pull along the route on a ramp, positive pulling route-forward. */
   slope: number;
+  /** Braking for a signal, a station or another accessory. */
+  brake: number;
 }
 
 export interface Coupling {
@@ -118,7 +121,39 @@ export interface Stuck {
   at: Vec2;
 }
 
-export type TrainStatus = { kind: 'stopped' } | { kind: 'running'; speed: number } | Stuck;
+export type TrainStatus = { kind: 'stopped' } | { kind: 'running'; speed: number } | { kind: 'waiting'; message: string } | Stuck;
+
+/** An accessory a train is braking or waiting for. */
+export interface Hold {
+  uid: string;
+  kind: AccessoryKind;
+  reason: string;
+  /** The wagon being loaded or unloaded, or -1. */
+  vehicle: number;
+  /** Arrived and waiting until this time, for a station, the loader or a crane. */
+  until: number | null;
+}
+
+/** The next accessory a train has to stop for, and how far it has left to go. */
+interface Stop {
+  acc: Accessory;
+  d: number;
+  vehicle: number;
+}
+
+const REASONS: Record<AccessoryKind, string> = {
+  signal: 'Waiting at the red signal',
+  bridge: 'Waiting for the bridge',
+  station: 'Stopped at the station',
+  loader: 'Loading',
+  crane: 'Unloading',
+};
+
+const DWELL: Partial<Record<AccessoryKind, number>> = {
+  station: ACCESSORY.stationSeconds,
+  loader: ACCESSORY.loaderSeconds,
+  crane: ACCESSORY.craneSeconds,
+};
 
 export interface Placement {
   edgeKey: string;
@@ -151,9 +186,21 @@ export interface Train {
   /** Derailed or crashed: holds still until reset. */
   wrecked: boolean;
   stillFor: number;
+  hold: Hold | null;
+  /** Stations it has already stopped at and not yet left behind. */
+  served: Set<string>;
 }
 
-const ZERO_DRAG = (): Drag => ({ rolling: 0, curve: 0, joint: 0, jointAt: null, buffer: 0, slope: 0 });
+const ZERO_DRAG = (): Drag => ({ rolling: 0, curve: 0, joint: 0, jointAt: null, buffer: 0, slope: 0, brake: 0 });
+
+/** A vehicle's weight with whatever it carries, kg. */
+const massOf = (v: Vehicle) => v.def.massKg + (v.entry.load ? CRATE_KG : 0);
+
+/** Which way along its route a train's engines drive it: +1, -1, or 0 when off or fighting. */
+function travelDir(train: Train): number {
+  if (!train.throttle) return 0;
+  return Math.sign(train.vehicles.reduce((sum, v) => sum + (v.def.motor ? train.throttle * v.facing : 0), 0));
+}
 
 const sub = (a: Vec2, b: Vec2): Vec2 => ({ x: a.x - b.x, y: a.y - b.y });
 const dot = (a: Vec2, b: Vec2) => a.x * b.x + a.y * b.y;
@@ -188,11 +235,29 @@ export class TrainSim {
   readonly levers = new Map<string, number>();
   readonly notices: Notice[] = [];
   time = 0;
+  /** Accessories with track to work on, found afresh whenever the layout changes. */
+  accessories: Accessory[] = [];
+  /** Signals set to red, by uid. Signals start green. */
+  readonly redSignals = new Set<string>();
+  /** Lifting bridges: whether each is set to go up, and how far up it is (0 to 1). */
+  readonly bridges = new Map<string, { up: boolean; lift: number }>();
+  /** Crates each crane has stacked beside it. */
+  readonly piles = new Map<string, number>();
+  /** Loading and unloading in progress, by accessory uid. */
+  readonly jobs = new Map<string, Job>();
   private nextId = 1;
   private readonly choose: Chooser = (key, count) => (this.levers.get(key) ?? 0) % count;
 
   constructor(layout: Layout) {
     this.network = new TrackNetwork(layout);
+    this.findAccessories();
+  }
+
+  private findAccessories(): void {
+    this.accessories = findAccessories(this.network.layout, (key) => this.network.edge(key), (p, reach, height) => this.nearestTrack(p, reach, height));
+    const uids = new Set(this.accessories.map((a) => a.uid));
+    for (const map of [this.bridges, this.piles, this.jobs]) for (const uid of map.keys()) if (!uids.has(uid)) map.delete(uid);
+    for (const uid of this.redSignals) if (!uids.has(uid)) this.redSignals.delete(uid);
   }
 
   // ---- building trains ---------------------------------------------------
@@ -238,6 +303,8 @@ export class TrainSim {
       status: { kind: 'stopped' },
       wrecked: false,
       stillFor: 0,
+      hold: null,
+      served: new Set(),
     };
     options.speeds?.forEach((v, i) => (train.vehicles[i].v = v));
     this.trains.push(train);
@@ -248,7 +315,8 @@ export class TrainSim {
   private rebuild(train: Train, consist: ConsistEntry[], mid: number, speeds?: number[]): string | null {
     const laid = this.layOn(train.route.clone(), consist, mid);
     if (typeof laid === 'string') return laid;
-    Object.assign(train, laid, { consist: consist.map((c) => ({ ...c })), status: { kind: 'stopped' }, wrecked: false, stillFor: 0 });
+    Object.assign(train, laid, { consist: consist.map((c) => ({ ...c })), status: { kind: 'stopped' }, wrecked: false, stillFor: 0, hold: null });
+    this.dropJobs(train.id);
     speeds?.forEach((v, i) => (train.vehicles[i].v = v));
     return null;
   }
@@ -317,6 +385,11 @@ export class TrainSim {
   removeTrain(id: number): void {
     const i = this.trains.findIndex((t) => t.id === id);
     if (i >= 0) this.trains.splice(i, 1);
+    this.dropJobs(id);
+  }
+
+  private dropJobs(trainId: number): void {
+    for (const [uid, job] of this.jobs) if (job.trainId === trainId) this.jobs.delete(uid);
   }
 
   train(id: number): Train | undefined {
@@ -340,7 +413,8 @@ export class TrainSim {
   private replace(train: Train, placement: Placement, turn: boolean): string | null {
     const laid = this.lay(train.consist, turn ? { ...placement, reversed: !placement.reversed } : placement);
     if (typeof laid === 'string') return laid;
-    Object.assign(train, laid, { throttle: 0, status: { kind: 'stopped' }, wrecked: false, stillFor: 0 });
+    Object.assign(train, laid, { throttle: 0, status: { kind: 'stopped' }, wrecked: false, stillFor: 0, hold: null });
+    this.dropJobs(train.id);
     return null;
   }
 
@@ -515,6 +589,7 @@ export class TrainSim {
       train.route.rebase(kept.map((s) => ({ ...s, edge: this.network.edge(s.edge.key)! })));
       if (!placementOk) train.placement = { edgeKey: kept[0].edge.key, s: kept[0].edge.length / 2, reversed: kept[0].reversed };
     }
+    this.findAccessories();
     return removed;
   }
 
@@ -524,6 +599,8 @@ export class TrainSim {
   advance(seconds: number): void {
     const steps = Math.round(Math.min(seconds, 0.1) / PHYSICS.dt);
     for (let i = 0; i < steps; i++) this.step(PHYSICS.dt);
+    this.moveBridges(steps * PHYSICS.dt);
+    this.forgetStations();
     this.coupleTouching();
     for (const train of this.trains) {
       const lo = Math.min(...train.vehicles.map((v) => v.u));
@@ -595,6 +672,7 @@ export class TrainSim {
     const hi = Math.max(...vehicles.map((v) => v.u + v.def.length / 2));
     route.extend(this.network, this.choose, lo - 40, hi + 40);
     this.measure(train);
+    const braking = this.accessories.length ? this.control(train) : ((train.hold = null), false);
 
     const force = vehicles.map(() => 0);
     const lateral = vehicles.map(() => 0);
@@ -635,7 +713,7 @@ export class TrainSim {
     });
 
     vehicles.forEach((v, i) => {
-      const weight = v.def.massKg * P.gravity;
+      const weight = massOf(v) * P.gravity;
       const drag = ZERO_DRAG();
       drag.rolling = P.rollingResistance * weight;
       drag.curve = P.flangeFriction * ((weight / 2) * (Math.abs(Math.sin(v.geo.yaw[0])) + Math.abs(Math.sin(v.geo.yaw[1]))) + lateral[i]);
@@ -678,8 +756,12 @@ export class TrainSim {
       // The motor.
       v.motorForce = 0;
       v.slipping = false;
+      if (braking) {
+        // Brakes on, and held firmly once stopped.
+        drag.brake = (massOf(v) * ACCESSORY.brakeMmS2) / 1000 + (Math.abs(v.v) < 1 ? 0.6 * weight : 0);
+      }
       if (v.def.motor) {
-        if (train.throttle === 0) {
+        if (train.throttle === 0 || braking) {
           drag.rolling += P.gearDragN;
         } else {
           const way = train.throttle * v.facing;
@@ -701,9 +783,9 @@ export class TrainSim {
 
     // Move: friction resists motion, and holds a vehicle still until pushed hard enough.
     vehicles.forEach((v, i) => {
-      const resist = v.drag.rolling + v.drag.curve + v.drag.joint;
+      const resist = v.drag.rolling + v.drag.curve + v.drag.joint + v.drag.brake;
       const f = force[i];
-      const toAccel = 1000 / v.def.massKg;
+      const toAccel = 1000 / massOf(v);
       if (v.v === 0) {
         if (Math.abs(f) > resist) v.v = (f - Math.sign(f) * resist) * toAccel * dt;
       } else {
@@ -733,6 +815,11 @@ export class TrainSim {
 
   private updateStatus(train: Train, dt: number): void {
     const engines = train.vehicles.filter((v) => v.def.motor);
+    if (train.hold && train.vehicles.every((v) => Math.abs(v.v) <= PHYSICS.stallSpeed)) {
+      train.status = { kind: 'waiting', message: train.hold.reason };
+      train.stillFor = 0;
+      return;
+    }
     if (train.throttle === 0 || !engines.length) {
       const moving = train.vehicles.some((v) => Math.abs(v.v) > PHYSICS.stallSpeed);
       train.status = moving ? { kind: 'running', speed: Math.max(...train.vehicles.map((v) => Math.abs(v.v))) } : { kind: 'stopped' };
@@ -809,6 +896,160 @@ export class TrainSim {
     while (a > 0 && train.couplings[a - 1].coupled) a--;
     while (b < train.vehicles.length - 1 && train.couplings[b].coupled) b++;
     return train.vehicles.slice(a, b + 1);
+  }
+
+  // ---- accessories ----------------------------------------------------------
+
+  /** Tap an accessory: a signal turns red or green, a lifting bridge goes up or down. Returns an error message. */
+  toggleAccessory(uid: string): string | null {
+    const acc = this.accessories.find((a) => a.uid === uid);
+    if (!acc) return null;
+    if (acc.kind === 'signal') {
+      if (!this.redSignals.delete(uid)) this.redSignals.add(uid);
+      return null;
+    }
+    if (acc.kind !== 'bridge') return null;
+    const bridge = this.bridges.get(uid) ?? { up: false, lift: 0 };
+    if (!bridge.up) {
+      const on = this.trains.find((t) => {
+        const { front, back } = span(t);
+        return onRoute(t.route, acc).some(([a, b]) => b > back && a < front);
+      });
+      if (on) return `${on.name} is on the bridge. Lift it once the train is across.`;
+    }
+    bridge.up = !bridge.up;
+    this.bridges.set(uid, bridge);
+    return null;
+  }
+
+  /** Whether a lifting bridge is up, or on its way up or down: trains can't cross. */
+  bridgeOpen(uid: string): boolean {
+    const b = this.bridges.get(uid);
+    return !!b && (b.up || b.lift > 0);
+  }
+
+  private moveBridges(dt: number): void {
+    for (const [uid, b] of this.bridges) {
+      const step = dt / ACCESSORY.bridgeSeconds;
+      b.lift = b.up ? Math.min(1, b.lift + step) : Math.max(0, b.lift - step);
+      if (b.lift < 0.02) continue;
+      // Anything on the span as it lifts falls off it.
+      const acc = this.accessories.find((a) => a.uid === uid)!;
+      for (const train of this.trains) {
+        if (train.wrecked) continue;
+        for (const [a, z] of onRoute(train.route, acc)) {
+          const v = train.vehicles.find((x) => [x.u + x.def.wheelbase / 2, x.u - x.def.wheelbase / 2].some((axle) => axle > a && axle < z));
+          if (v) {
+            this.wreck(train, v, 'ran-off', `${train.name} ran onto the lifting bridge while it was up.`, acc.at);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  /** Let go of stations a train has left behind, so it stops there again next time round. */
+  private forgetStations(): void {
+    for (const train of this.trains) {
+      if (!train.served.size) continue;
+      const { front, back } = span(train);
+      for (const uid of train.served) {
+        const acc = this.accessories.find((a) => a.uid === uid);
+        if (!acc || !onRoute(train.route, acc).some(([a, b]) => b > back - 100 && a < front + 100)) train.served.delete(uid);
+      }
+    }
+  }
+
+  /**
+   * The next accessory ahead that this train must stop for, measured from
+   * the part of the train that has to line up with it: the front for a
+   * signal or bridge, the middle at a station, a wagon at the loader or crane.
+   */
+  private nextStop(train: Train, dir: number): Stop | null {
+    const { front: f, back: b } = span(train);
+    const front = dir > 0 ? f : b;
+    const mid = (f + b) / 2;
+    let best: Stop | null = null;
+    const consider = (acc: Accessory, d: number, vehicle = -1) => {
+      if (d >= -3 && (!best || d < best.d)) best = { acc, d, vehicle };
+    };
+    for (const acc of this.accessories) {
+      for (const [a, z] of onRoute(train.route, acc)) {
+        switch (acc.kind) {
+          case 'signal': {
+            if (!this.redSignals.has(acc.uid)) break;
+            // Only trains coming toward its lamps.
+            const heading = train.route.poseAt(a).angle + (dir < 0 ? Math.PI : 0);
+            if (Math.cos(heading - acc.angle) > -0.5) break;
+            consider(acc, (a - front) * dir - ACCESSORY.signalGapMm);
+            break;
+          }
+          case 'bridge':
+            if (this.bridgeOpen(acc.uid)) consider(acc, ((dir > 0 ? a : z) - front) * dir - ACCESSORY.bridgeGapMm);
+            break;
+          case 'station':
+            if (!train.served.has(acc.uid)) consider(acc, (a - mid) * dir);
+            break;
+          case 'loader':
+          case 'crane':
+            train.vehicles.forEach((v, i) => {
+              const loaded = !!v.entry.load;
+              if (v.def.carries && loaded === (acc.kind === 'crane')) consider(acc, (a - v.u) * dir, i);
+            });
+            break;
+        }
+      }
+    }
+    return best;
+  }
+
+  /** Brake for whatever is ahead, wait there, and do the work. Returns whether to brake this step. */
+  private control(train: Train): boolean {
+    const dir = travelDir(train);
+    const stop = dir ? this.nextStop(train, dir) : null;
+    if (!stop) {
+      train.hold = null;
+      return false;
+    }
+    const { acc, d, vehicle } = stop;
+    let hold = train.hold;
+    const same = hold !== null && hold.uid === acc.uid && hold.vehicle === vehicle;
+    if (same && hold!.until !== null) {
+      if (this.time < hold!.until) return true;
+      this.finish(train, stop);
+      train.hold = null;
+      return false;
+    }
+    const speed = Math.max(0, ...train.vehicles.map((v) => v.v * dir));
+    // Brake hard enough to stop right on the spot.
+    const brake = d <= 0.5 || speed * speed > 2 * ACCESSORY.brakeMmS2 * d;
+    if (!brake && d > 60) {
+      train.hold = null;
+      return false;
+    }
+    if (!same) hold = train.hold = { uid: acc.uid, kind: acc.kind, reason: REASONS[acc.kind], vehicle, until: null };
+    const dwell = DWELL[acc.kind];
+    if (dwell && d <= 3 && train.vehicles.every((v) => Math.abs(v.v) < 0.5)) {
+      const job = this.jobs.get(acc.uid);
+      if (job && job.trainId !== train.id) return true;
+      hold!.until = this.time + dwell;
+      if (acc.kind !== 'station') this.jobs.set(acc.uid, { trainId: train.id, vehicle, start: this.time, end: hold!.until });
+      return true;
+    }
+    return brake;
+  }
+
+  private finish(train: Train, { acc, vehicle }: Stop): void {
+    this.jobs.delete(acc.uid);
+    if (acc.kind === 'station') train.served.add(acc.uid);
+    if (acc.kind === 'loader' || acc.kind === 'crane') {
+      const load = acc.kind === 'loader' ? 'crate' : undefined;
+      for (const entry of [train.consist[vehicle], train.vehicles[vehicle].entry]) {
+        if (load) entry.load = load;
+        else delete entry.load;
+      }
+      if (acc.kind === 'crane') this.piles.set(acc.uid, (this.piles.get(acc.uid) ?? 0) + 1);
+    }
   }
 
   private wreck(train: Train, v: Vehicle, kind: StuckKind, message: string, at: Vec2): void {

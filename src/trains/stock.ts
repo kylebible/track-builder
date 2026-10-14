@@ -30,6 +30,8 @@ export interface StockDef {
   /** Main body colour. */
   color: number;
   look: 'engine' | 'steam' | 'tender' | 'wagon' | 'coach' | 'timber';
+  /** Takes a crate from the cargo loader, for a crane to lift off. */
+  carries?: boolean;
 }
 
 export const WHEEL_RADIUS = 7.5;
@@ -64,7 +66,7 @@ export const STOCK: readonly StockDef[] = [
     look: 'steam',
   },
   { id: 'tender', name: 'Tender', length: 72, wheelbase: 36, width: 34, height: 40, massKg: 0.04, color: 0x2b8a4b, look: 'tender' },
-  { id: 'wagon', name: 'Open wagon', length: 78, wheelbase: 40, width: 34, height: 30, massKg: 0.045, color: 0xd9a441, look: 'wagon' },
+  { id: 'wagon', name: 'Open wagon', length: 78, wheelbase: 40, width: 34, height: 30, massKg: 0.045, color: 0xd9a441, look: 'wagon', carries: true },
   { id: 'coach', name: 'Passenger coach', length: 96, wheelbase: 52, width: 34, height: 52, massKg: 0.055, color: 0xc8352b, look: 'coach' },
   { id: 'timber', name: 'Long timber car', length: 130, wheelbase: 84, width: 34, height: 34, massKg: 0.07, color: 0x7a5a3a, look: 'timber' },
 ];
@@ -82,7 +84,12 @@ export interface ConsistEntry {
   stockId: string;
   /** Turned round: its south magnet leads. */
   reversed: boolean;
+  /** Carrying a crate (open wagons only). */
+  load?: 'crate';
 }
+
+/** What a crate adds to a wagon's weight, kg. An estimate. */
+export const CRATE_KG = 0.02;
 
 /** The pole on a vehicle's front (leading, in train order) and back. */
 export function polesOf(entry: Pick<ConsistEntry, 'reversed'>): { front: Pole; back: Pole } {
