@@ -11,6 +11,7 @@ import { TrainSim, type StuckKind, type Train, type VehicleGeometry } from './si
 import { AXLE_HEIGHT, buildVehicle, showLoad } from './trainMesh';
 import { AccessoryView } from './accessoryView';
 import { EconomyView } from './economyView';
+import { TrainList } from './trainList';
 import { freshAboard, getJob, JOBS, tiredAboard, type JobId } from './jobs';
 import { Synth } from '../sound/synth';
 import { TrainSounds } from '../sound/trainSounds';
@@ -83,6 +84,10 @@ const SHORT: Record<StuckKind, string> = {
   'no-coal': 'Out of coal',
   'flat-battery': 'Battery flat',
 };
+
+/** The glow round a train hovered in the list: a box the size of each car. */
+const HALO_GEOMETRY = new THREE.BoxGeometry(1, 1, 1);
+const HALO_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xffc23d, transparent: true, opacity: 0.4, depthWrite: false });
 
 /** How long a whistle's "Toot!" shows, ms. */
 const BUBBLE_MS = 1600;
@@ -175,6 +180,16 @@ export class Trains {
   private readonly vehiclesRoot = new THREE.Group();
   private readonly leversRoot = new THREE.Group();
   private readonly markersRoot = new THREE.Group();
+  /** Glows round the train hovered in the sidebar's list. */
+  private readonly haloRoot = new THREE.Group();
+  /** The sidebar's list of trains. */
+  readonly list: TrainList;
+  /** The train lit up from the list, if any. */
+  highlighted: number | null = null;
+  /** The train the view follows, if any. */
+  following: number | null = null;
+  /** Moves the view to a spot; set by the page. */
+  onFocus: ((at: Vec2) => void) | null = null;
   private readonly meshes = new Map<string, THREE.Group>();
   private readonly raycaster = new THREE.Raycaster();
   /** The track top, where dragged vehicles are carried. */
@@ -229,7 +244,27 @@ export class Trains {
     new ResizeObserver(() => (this.viewSize = measure())).observe(container);
     this.sim = new TrainSim(this.layout);
     this.accessories = new AccessoryView(this.sim, host.pieceObjects);
-    this.root.add(this.vehiclesRoot, this.leversRoot, this.markersRoot, this.accessories.root);
+    this.root.add(this.vehiclesRoot, this.leversRoot, this.markersRoot, this.haloRoot, this.accessories.root);
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    this.list = new TrainList({
+      get trains() {
+        return self.sim.trains;
+      },
+      statusText: (t) => this.statusText(t),
+      loadText: (t) => this.loadText(t),
+      destText: (t) => this.destText(t),
+      goTo: (id) => this.goTo(id),
+      get following() {
+        return self.following;
+      },
+      highlight: (id) => (this.highlighted = id),
+      setThrottle: (id, throttle) => {
+        this.sim.setThrottle(id, throttle);
+        if (throttle) this.setPaused(false);
+      },
+      openPanel: () => this.setOpen(true),
+    });
     scene.add(this.root);
 
     this.toggle = el('button', { id: 'trains-button', title: 'Trains: drag engines and cars onto the track (Y)', type: 'button' });
@@ -377,7 +412,7 @@ export class Trains {
 
   // ---- each train's controls -----------------------------------------------
 
-  private statusText(t: Train): string {
+  statusText(t: Train): string {
     const status = t.status;
     if (status.kind === 'stuck') return SHORT[status.stuck];
     if (status.kind === 'running') return `${Math.round(status.speed)} mm/s`;
@@ -432,7 +467,7 @@ export class Trains {
   }
 
   /** Where a job train is heading, for its card. */
-  private destText(t: Train): string {
+  destText(t: Train): string {
     if (t.job === 'free') return '';
     if (!this.sim.useEconomy) return 'Places need nothing';
     if (!t.destination) return 'Nothing to do';
@@ -473,7 +508,7 @@ export class Trains {
   }
 
   /** Stores and cargo, for the card: "Water 60% · Coal 80% · 5 passengers". */
-  private loadText(t: Train): string {
+  loadText(t: Train): string {
     const parts: string[] = [];
     const stores = new Map<string, number>();
     t.consist.forEach((entry) => {
@@ -678,6 +713,7 @@ export class Trains {
         if (visible) card.style.transform = `translate(${((p.x + 1) / 2) * rect.width}px, ${((1 - p.y) / 2) * rect.height}px) translate(-50%, -100%)`;
       }
       card.classList.toggle('stuck', t.status.kind === 'stuck');
+      card.classList.toggle('lit', this.highlighted === t.id);
       const load = card.querySelector<HTMLElement>('.tr-card-load')!;
       const loadText = this.loadText(t);
       if (load.textContent !== loadText) load.textContent = loadText;
@@ -939,6 +975,50 @@ export class Trains {
 
   // ---- every frame ---------------------------------------------------------
 
+  /** Fly the view to a train and follow it as it runs. */
+  goTo(id: number): void {
+    const at = this.centreOf(id);
+    if (!at) return;
+    this.following = id;
+    this.onFocus?.(at);
+  }
+
+  /** Where the followed train is now, or null when there's none to follow. */
+  followPoint(): THREE.Vector3 | null {
+    if (this.following === null) return null;
+    const train = this.sim.train(this.following);
+    const at = this.centreOf(this.following);
+    if (!train || !at || this.ride) {
+      this.following = null;
+      return null;
+    }
+    return toWorld(at.x, at.y, Math.min(...train.vehicles.map((v) => v.geo.z)));
+  }
+
+  private centreOf(id: number): Vec2 | null {
+    const train = this.sim.train(id);
+    if (!train?.vehicles.length) return null;
+    const xs = train.vehicles.map((v) => v.geo.center.x);
+    const ys = train.vehicles.map((v) => v.geo.center.y);
+    return { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
+  }
+
+  /** A soft glow round each car of the train hovered in the list. */
+  private drawHalo(time: number): void {
+    this.haloRoot.clear();
+    const train = this.highlighted === null ? undefined : this.sim.train(this.highlighted);
+    if (!train) return;
+    HALO_MATERIAL.opacity = 0.32 + 0.14 * Math.sin(time / 180);
+    for (const v of train.vehicles) {
+      const halo = new THREE.Mesh(HALO_GEOMETRY, HALO_MATERIAL);
+      halo.scale.set(v.def.length + 14, v.def.height + AXLE_HEIGHT + 14, v.def.width + 14);
+      halo.position.copy(toWorld(v.geo.center.x, v.geo.center.y, v.geo.z + (v.def.height + AXLE_HEIGHT) / 2 - 4));
+      halo.rotation.set(0, v.geo.heading, 0);
+      halo.rotateZ(v.geo.pitch);
+      this.haloRoot.add(halo);
+    }
+  }
+
   tick(time: number): void {
     const dt = this.lastTime === null ? 0 : (time - this.lastTime) / 1000;
     this.lastTime = time;
@@ -953,6 +1033,9 @@ export class Trains {
     if (this.autorouteBox.checked !== this.sim.autoroute) this.autorouteBox.checked = this.sim.autoroute;
     this.sounds.update(this.sim, !this.paused);
     this.drawTrains(time);
+    this.drawHalo(time);
+    // Only while the sidebar shows it.
+    if (this.list.el.offsetParent) this.list.update();
     if (this.ride) this.placeCab(dt);
     this.drawCards();
     this.drawPlaces(time);

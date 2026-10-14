@@ -30,6 +30,15 @@ button { font: inherit; color: inherit; }
 .brand svg { width: 28px; height: 28px; flex: none; }
 .brand h1 { font-size: 17px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
 #palette { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+#palette[hidden], #train-tab[hidden] { display: none; }
+#train-tab { display: flex; flex-direction: column; min-height: 0; flex: 1; border-top: 1px solid var(--line); }
+.side-tabs { display: flex; gap: 2px; margin: 0 16px 8px; background: #f1eadd; border-radius: 9px; padding: 3px; }
+.side-tabs button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 4px; border: 0; border-radius: 7px; background: transparent; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.side-tabs button:hover { color: var(--ink); }
+.side-tabs button[aria-selected='true'] { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(60, 40, 10, 0.15); }
+.side-tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tab-count { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; line-height: 18px; box-sizing: border-box; }
+.tab-count[hidden] { display: none; }
 
 .settings { display: grid; gap: 8px; padding: 4px 16px 12px; border-bottom: 1px solid var(--line); }
 .setting { display: grid; gap: 4px; }

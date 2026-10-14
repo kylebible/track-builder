@@ -167,6 +167,38 @@ async function openSharedLayout(): Promise<void> {
 window.addEventListener('hashchange', openSharedLayout);
 
 const trains = new Trains(scene, camera, editor, container, document.getElementById('toolbar')!, orbit);
+trains.onFocus = focusOn;
+
+// The sidebar swaps between the parts palette and the list of trains.
+const trainTab = document.getElementById('train-tab')!;
+trainTab.append(trains.list.el);
+const tabs = { track: document.getElementById('tab-track')!, trains: document.getElementById('tab-trains')! };
+const tabCount = tabs.trains.querySelector<HTMLElement>('.tab-count')!;
+function showTab(which: 'track' | 'trains'): void {
+  tabs.track.setAttribute('aria-selected', String(which === 'track'));
+  tabs.trains.setAttribute('aria-selected', String(which === 'trains'));
+  document.getElementById('palette')!.hidden = which !== 'track';
+  trainTab.hidden = which !== 'trains';
+  if (which === 'trains') trains.list.update();
+  try {
+    localStorage.setItem('sidebar-tab', which);
+  } catch {
+    // Private windows can refuse; the tab just isn't remembered.
+  }
+}
+tabs.track.onclick = () => showTab('track');
+tabs.trains.onclick = () => showTab('trains');
+try {
+  if (localStorage.getItem('sidebar-tab') === 'trains') showTab('trains');
+} catch {
+  // Nothing remembered.
+}
+// Dragging the view round lets go of a followed train.
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (e.buttons) trains.following = null;
+});
+let followed: THREE.Vector3 | null = null;
+
 // A pump house in a scene with a river or lake has to be by the water.
 trains.sim.economy.waterNear = (at, reach) => {
   const water = getEnvironment(environment).water;
@@ -218,6 +250,24 @@ const ease = (t: number) => 1 - Math.pow(1 - t, 3);
 renderer.setAnimationLoop((time) => {
   // Riding along, the train places the camera.
   if (trains.riding) flight = null;
+  // Keep a followed train in the middle, flying there or not.
+  const follow = trains.followPoint();
+  if (follow && followed) {
+    const delta = follow.clone().sub(followed);
+    if (flight) {
+      flight.toTarget.add(delta);
+      flight.toCamera.add(delta);
+    } else {
+      orbit.target.add(delta);
+      camera.position.add(delta);
+    }
+  }
+  followed = follow;
+  const count = String(trains.sim.trains.length || '');
+  if (tabCount.textContent !== count) {
+    tabCount.textContent = count;
+    tabCount.hidden = !count;
+  }
   if (flight) {
     const t = Math.min(1, (performance.now() - flight.start) / FLIGHT_MS);
     orbit.target.lerpVectors(flight.fromTarget, flight.toTarget, ease(t));
