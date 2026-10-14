@@ -39,6 +39,20 @@
 .tr-card-row > button.danger:hover { color: var(--danger); }
 .tr-card .seg button { padding: 3px 8px; }
 .tr-card button:disabled { opacity: 0.4; cursor: default; }
+.tr-card-load { color: var(--muted); font-size: 11px; max-width: 260px; white-space: normal; }
+.tr-card-load[hidden] { display: none; }
+.tr-check { display: flex; align-items: center; gap: 6px; margin-top: 12px; color: var(--ink); cursor: pointer; }
+.tr-deliveries { margin: 8px 0 0; color: var(--ink); font-weight: 600; line-height: 1.4; }
+.tr-deliveries[hidden] { display: none; }
+/* What's going on where a train is stopped, and a toot as one passes a sign. */
+.tr-card-work { display: flex; flex-direction: column; gap: 3px; max-width: 260px; white-space: normal; font-size: 11px; color: var(--ink); }
+.tr-card-work[hidden] { display: none; }
+.tr-card-work > i { display: block; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.tr-card-work > i > i { display: block; height: 100%; background: var(--accent); transition: width 0.15s; }
+.tr-bubble { position: absolute; left: 0; top: 0; padding: 4px 10px; background: #fff; border: 1px solid var(--line); border-radius: 14px; font-size: 13px; font-weight: 700; box-shadow: 0 3px 10px rgba(60, 40, 10, 0.18); pointer-events: none; animation: tr-pop 0.25s ease-out; }
+.tr-bubble[hidden] { display: none; }
+.tr-bubble.slow { background: #fff4c2; }
+@keyframes tr-pop { from { opacity: 0; margin-top: 8px; } to { opacity: 1; margin-top: 0; } }
 body.carrying-train, body.carrying-train * { cursor: grabbing !important; }
 .tr-hint { margin: 12px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .tr-toast { position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%); max-width: min(520px, calc(100% - 32px)); padding: 8px 14px; background: #fff4e5; border: 1px solid #f2c894; border-radius: 12px; box-shadow: var(--shadow); font-size: 13px; font-weight: 600; text-align: center; pointer-events: none; z-index: 3; }
@@ -51,3 +65,11 @@ body.carrying-train, body.carrying-train * { cursor: grabbing !important; }
 .tr-card-row > button.whistle { display: inline-grid; place-items: center; padding: 3px 6px; }
 .tr-card-row > button.whistle svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 #sound-button[aria-pressed='true'] { color: var(--muted); }
+/* Riding along: the ridden train's controls sit at the foot of the view. */
+.tr-card-row > button.ride { display: grid; place-items: center; padding: 3px 6px; }
+.tr-card-row > button.ride svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.tr-card-row > button.ride.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tr-card.pinned { left: 50%; top: auto; bottom: 16px; transform: translateX(-50%); margin-top: 0; font-size: 13px; padding: 8px 10px; }
+body.riding .tr-toast { bottom: 96px; }
+/* The build hints don't apply from the cab. */
+body.riding #status { display: none; }

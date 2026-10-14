@@ -7,9 +7,10 @@ import { PlanningPanel } from './planning/panel';
 import { autosave, loadAutosave } from './planning/storage';
 import { Trains } from './trains/trains';
 import { loadSceneryModels } from './render/sceneryModels';
-import { DEFAULT_ENVIRONMENT, type EnvironmentId } from './environments/environments';
+import { DEFAULT_ENVIRONMENT, getEnvironment, inWater, offArea, type EnvironmentId } from './environments/environments';
 import { EnvironmentPicker } from './environments/picker';
 import { EnvironmentScene } from './environments/scene';
+import { TemplatePicker } from './templates/picker';
 import './style.css';
 
 const container = document.getElementById('app')!;
@@ -97,10 +98,16 @@ const editor = new Editor(scene, camera, orbit, {
     raise: button('raise'),
     lower: button('lower'),
     section: button('section'),
+    fill: button('fill'),
     remove: button('remove'),
     fit: button('fit'),
   },
   onFit: fitView,
+  fillPanel: document.getElementById('fill-panel')!,
+  blocked: (layout) => {
+    const env = getEnvironment(environment);
+    return [...(offArea(layout, env)?.uids ?? []), ...(inWater(layout, env)?.uids ?? [])];
+  },
   initial: restored ?? undefined,
   onChange: (layout) => {
     saved = autosave({ ...layout, environment });
@@ -118,8 +125,18 @@ planning = new PlanningPanel(editor, {
   saved: () => saved,
   environment: () => environment,
   onEnvironment: (id) => setEnvironment(id),
+  onTemplates: () => templatesPanel.showPopover(),
 });
 planning.update(editor.layout);
+
+const templatesPanel = document.getElementById('templates-panel')!;
+new TemplatePicker(templatesPanel, (template) => {
+  const hadOwn = editor.layout.pieces.length > 0;
+  editor.load(template.build());
+  templatesPanel.hidePopover();
+  editor.flash(hadOwn ? `Started from the ${template.name.toLowerCase()}. Undo brings back yours.` : `Started from the ${template.name.toLowerCase()}.`);
+  fitView();
+});
 
 /** Open the layout a share link carries, then tidy the address so a reload keeps later edits. */
 async function openSharedLayout(): Promise<void> {
@@ -139,7 +156,7 @@ async function openSharedLayout(): Promise<void> {
 }
 window.addEventListener('hashchange', openSharedLayout);
 
-const trains = new Trains(scene, camera, editor, container, document.getElementById('toolbar')!);
+const trains = new Trains(scene, camera, editor, container, document.getElementById('toolbar')!, orbit);
 
 const hemisphere = new THREE.HemisphereLight(0xffffff, 0xcfc4b0, 1.5);
 scene.add(hemisphere);
@@ -180,13 +197,15 @@ resize();
 const ease = (t: number) => 1 - Math.pow(1 - t, 3);
 
 renderer.setAnimationLoop((time) => {
+  // Riding along, the train places the camera.
+  if (trains.riding) flight = null;
   if (flight) {
     const t = Math.min(1, (performance.now() - flight.start) / FLIGHT_MS);
     orbit.target.lerpVectors(flight.fromTarget, flight.toTarget, ease(t));
     camera.position.lerpVectors(flight.fromCamera, flight.toCamera, ease(t));
     if (t === 1) flight = null;
   }
-  orbit.update();
+  if (!trains.riding) orbit.update();
   editor.tick(time);
   trains.tick(time);
   environmentScene.tick(time);

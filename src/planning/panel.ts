@@ -37,6 +37,8 @@ export interface PlanningDom {
   environment: () => EnvironmentId;
   /** A layout file opened here named an environment. */
   onEnvironment: (id: EnvironmentId) => void;
+  /** Show the ready-made layouts to start from. */
+  onTemplates: () => void;
 }
 
 const CATEGORY_NAMES: Record<PieceCategory, string> = {
@@ -48,6 +50,7 @@ const CATEGORY_NAMES: Record<PieceCategory, string> = {
   crossing: 'Crossings',
   buffer: 'Buffer stops',
   scenery: 'Scenery',
+  trackside: 'Trackside stops',
 };
 
 const ICONS = {
@@ -59,6 +62,7 @@ const ICONS = {
   download: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>',
   upload: '<path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/>',
   fresh: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+  template: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
 };
 
 const icon = (name: keyof typeof ICONS) => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
@@ -327,8 +331,13 @@ export class PlanningPanel {
       this.editor.flash('Started a new layout. Undo brings the old one back.');
     });
 
+    const templates = actionButton('template', 'Start from a template…', () => {
+      this.dom.sharePanel.hidePopover();
+      this.dom.onTemplates();
+    });
+
     const actions = el('div', 'actions');
-    actions.append(link, this.linkField, download, open, fresh, this.fileInput);
+    actions.append(link, this.linkField, download, open, fresh, templates, this.fileInput);
     const foot = el('p', 'panel-foot', 'A share link holds the whole layout, so anyone who opens it sees exactly this track. Nothing is uploaded.');
     this.dom.sharePanel.append(head, actions, foot);
   }

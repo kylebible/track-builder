@@ -120,8 +120,9 @@ Layout files are JSON (`src/planning/file.ts`): each piece's catalog id,
 position in mm, heading in degrees and, for raised track, height in mm.
 It also names the environment it was built on.
 
-- Scenery (tunnel, station, level crossing, bridge pier, signal, trees,
-  cottage) is at the bottom of the palette. It drags, rotates, flips and
+- Scenery (tunnel, station, level crossing, lifting bridge, cargo loader,
+  magnetic crane, bridge pier, signal, trees, cottage) is at the bottom of
+  the palette. It drags, rotates, flips and
   deletes like track. Drag a tunnel, station or pier near the middle of a
   straight and it lines up over it. The level crossing is a real track piece
   (a medium straight) and joins like one.
@@ -172,6 +173,73 @@ Each train carries its own controls, floating over it: ◀ ■ ▶ for the
 engines, ⇄ to turn the whole train round and ✕ to take it off. The panel
 keeps Pause, the speed and Reset. Tap a switch's yellow knob to change
 which way it sends trains; the yellow stripe shows the way it is set.
+
+### Accessories that work
+
+Some scenery works with running trains (`src/trains/accessories.ts`).
+Trains with their engines on brake for them and set off again on their own:
+
+- **Signal**: tap it to turn it red or green. A red signal stops trains
+  coming toward its lamps, a little short of it; turn the signal round (R)
+  to face the other way. It works the track within 90 mm of it.
+- **Station**: trains stop with their middle at the platform for 3 seconds,
+  once each time round. Some passengers get off each coach and some get on,
+  and the train waits until they have.
+- **Cargo loader**: sits over the track like a station. A train stops each
+  empty open wagon under its chute and a crate drops in.
+- **Magnetic crane**: put it beside the track, 5 to 15 cm from it. A train
+  stops each loaded wagon under the hook, and the crane lifts the crate off
+  and stacks it on the far side. A crate adds 20 g to a wagon.
+- **Lifting bridge**: a long straight whose middle span rises 10 cm between
+  two towers. Tap the yellow knob on its control box to lift or lower it.
+  Trains wait at either end while it is up, it won't lift with a train on
+  it, and anything that rolls onto it while it is up falls off.
+
+Signals and the bridge's knob take taps whenever the Trains panel is open or
+trains are on the track. Stopping distances and waiting times are in
+`ACCESSORY`. The lifting bridge and the loader are our own designs, not
+measured pieces.
+
+### Cars, cargo and trackside stops
+
+Besides the open wagon, coach and timber car there are a coal hopper, water
+tank car, milk car, cattle car, mail van, flat car, car carrier and brake
+van. Each car that carries something shows it on the model as it fills:
+passengers at the windows, logs, coal, cows, crates and toy cars.
+
+Steam engines burn water and coal and battery engines use charge as they
+run (`SUPPLIES` in `src/trains/sim.ts`). A tender's coal is burned before
+the engine's own, and a water tank car tops up the boiler when it gets low.
+An engine that runs dry stops and says what it needs. The Trains panel has a
+switch to turn this off, and Reset puts every train back with full stores
+and empty cars.
+
+The **Trackside stops** section of the palette has places that sit over a
+straight like the station (`src/trains/stops.ts`). A train with its engines
+on stops at one only when there's work for it there, lines up the cars that
+need it, waits while the work is done, and carries on:
+
+- **Water tower**, **coaling stage**, **charging post**: top up engines (and
+  tenders and water tank cars).
+- **Coal mine** fills coal hoppers; the **power station** empties them.
+- **Farm** loads cows and milk; the **market** unloads them.
+- **Post office** swaps the mail van's bags.
+- **Lumber camp** loads logs; the **sawmill** takes them and loads crates of
+  planks; the **toy factory** loads toy cars and crates; the **goods shed**
+  unloads crates and toy cars.
+- **Whistle board**: engines whistle as they pass. **Slow board**: trains
+  slow down past it.
+
+The train's controls show what's happening while it waits, and the panel
+keeps a tally of what has been delivered. Work rates are in `WORK`.
+
+The eye button on a train's controls (or C) rides along: the view moves to
+the front of the train, over an engine's cab or over the leading car when
+it is being pushed, looking down the track ahead (`src/trains/cab.ts`).
+When the train backs up, the view moves to its other end. Drag to look
+around; the view drifts back to straight ahead when you let go. Switch
+knobs still work from the cab. Get off, or Esc, goes back to the view you
+had.
 
 The models (`src/trains/trainMesh.ts`) are built in code to look like
 wooden Brio trains: painted beech bodies, red plastic wheels and magnet

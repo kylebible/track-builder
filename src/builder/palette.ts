@@ -21,6 +21,7 @@ const CATEGORY_NAMES: Record<PieceCategory, string> = {
   crossing: 'Crossings',
   buffer: 'Buffer stops',
   scenery: 'Scenery',
+  trackside: 'Trackside stops',
 };
 
 const ENDS_LABELS: Record<Ends, string> = { mixed: 'Peg + hole', pegs: '2 pegs', holes: '2 holes' };

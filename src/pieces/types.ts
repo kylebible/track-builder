@@ -35,7 +35,7 @@ export type BridgeStyle = 'viaduct' | 'suspension' | 'truss' | 'covered';
 /** A piece drawn round a structure of its own rather than as plain track. */
 export type Structure = 'helix' | 'turntable';
 
-export type PieceCategory = 'straight' | 'curve' | 'double' | 'ramp' | 'switch' | 'crossing' | 'buffer' | 'scenery';
+export type PieceCategory = 'straight' | 'curve' | 'double' | 'ramp' | 'switch' | 'crossing' | 'buffer' | 'scenery' | 'trackside';
 
 export interface PieceDef {
   /** Stable catalog id, used in saved layouts. */
@@ -71,8 +71,15 @@ export interface PieceDef {
    * a turntable (a pit with a turning bridge, drawn instead of its paths).
    */
   structure?: Structure;
+  /**
+   * Left out of auto-fill: an uncommon or generic piece. Every shape fill can
+   * use multiplies its search, which has to finish in a fraction of a second.
+   */
+  noFill?: boolean;
   /** How far a bendy track is bent, degrees, before any flip. */
   bend?: number;
+  /** A lifting bridge: the stretch of its first path, from and to (mm along it), that rises. */
+  liftSpan?: [number, number];
   /** Turned over from the catalog piece, see `mirrorPiece`. */
   mirrored?: boolean;
 }

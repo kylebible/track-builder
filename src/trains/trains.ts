@@ -4,10 +4,12 @@ import type { Vec2 } from '../geometry/pose';
 import type { Layout } from '../layout/layout';
 import * as D from '../pieces/dimensions';
 import { toWorld } from '../render/pieceMesh';
-import { getStock, STOCK, type StockDef } from './stock';
+import { cabPose, travelWay } from './cab';
+import { cargoCount, getStock, STOCK, supplyLevel, type CargoKind, type StockDef } from './stock';
 import { edgeGrade, edgeHeight } from './network';
 import { TrainSim, type StuckKind, type Train, type VehicleGeometry } from './sim';
-import { AXLE_HEIGHT, buildVehicle } from './trainMesh';
+import { AXLE_HEIGHT, buildVehicle, showLoad } from './trainMesh';
+import { AccessoryView } from './accessoryView';
 import { Synth } from '../sound/synth';
 import { TrainSounds } from '../sound/trainSounds';
 import './trains.css';
@@ -27,6 +29,12 @@ export interface TrainsHost {
   readonly pieceObjects: THREE.Object3D;
 }
 
+/** The orbit controls, handed over while riding along. */
+export interface ViewControls {
+  enabled: boolean;
+  target: THREE.Vector3;
+}
+
 const SPEEDS = [1, 2, 4] as const;
 const LEVER_REACH = 24;
 /** How far down the chosen way the lever's stripe runs. */
@@ -35,6 +43,16 @@ const STRIPE_MM = 110;
 const ATTACH_REACH_MM = 70;
 /** Pointer travel, in pixels, before a press on a vehicle becomes a drag. */
 const DRAG_THRESHOLD_PX = 6;
+/** Riding along: a wide view, and a near plane that clears the roof below. */
+const CAB_FOV = 68;
+const CAB_NEAR = 2;
+/** Radians of look per pixel dragged while riding. */
+const LOOK_PER_PX = 0.005;
+/** How quickly the view swings round with the track, and back ahead after looking around. */
+const FOLLOW_RATE = 7;
+const LOOK_RETURN_RATE = 1.2;
+/** Tipped down a touch, to see the track ahead as well as the horizon. */
+const CAB_TILT = -0.24;
 
 const leverMaterial = new THREE.MeshStandardMaterial({ color: 0xf2c230, roughness: 0.4, emissive: 0x6b4f00, emissiveIntensity: 0.25 });
 const leverStem = new THREE.MeshStandardMaterial({ color: 0x5a4026, roughness: 0.8 });
@@ -45,6 +63,9 @@ const stemGeometry = new THREE.CylinderGeometry(2, 2, 22, 10);
 const attachMaterial = new THREE.MeshBasicMaterial({ color: 0x1f9d55, transparent: true, opacity: 0.85 });
 const attachGeometry = new THREE.TorusGeometry(10, 2.2, 10, 40);
 
+/** An eye: watch from the train. */
+const RIDE_ICON = '<svg viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>';
+
 const SHORT: Record<StuckKind, string> = {
   'ran-off': 'Ran off the end',
   buffer: 'At the buffer stop',
@@ -54,7 +75,13 @@ const SHORT: Record<StuckKind, string> = {
   crashed: 'Crashed',
   derailed: 'Derailed',
   tipped: 'Tipped over',
+  'no-water': 'Out of water',
+  'no-coal': 'Out of coal',
+  'flat-battery': 'Battery flat',
 };
+
+/** How long a whistle's "Toot!" shows, ms. */
+const BUBBLE_MS = 1600;
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> & { class?: string } = {}, ...children: (Node | string)[]) => {
   const node = document.createElement(tag);
@@ -114,6 +141,20 @@ interface Carry {
   lifted: boolean;
 }
 
+interface Ride {
+  trainId: number;
+  way: 1 | -1;
+  /** Smoothed way of travel and nose up, so curves and joints don't jolt the view. */
+  heading: number;
+  pitch: number;
+  /** Looking round from straight ahead. */
+  lookYaw: number;
+  lookPitch: number;
+  look: { pointerId: number; x: number; y: number; yaw: number; pitch: number } | null;
+  /** The orbit view to come back to. */
+  saved: { position: THREE.Vector3; target: THREE.Vector3; fov: number; near: number };
+}
+
 interface Press {
   pointerId: number;
   trainId: number;
@@ -143,7 +184,9 @@ export class Trains {
   private carry: Carry | null = null;
   private press: Press | null = null;
   private thumbnails: Map<string, string> | null = null;
+  private readonly accessories: AccessoryView;
   readonly sounds: TrainSounds;
+  private ride: Ride | null = null;
 
   private readonly panel: HTMLElement;
   private readonly toggle: HTMLButtonElement;
@@ -155,17 +198,23 @@ export class Trains {
   /** Each train's own controls, floating over it. */
   private readonly hud: HTMLElement;
   private readonly cards = new Map<number, { card: HTMLElement; key: string }>();
+  /** Bubbles over engines as they pass signs. */
+  private readonly bubbles: { el: HTMLElement; at: THREE.Vector3; until: number }[] = [];
+  private eventsSeen = 0;
+  private readonly deliveries: HTMLElement;
 
   constructor(
     scene: THREE.Scene,
-    private readonly camera: THREE.Camera,
+    private readonly camera: THREE.PerspectiveCamera,
     private readonly host: TrainsHost,
     private readonly container: HTMLElement,
     toolbar: HTMLElement,
+    private readonly controls: ViewControls,
   ) {
     this.layout = host.layout;
     this.sim = new TrainSim(this.layout);
-    this.root.add(this.vehiclesRoot, this.leversRoot, this.markersRoot);
+    this.accessories = new AccessoryView(this.sim, host.pieceObjects);
+    this.root.add(this.vehiclesRoot, this.leversRoot, this.markersRoot, this.accessories.root);
     scene.add(this.root);
 
     this.toggle = el('button', { id: 'trains-button', title: 'Trains: drag engines and cars onto the track (Y)', type: 'button' });
@@ -181,16 +230,23 @@ export class Trains {
     this.speedButtons = SPEEDS.map((s) => el('button', { type: 'button', textContent: `${s}×`, title: `Run at ${s}× speed`, onclick: () => this.setSpeed(s) }));
     this.toast = el('div', { class: 'tr-toast', hidden: true });
     this.hud = el('div', { class: 'tr-hud' });
+    const tile = (def: StockDef) => {
+      const t = el('button', { class: 'tr-tile', type: 'button', title: `Drag a ${def.name.toLowerCase()} onto the track${def.cargo ? `. It carries ${def.cargo.capacity} ${cargoCount(def.cargo.kind, def.cargo.capacity).replace(/^\d+ /, '')}` : ''}` }, el('span', { class: 'tr-thumb' }), el('span', { textContent: def.name }));
+      t.dataset.stock = def.id;
+      t.addEventListener('pointerdown', (e) => this.pickUp(e, def));
+      return t;
+    };
+    const powered = (def: StockDef) => def.motor || def.supplies;
     this.tiles = el(
       'div',
-      { class: 'tr-stock' },
-      ...STOCK.map((def) => {
-        const tile = el('button', { class: 'tr-tile', type: 'button', title: `Drag a ${def.name.toLowerCase()} onto the track` }, el('span', { class: 'tr-thumb' }), el('span', { textContent: def.name }));
-        tile.dataset.stock = def.id;
-        tile.addEventListener('pointerdown', (e) => this.pickUp(e, def));
-        return tile;
-      }),
+      {},
+      el('h3', { textContent: 'Engines' }),
+      el('div', { class: 'tr-stock' }, ...STOCK.filter(powered).map(tile)),
+      el('h3', { textContent: 'Cars' }),
+      el('div', { class: 'tr-stock' }, ...STOCK.filter((d) => !powered(d)).map(tile)),
     );
+    const supplies = el('input', { type: 'checkbox', checked: this.sim.useSupplies, onchange: () => (this.sim.useSupplies = supplies.checked) });
+    this.deliveries = el('p', { class: 'tr-deliveries' });
     this.panel = el(
       'section',
       { id: 'trains', hidden: true, ariaLabel: 'Trains' },
@@ -198,10 +254,15 @@ export class Trains {
       el('p', { class: 'tr-lead', textContent: 'Drag engines and cars onto the track. Drop one by the end of a train to couple it on.' }),
       this.tiles,
       el('div', { class: 'tr-row' }, this.pauseButton, el('div', { class: 'seg' }, ...this.speedButtons), el('button', { class: 'tr-btn', type: 'button', textContent: 'Reset', title: 'Put every train back where it was built, stopped', onclick: () => this.reset() })),
+      el('label', { class: 'tr-check', title: 'Steam engines burn water and coal and battery engines use charge. Top them up at a water tower, coaling stage or charging post.' }, supplies, ' Engines use up water, coal and charge'),
+      this.deliveries,
       el('ul', { class: 'tr-hint' },
         el('li', { innerHTML: '<b>Tap a car</b> on the track to turn it round. Red and blue ends are the magnets: red pulls blue.' }),
         el('li', { innerHTML: '<b>Drag a car</b> to lift it off. Drop it off the track to take it away.' }),
         el('li', { innerHTML: 'Each train has its own controls. Tap a switch’s <b>yellow knob</b> to change its way.' }),
+        el('li', { innerHTML: '<b>Tap a signal</b> to turn it red or green. Trains stop at stations, and under the cargo loader and by the crane to load and unload open wagons. The lifting bridge’s knob raises it.' }),
+        el('li', { innerHTML: '<b>Ride along</b> (C) watches from the cab. Drag to look around; Esc gets off.' }),
+        el('li', { innerHTML: 'Put <b>trackside</b> places from the parts palette over a straight: trains stop at water towers, mines and more when there’s work for them.' }),
       ),
     );
     container.append(this.hud, this.panel, this.toast);
@@ -215,7 +276,9 @@ export class Trains {
       if (e.target instanceof HTMLInputElement || e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === 'y' || e.key === 'Y') this.setOpen(!this.open);
       else if (e.key === 'm' || e.key === 'M') this.setMuted(!this.sounds.synth.muted);
+      else if (e.key === 'c' || e.key === 'C') this.toggleRide();
       else if (e.key === 'Escape' && this.carry) this.drop(false);
+      else if (e.key === 'Escape' && this.ride) this.leaveCab();
       else if (e.key === ' ' && this.sim.trains.length) {
         e.preventDefault();
         this.setPaused(!this.paused);
@@ -268,6 +331,7 @@ export class Trains {
   private reset(): void {
     this.sim.reset();
     this.noticesSeen = 0;
+    this.eventsSeen = 0;
   }
 
   private say(message: string): void {
@@ -286,6 +350,7 @@ export class Trains {
     const status = t.status;
     if (status.kind === 'stuck') return SHORT[status.stuck];
     if (status.kind === 'running') return `${Math.round(status.speed)} mm/s`;
+    if (status.kind === 'waiting') return status.message;
     return t.throttle ? 'Starting' : 'Stopped';
   }
 
@@ -307,15 +372,84 @@ export class Trains {
       'div',
       { class: 'tr-card' },
       el('div', { class: 'tr-card-head' }, el('b', { textContent: t.name }), el('span', { class: 'tr-card-status' })),
+      el('div', { class: 'tr-card-load' }),
+      el('div', { class: 'tr-card-work', hidden: true }, el('span'), el('i', {}, el('i'))),
       el('div', { class: 'tr-card-row' },
         t.wrecked
           ? act('Put back on the rails', 'Put it back where it was built', () => this.restore(t), 'wide')
           : el('div', { class: 'seg drive' }, drive('◀', 'Engines in reverse', -1), drive('■', 'Engines off', 0), drive('▶', 'Engines forward', 1)),
         t.wrecked ? '' : act('⇄', 'Turn the whole train round', () => this.turnTrain(t)),
         t.wrecked || !t.vehicles.some((v) => v.def.motor) ? '' : this.whistleButton(t),
+        this.ride?.trainId === t.id
+          ? act('Get off', 'Back to the overhead view (Esc)', () => this.leaveCab(), 'ride on')
+          : el('button', { type: 'button', class: 'ride', title: 'Ride along: watch from the cab (C)', innerHTML: RIDE_ICON, onclick: () => this.enterCab(t.id) }),
         act('✕', 'Take the train off the track', () => this.sim.removeTrain(t.id), 'danger'),
       ),
     );
+  }
+
+  /** Stores and cargo, for the card: "Water 60% · Coal 80% · 5 passengers". */
+  private loadText(t: Train): string {
+    const parts: string[] = [];
+    const stores = new Map<string, number>();
+    t.consist.forEach((entry) => {
+      const def = getStock(entry.stockId);
+      if (!this.sim.useSupplies) return;
+      for (const s of def.supplies ?? []) {
+        // A tender's coal and the engine's own show as one.
+        const level = supplyLevel(entry, s);
+        stores.set(s, Math.max(stores.get(s) ?? 0, level));
+      }
+    });
+    const NAMES = { water: 'Water', coal: 'Coal', charge: 'Battery' } as Record<string, string>;
+    for (const [s, level] of stores) parts.push(`${NAMES[s]} ${Math.round(level * 100)}%`);
+    const cargo = new Map<CargoKind, number>();
+    for (const entry of t.consist) {
+      const kind = getStock(entry.stockId).cargo?.kind;
+      if (kind) cargo.set(kind, (cargo.get(kind) ?? 0) + (entry.units ?? 0));
+    }
+    const carried = [...cargo].filter(([, n]) => n);
+    if (carried.length) for (const [kind, n] of carried) parts.push(cargoCount(kind, n));
+    else if (cargo.size) parts.push('Cars empty');
+    return parts.join(' · ');
+  }
+
+  /** Bubbles over engines passing signs, and the tally of deliveries. */
+  private drawPlaces(time: number): void {
+    const rect = this.container.getBoundingClientRect();
+    const screen = (at: THREE.Vector3): string | null => {
+      const p = at.clone().project(this.camera);
+      if (p.z >= 1 || Math.abs(p.x) > 1.1 || Math.abs(p.y) > 1.1) return null;
+      return `translate(${((p.x + 1) / 2) * rect.width}px, ${((1 - p.y) / 2) * rect.height}px) translate(-50%, -100%)`;
+    };
+    // Signs passed since last time.
+    for (const e of this.sim.events) {
+      if (e.time <= this.eventsSeen) continue;
+      const bubble = el('div', { class: `tr-bubble ${e.kind}`, textContent: e.kind === 'whistle' ? 'Toot toot!' : 'Slow' });
+      this.hud.append(bubble);
+      const train = this.sim.train(e.trainId);
+      if (train && e.kind === 'whistle') this.sounds.whistle(train, undefined, true);
+      const engine = train?.vehicles.find((v) => v.def.motor) ?? train?.vehicles[0];
+      const at = engine ? toWorld(engine.geo.center.x, engine.geo.center.y, engine.geo.z + engine.def.height + 30) : toWorld(e.at.x, e.at.y, e.z + 90);
+      this.bubbles.push({ el: bubble, at, until: time + BUBBLE_MS });
+    }
+    if (this.sim.events.length) this.eventsSeen = this.sim.events[this.sim.events.length - 1].time;
+    for (let i = this.bubbles.length - 1; i >= 0; i--) {
+      const b = this.bubbles[i];
+      const transform = time < b.until ? screen(b.at) : null;
+      if (time >= b.until) {
+        b.el.remove();
+        this.bubbles.splice(i, 1);
+        continue;
+      }
+      b.el.hidden = !transform;
+      if (transform) b.el.style.transform = transform;
+    }
+    // What's been delivered so far.
+    const delivered = Object.entries(this.sim.delivered).filter(([, n]) => n) as [CargoKind, number][];
+    const text = delivered.length ? `Delivered: ${delivered.map(([k, n]) => cargoCount(k, n)).join(', ')}.` : '';
+    if (this.deliveries.textContent !== text) this.deliveries.textContent = text;
+    this.deliveries.hidden = !text;
   }
 
   private whistleButton(t: Train): HTMLButtonElement {
@@ -334,6 +468,88 @@ export class Trains {
     this.sim.removeTrain(t.id);
     const again = this.sim.addTrain(consist, placement, name);
     if (typeof again === 'string') this.say(again);
+    else if (this.ride?.trainId === t.id) this.ride.trainId = again.id;
+  }
+
+  // ---- riding along -------------------------------------------------------
+
+  /** True while the view rides on a train; the orbit view waits until it gets off. */
+  get riding(): boolean {
+    return this.ride !== null;
+  }
+
+  private toggleRide(): void {
+    if (this.ride) this.leaveCab();
+    else {
+      // The one that's going, else the first.
+      const t = this.sim.trains.find((x) => x.throttle && !x.wrecked) ?? this.sim.trains[0];
+      if (t) this.enterCab(t.id);
+      else this.say('Put an engine on the track to ride along.');
+    }
+  }
+
+  private enterCab(trainId: number): void {
+    const t = this.sim.train(trainId);
+    if (!t) return;
+    const saved = this.ride?.saved ?? { position: this.camera.position.clone(), target: this.controls.target.clone(), fov: this.camera.fov, near: this.camera.near };
+    const way = travelWay(t, 1);
+    const pose = cabPose(t, way);
+    this.ride = { trainId, way, heading: pose.heading, pitch: pose.pitch, lookYaw: 0, lookPitch: 0, look: null, saved };
+    this.controls.enabled = false;
+    this.camera.fov = CAB_FOV;
+    this.camera.near = CAB_NEAR;
+    this.camera.updateProjectionMatrix();
+    document.body.classList.add('riding');
+    this.placeCab(0);
+  }
+
+  private leaveCab(): void {
+    const ride = this.ride;
+    if (!ride) return;
+    this.ride = null;
+    this.camera.position.copy(ride.saved.position);
+    this.controls.target.copy(ride.saved.target);
+    this.camera.fov = ride.saved.fov;
+    this.camera.near = ride.saved.near;
+    this.camera.updateProjectionMatrix();
+    this.camera.lookAt(ride.saved.target);
+    this.controls.enabled = true;
+    document.body.classList.remove('riding');
+  }
+
+  /** Put the eye on the ridden train, swinging round smoothly with it. */
+  private placeCab(dt: number): void {
+    const ride = this.ride!;
+    const t = this.sim.train(ride.trainId);
+    if (!t) {
+      this.leaveCab();
+      return;
+    }
+    // Facing the other way when it reverses: turn round at once rather than swing through the side.
+    const way = travelWay(t, ride.way);
+    const pose = cabPose(t, way);
+    if (way !== ride.way || dt === 0) {
+      ride.way = way;
+      ride.heading = pose.heading;
+      ride.pitch = pose.pitch;
+    } else {
+      const k = 1 - Math.exp(-dt * FOLLOW_RATE);
+      ride.heading += Math.atan2(Math.sin(pose.heading - ride.heading), Math.cos(pose.heading - ride.heading)) * k;
+      ride.pitch += (pose.pitch - ride.pitch) * k;
+    }
+    if (!ride.look && dt > 0) {
+      const back = Math.exp(-dt * LOOK_RETURN_RATE);
+      ride.lookYaw *= back;
+      ride.lookPitch *= back;
+    }
+    const yaw = ride.heading + ride.lookYaw;
+    const pitch = ride.pitch + ride.lookPitch + CAB_TILT;
+    const eye = toWorld(pose.x, pose.y, pose.z);
+    // Plan (x, y) is world (x, -z).
+    const dir = new THREE.Vector3(Math.cos(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.sin(yaw) * Math.cos(pitch));
+    this.camera.position.copy(eye);
+    this.camera.lookAt(eye.add(dir));
+    this.controls.enabled = false;
   }
 
   /** Keep a card floating over each train, and its buttons current. */
@@ -342,7 +558,8 @@ export class Trains {
     const seen = new Set<number>();
     for (const t of this.sim.trains) {
       seen.add(t.id);
-      const key = `${t.throttle}/${t.wrecked}/${t.name}/${t.vehicles.some((v) => v.def.motor)}`;
+      const riding = this.ride?.trainId === t.id;
+      const key = `${t.throttle}/${t.wrecked}/${t.name}/${t.vehicles.some((v) => v.def.motor)}/${riding}`;
       let entry = this.cards.get(t.id);
       if (!entry || entry.key !== key) {
         const card = this.makeCard(t);
@@ -352,15 +569,35 @@ export class Trains {
         this.cards.set(t.id, entry);
       }
       const { card } = entry;
-      // Over the middle of the train, above its tallest roof.
-      const xs = t.vehicles.map((v) => v.geo.center.x);
-      const ys = t.vehicles.map((v) => v.geo.center.y);
-      const mid = toWorld((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...t.vehicles.map((v) => v.geo.z + v.def.height)) + AXLE_HEIGHT + 14);
-      const p = mid.project(this.camera);
-      const visible = p.z < 1 && Math.abs(p.x) < 1.1 && Math.abs(p.y) < 1.1;
-      card.hidden = !visible;
-      if (visible) card.style.transform = `translate(${((p.x + 1) / 2) * rect.width}px, ${((1 - p.y) / 2) * rect.height}px) translate(-50%, -100%)`;
+      card.classList.toggle('pinned', riding);
+      if (this.ride) {
+        // Riding along: the ridden train's controls sit at the foot of the view, the rest stay out of it.
+        card.hidden = !riding;
+        card.style.transform = '';
+      } else {
+        // Over the middle of the train, above its tallest roof.
+        const xs = t.vehicles.map((v) => v.geo.center.x);
+        const ys = t.vehicles.map((v) => v.geo.center.y);
+        const mid = toWorld((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...t.vehicles.map((v) => v.geo.z + v.def.height)) + AXLE_HEIGHT + 14);
+        const p = mid.project(this.camera);
+        const visible = p.z < 1 && Math.abs(p.x) < 1.1 && Math.abs(p.y) < 1.1;
+        card.hidden = !visible;
+        if (visible) card.style.transform = `translate(${((p.x + 1) / 2) * rect.width}px, ${((1 - p.y) / 2) * rect.height}px) translate(-50%, -100%)`;
+      }
       card.classList.toggle('stuck', t.status.kind === 'stuck');
+      const load = card.querySelector<HTMLElement>('.tr-card-load')!;
+      const loadText = this.loadText(t);
+      if (load.textContent !== loadText) load.textContent = loadText;
+      load.hidden = !loadText;
+      // What's being done where it's stopped, and how far along.
+      const work = card.querySelector<HTMLElement>('.tr-card-work')!;
+      const doing = t.stop?.phase === 'dwell' ? t.stop.work : t.hold?.until != null ? t.hold.work : undefined;
+      work.hidden = !doing;
+      if (doing) {
+        const span = work.querySelector('span')!;
+        if (span.textContent !== doing.summary) span.textContent = doing.summary;
+        work.querySelector<HTMLElement>('i i')!.style.width = `${doing.total ? Math.round((100 * doing.done) / doing.total) : 100}%`;
+      }
       const status = card.querySelector<HTMLElement>('.tr-card-status')!;
       status.textContent = this.statusText(t);
       status.title = t.status.kind === 'stuck' ? t.status.message : '';
@@ -411,9 +648,13 @@ export class Trains {
   }
 
   /** What's under the pointer: a lever, or a vehicle (train and its place in it). */
-  private hit(e: PointerEvent): { lever: string } | { trainId: number; index: number } | null {
+  private hit(e: PointerEvent): { lever: string } | { accessory: string } | { trainId: number; index: number } | null {
     this.raycaster.setFromCamera(this.ndc(e), this.camera);
     this.root.updateMatrixWorld();
+    if (this.leversRoot.visible) {
+      const accessory = this.accessories.hit(this.raycaster);
+      if (accessory) return { accessory };
+    }
     if (this.leversRoot.visible) {
       const lever = this.raycaster.intersectObject(this.leversRoot, true)[0];
       if (lever) return { lever: lever.object.userData.uid as string };
@@ -430,6 +671,15 @@ export class Trains {
   private pointerDown(e: PointerEvent): void {
     if (e.button !== 0 || this.carry || !(e.target instanceof HTMLCanvasElement) || !this.container.contains(e.target)) return;
     const hit = this.hit(e);
+    if (this.ride) {
+      // Riding along, the view is the train's: a drag looks around, and switches can still be thrown.
+      this.swallow(e);
+      if (hit && 'lever' in hit) {
+        this.sim.toggleLever(hit.lever);
+        this.drawLevers();
+      } else this.ride.look = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, yaw: this.ride.lookYaw, pitch: this.ride.lookPitch };
+      return;
+    }
     if (!hit) return;
     this.swallow(e);
     if ('lever' in hit) {
@@ -437,10 +687,21 @@ export class Trains {
       this.drawLevers();
       return;
     }
+    if ('accessory' in hit) {
+      const error = this.sim.toggleAccessory(hit.accessory);
+      if (error) this.say(error);
+      return;
+    }
     this.press = { pointerId: e.pointerId, ...hit, x: e.clientX, y: e.clientY };
   }
 
   private pointerMove(e: PointerEvent): void {
+    const look = this.ride?.look;
+    if (look && e.pointerId === look.pointerId) {
+      this.ride!.lookYaw = look.yaw + (e.clientX - look.x) * LOOK_PER_PX;
+      this.ride!.lookPitch = THREE.MathUtils.clamp(look.pitch + (e.clientY - look.y) * LOOK_PER_PX, -1.2, 1.2);
+      return;
+    }
     const press = this.press;
     if (press && e.pointerId === press.pointerId && Math.hypot(e.clientX - press.x, e.clientY - press.y) > DRAG_THRESHOLD_PX) {
       // Lifting a vehicle off the track.
@@ -455,6 +716,10 @@ export class Trains {
   }
 
   private pointerUp(e: PointerEvent): void {
+    if (this.ride?.look?.pointerId === e.pointerId) {
+      this.ride.look = null;
+      return;
+    }
     const press = this.press;
     if (press && e.pointerId === press.pointerId) {
       // A tap on a vehicle turns it round.
@@ -473,6 +738,7 @@ export class Trains {
   }
 
   private cancel(e: PointerEvent): void {
+    if (this.ride?.look?.pointerId === e.pointerId) this.ride.look = null;
     if (this.press?.pointerId === e.pointerId) this.press = null;
     if (this.carry?.pointerId === e.pointerId) this.drop(false);
   }
@@ -561,8 +827,11 @@ export class Trains {
     if (!this.paused && dt > 0) this.sim.advance(Math.min(dt, 0.05) * this.speed);
     this.sounds.update(this.sim, !this.paused);
     this.drawTrains(time);
+    if (this.ride) this.placeCab(dt);
     this.drawCards();
+    this.drawPlaces(time);
     this.updateLeverVisibility();
+    this.accessories.update(this.layout, time, this.leversRoot.visible);
     const notices = this.sim.notices;
     if (notices.length && notices[notices.length - 1].time !== this.noticesSeen) {
       this.noticesSeen = notices[notices.length - 1].time;
@@ -587,6 +856,7 @@ export class Trains {
         }
         mesh.userData.trainId = train.id;
         mesh.userData.index = i;
+        showLoad(mesh, v.def, train.consist[i]);
         const { center, heading } = v.geo;
         mesh.position.copy(toWorld(center.x, center.y, v.geo.z));
         mesh.rotation.set(0, heading, 0);

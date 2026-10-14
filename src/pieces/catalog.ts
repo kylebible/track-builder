@@ -1,6 +1,7 @@
 import { pathEnd } from '../geometry/path';
 import { deg, normalizeAngle, type Pose } from '../geometry/pose';
 import * as D from './dimensions';
+import { PLACES } from '../trains/stops';
 import type { BridgeStyle, Connector, Gender, PieceCategory, PieceDef, TrackPath } from './types';
 
 // Every piece is defined in its own frame: the first connector sits at the
@@ -71,9 +72,11 @@ const STRAIGHTS: { id: string; name: string; length: number; brio: string[] }[] 
 
 const straights: PieceDef[] = STRAIGHTS.flatMap((s) =>
   // Brio letters: A = peg and hole, B = two pegs, C = two holes.
-  GENDER_VARIANTS.filter((_, i) => i < s.brio.length).map((v, i) =>
-    twoEnded(s.id + v.suffix, s.name + v.label, [s.brio[i]], 'straight', straightPath(s.length), v.ends),
-  ),
+  GENDER_VARIANTS.filter((_, i) => i < s.brio.length).map((v, i) => ({
+    ...twoEnded(s.id + v.suffix, s.name + v.label, [s.brio[i]], 'straight', straightPath(s.length), v.ends),
+    // A3 is retired and rare: auto-fill sticks to the common lengths.
+    ...(s.brio[i] === 'A3' ? { noFill: true } : {}),
+  })),
 );
 
 /**
@@ -116,8 +119,8 @@ const CURVES = [
 // Curves also come with two pegs or two holes; those variants have no
 // letter of their own in the guide.
 const curves: PieceDef[] = CURVES.flatMap((c) =>
-  GENDER_VARIANTS.map((v, i) =>
-    twoEnded(
+  GENDER_VARIANTS.map((v, i) => ({
+    ...twoEnded(
       c.id + v.suffix,
       c.name + v.label,
       i === 0 && c.brio ? [c.brio] : [],
@@ -125,7 +128,9 @@ const curves: PieceDef[] = CURVES.flatMap((c) =>
       arcPath(c.radius, c.angle),
       v.ends,
     ),
-  ),
+    // Auto-fill sticks to Brio's own curves.
+    ...(c.brio ? {} : { noFill: true }),
+  })),
 );
 
 /**
@@ -195,9 +200,10 @@ const ramps: PieceDef[] = [
 const curvedRamps: PieceDef[] = [
   { suffix: '', name: 'Curved ramp', ends: ['hole', 'peg'] as Ends },
   { suffix: '-pp', name: 'Curved ramp, two pegs', ends: ['peg', 'peg'] as Ends },
-].map((v) =>
-  twoEnded('ramp-curve' + v.suffix, v.name, [], 'ramp', { ...arcPath(D.LARGE_CURVE_RADIUS, D.CURVED_RAMP_SWEEP), rise: D.RAMP_RISE }, v.ends),
-);
+].map((v) => ({
+  ...twoEnded('ramp-curve' + v.suffix, v.name, [], 'ramp', { ...arcPath(D.LARGE_CURVE_RADIUS, D.CURVED_RAMP_SWEEP), rise: D.RAMP_RISE }, v.ends),
+  noFill: true,
+}));
 
 /**
  * Helix tower: turns round a central column on the E curve's radius,
@@ -514,17 +520,31 @@ const scenery: PieceDef[] = [
     ...twoEnded('level-crossing', 'Level crossing', [], 'scenery', straightPath(D.MEDIUM_STRAIGHT), ['hole', 'peg']),
     model: 'level-crossing',
   },
+  {
+    ...twoEnded('lift-bridge', 'Lifting bridge', [], 'scenery', straightPath(D.LIFT_BRIDGE_LENGTH), ['hole', 'peg']),
+    model: 'lift-bridge',
+    liftSpan: [D.LIFT_SPAN_FROM, D.LIFT_SPAN_TO],
+  },
   { ...loose('tunnel', 'Tunnel'), seatsOnTrack: true },
   { ...loose('station', 'Station'), seatsOnTrack: true },
   { ...loose('engine-shed', 'Engine shed'), seatsOnTrack: true },
   { ...loose('bridge-pier', 'Bridge pier'), seatsOnTrack: true, holdsTrackAt: D.LEVEL_HEIGHT },
+  { ...loose('cargo-loader', 'Cargo loader'), seatsOnTrack: true },
+  loose('crane', 'Magnetic crane'),
   loose('signal', 'Signal'),
   loose('leafy-tree', 'Leafy tree'),
   loose('pine-tree', 'Pine tree'),
   loose('cottage', 'Cottage'),
 ];
 
-export const CATALOG: readonly PieceDef[] = [...straights, ...bendy, bumpy, ...curves, ...doubles, ...ramps, ...bridges, ...switches, ...bigSwitches, ...crossings, ...buffers, ...scenery];
+/** Places beside the track that trains stop at; see src/trains/stops.ts. Each sits over a straight. */
+const trackside: PieceDef[] = PLACES.filter((p) => p.id !== 'station').map((p) => ({
+  ...loose(p.id, p.name),
+  category: 'trackside',
+  seatsOnTrack: true,
+}));
+
+export const CATALOG: readonly PieceDef[] = [...straights, ...bendy, bumpy, ...curves, ...doubles, ...ramps, ...bridges, ...switches, ...bigSwitches, ...crossings, ...buffers, ...scenery, ...trackside];
 
 const byId = new Map(CATALOG.map((p) => [p.id, p]));
 
