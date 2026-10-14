@@ -7,13 +7,13 @@ import { PlanningPanel } from './planning/panel';
 import { autosave, loadAutosave } from './planning/storage';
 import { Trains } from './trains/trains';
 import { loadSceneryModels } from './render/sceneryModels';
+import { DEFAULT_ENVIRONMENT, type EnvironmentId } from './environments/environments';
+import { EnvironmentPicker } from './environments/picker';
+import { EnvironmentScene } from './environments/scene';
 import './style.css';
 
 const container = document.getElementById('app')!;
 const button = (id: string) => document.getElementById(id) as HTMLButtonElement;
-
-const BACKGROUND = 0xf6f1e7;
-const MAT = 0xe6eadc;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
@@ -22,10 +22,8 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.NoToneMapping;
 container.appendChild(renderer.domElement);
 
+// The environment sets the background and a fog that fades the floor into it.
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(BACKGROUND);
-// Fade the floor into the background, so the grid doesn't run off in stripes.
-scene.fog = new THREE.Fog(BACKGROUND, 2600, 7000);
 
 const camera = new THREE.PerspectiveCamera(35, 1, 10, 30000);
 camera.position.set(0, 1500, 950);
@@ -75,6 +73,10 @@ function focusOn(at: Vec2): void {
 
 let saved = true;
 let planning: PlanningPanel | null = null;
+const restored = loadAutosave();
+/** What the track is built on: a table, a rug, the floor. */
+// Layouts saved before environments existed were built on the grid mat, so they stay on it.
+let environment: EnvironmentId = restored ? (restored.environment ?? 'grid') : DEFAULT_ENVIRONMENT;
 
 // Scenery pieces are built from these, so they have to be in before the editor.
 await loadSceneryModels();
@@ -98,9 +100,9 @@ const editor = new Editor(scene, camera, orbit, {
     fit: button('fit'),
   },
   onFit: fitView,
-  initial: loadAutosave() ?? undefined,
+  initial: restored ?? undefined,
   onChange: (layout) => {
-    saved = autosave(layout);
+    saved = autosave({ ...layout, environment });
     planning?.update(layout);
   },
 });
@@ -113,6 +115,8 @@ planning = new PlanningPanel(editor, {
   sharePanel: document.getElementById('share-panel')!,
   onFocus: focusOn,
   saved: () => saved,
+  environment: () => environment,
+  onEnvironment: (id) => setEnvironment(id),
 });
 planning.update(editor.layout);
 
@@ -123,7 +127,9 @@ async function openSharedLayout(): Promise<void> {
   history.replaceState(null, '', location.pathname + location.search);
   try {
     const hadOwn = editor.layout.pieces.length > 0;
-    editor.load(await decodeLayout(code));
+    const layout = await decodeLayout(code);
+    editor.load(layout);
+    if (layout.environment) setEnvironment(layout.environment);
     editor.flash(hadOwn ? 'Opened a shared layout. Undo brings back yours.' : 'Opened a shared layout.');
     fitView();
   } catch (e) {
@@ -134,7 +140,8 @@ window.addEventListener('hashchange', openSharedLayout);
 
 const trains = new Trains(scene, camera, editor, container, document.getElementById('toolbar')!);
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0xcfc4b0, 1.5));
+const hemisphere = new THREE.HemisphereLight(0xffffff, 0xcfc4b0, 1.5);
+scene.add(hemisphere);
 const sun = new THREE.DirectionalLight(0xfff8ee, 2.0);
 sun.position.set(700, 1800, 900);
 sun.castShadow = true;
@@ -146,17 +153,19 @@ sun.shadow.bias = -0.0002;
 Object.assign(sun.shadow.camera, { left: -3000, right: 3000, top: 3000, bottom: -3000, far: 6000 });
 scene.add(sun);
 
-// A soft play mat with 100 mm squares and a heavier line every metre.
-const FLOOR = 12000;
-const mat = new THREE.Mesh(new THREE.PlaneGeometry(FLOOR, FLOOR), new THREE.MeshStandardMaterial({ color: MAT, roughness: 1 }));
-mat.rotation.x = -Math.PI / 2;
-mat.position.y = -1;
-mat.receiveShadow = true;
-const fineGrid = new THREE.GridHelper(FLOOR, FLOOR / 100, 0xd6ddc8, 0xd6ddc8);
-fineGrid.position.y = -0.6;
-const metreGrid = new THREE.GridHelper(FLOOR, FLOOR / 1000, 0xbcc6ac, 0xbcc6ac);
-metreGrid.position.y = -0.4;
-scene.add(mat, fineGrid, metreGrid);
+const environmentScene = new EnvironmentScene(scene, hemisphere, sun);
+const picker = new EnvironmentPicker(document.getElementById('scene-panel')!, (id) => setEnvironment(id));
+
+/** Build on something else: redraw around the track, recheck it and save. */
+function setEnvironment(id: EnvironmentId): void {
+  environment = id;
+  environmentScene.show(id);
+  picker.set(id);
+  planning?.update(editor.layout);
+  saved = autosave({ ...editor.layout, environment });
+}
+environmentScene.show(environment);
+picker.set(environment);
 
 function resize(): void {
   const { clientWidth: w, clientHeight: h } = container;
@@ -179,6 +188,7 @@ renderer.setAnimationLoop((time) => {
   orbit.update();
   editor.tick(time);
   trains.tick(time);
+  environmentScene.tick(time);
   renderer.render(scene, camera);
 });
 
@@ -186,4 +196,4 @@ if (codeFromHash(location.hash)) openSharedLayout();
 else if (editor.layout.pieces.length) fitView();
 
 // Handy for poking at the layout from the browser console.
-Object.assign(window, { editor, trains, fitView, orbit });
+Object.assign(window, { editor, trains, fitView, orbit, setEnvironment });

@@ -5,8 +5,9 @@ import type { Vec2 } from '../geometry/pose';
 import { getPiece } from '../pieces/catalog';
 import type { PieceCategory } from '../pieces/types';
 import type { Layout } from '../layout/layout';
+import { getEnvironment, inWater, offArea, type EnvironmentId } from '../environments/environments';
 import { checkLayout, summarize, type Issue } from './check';
-import { layoutFromJson, layoutToJson, LayoutFileError, shareUrl } from './file';
+import { layoutFromJson, layoutToJson, LayoutFileError, shareUrl, type LayoutFile } from './file';
 import { partsList, partsText } from './parts';
 import { LEVEL_HEIGHT } from '../pieces/dimensions';
 
@@ -32,6 +33,10 @@ export interface PlanningDom {
   onFocus: (at: Vec2) => void;
   /** Whether the browser is keeping the autosave. */
   saved: () => boolean;
+  /** What the layout is built on. */
+  environment: () => EnvironmentId;
+  /** A layout file opened here named an environment. */
+  onEnvironment: (id: EnvironmentId) => void;
 }
 
 const CATEGORY_NAMES: Record<PieceCategory, string> = {
@@ -122,7 +127,7 @@ export class PlanningPanel {
 
   /** Redraw everything from a changed layout. */
   update(layout: Layout): void {
-    this.issues = checkLayout(layout);
+    this.issues = [...checkLayout(layout), ...this.areaIssues(layout)];
     this.focused = null;
     this.renderParts(layout);
     this.renderCheck(layout);
@@ -235,6 +240,34 @@ export class PlanningPanel {
     }
   }
 
+  /** Track that runs off the table or rug the layout is built on, or into its water. */
+  private areaIssues(layout: Layout): Issue[] {
+    const environment = getEnvironment(this.dom.environment());
+    const issues: Issue[] = [];
+    const wet = inWater(layout, environment);
+    if (wet && environment.water) {
+      const n = wet.uids.length;
+      const pieces = n === 1 ? 'A piece' : `${n} pieces`;
+      const message = `${pieces} on the ground run${n === 1 ? 's' : ''} into the ${environment.water.name}. Raise the track over it like a bridge.`;
+      issues.push({ kind: 'in-water', at: wet.at, uids: wet.uids, message });
+    }
+    const off = offArea(layout, environment);
+    if (!off || !environment.area) return issues;
+    const size = `${environment.area.width / 10} × ${environment.area.depth / 10} cm`;
+    const n = off.uids.length;
+    const pieces = n === 1 ? 'A piece' : `${n} pieces`;
+    const message = environment.edgeIsDrop
+      ? `${pieces} hang${n === 1 ? 's' : ''} off the ${environment.name.toLowerCase()}. Its play area inside the rim is ${size}.`
+      : `${pieces} run${n === 1 ? 's' : ''} off the ${environment.name.toLowerCase()} (${size}).`;
+    issues.push({ kind: 'off-area', at: off.at, uids: off.uids, message });
+    return issues;
+  }
+
+  /** The layout as saved and shared, with what it's built on. */
+  private get file(): LayoutFile {
+    return { ...this.editor.layout, environment: this.dom.environment() };
+  }
+
   /** Rings on the track for every problem while the check is open, or just the one being looked at. */
   private updateMarks(): void {
     const shown = this.checkOpen ? this.issues : this.focused ? [this.focused] : [];
@@ -260,7 +293,7 @@ export class PlanningPanel {
         confirm(link, 'Place some track first');
         return;
       }
-      const url = await shareUrl(this.editor.layout, location.href);
+      const url = await shareUrl(this.file, location.href);
       this.linkField.value = url;
       this.linkField.hidden = false;
       if (await copyText(url)) {
@@ -272,7 +305,7 @@ export class PlanningPanel {
     });
 
     const download = actionButton('download', 'Download layout file', () => {
-      const blob = new Blob([layoutToJson(this.editor.layout)], { type: 'application/json' });
+      const blob = new Blob([layoutToJson(this.file)], { type: 'application/json' });
       const a = el('a');
       a.href = URL.createObjectURL(blob);
       a.download = `track-layout-${new Date().toISOString().slice(0, 10)}.json`;
@@ -306,6 +339,7 @@ export class PlanningPanel {
     try {
       const layout = layoutFromJson(await file.text());
       this.editor.load(layout);
+      if (layout.environment) this.dom.onEnvironment(layout.environment);
       this.dom.sharePanel.hidePopover();
       this.editor.flash(`Opened ${file.name}. Undo brings back what you had.`);
       this.editor.fit();

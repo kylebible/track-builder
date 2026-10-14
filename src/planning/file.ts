@@ -1,12 +1,15 @@
 import { deg, normalizeAngle, toDeg } from '../geometry/pose';
 import { getPiece } from '../pieces/catalog';
 import type { Layout, PlacedPiece } from '../layout/layout';
+import { environmentId, type EnvironmentId } from '../environments/environments';
 
 // Layouts as files and links. One format serves the autosave, downloaded
 // layout files and share links: plain JSON listing each piece's catalog id,
 // position in mm and heading in degrees, and height for raised track.
 // Joints are never stored; they come back from the positions, as they do
 // on the floor. Supports aren't stored either: they follow from the heights.
+// A layout can also name the environment it was built on (a play table, a
+// rug); older files and apps simply leave that out.
 //
 // Version 2 added heights (`z`). A layout with nothing raised saves exactly
 // as version 1 did, apart from the number.
@@ -29,6 +32,12 @@ export interface SavedLayout {
   format: typeof FORMAT;
   version: number;
   pieces: SavedPiece[];
+  environment?: EnvironmentId;
+}
+
+/** A layout as a file holds it: the pieces, and what they're built on. */
+export interface LayoutFile extends Layout {
+  environment?: EnvironmentId;
 }
 
 /** Rounded well inside the joint play, so saving never opens a joint. */
@@ -37,10 +46,11 @@ const round = (n: number, places: number) => {
   return Math.round(n * f) / f || 0;
 };
 
-export function toSaved(layout: Layout): SavedLayout {
+export function toSaved(layout: LayoutFile): SavedLayout {
   return {
     format: FORMAT,
     version: VERSION,
+    ...(layout.environment ? { environment: layout.environment } : {}),
     pieces: layout.pieces.map((p) => ({
       piece: p.pieceId,
       x: round(p.pose.x, 3),
@@ -55,7 +65,7 @@ export function toSaved(layout: Layout): SavedLayout {
 export class LayoutFileError extends Error {}
 
 /** Read a saved layout, checking every piece is one we know. Throws LayoutFileError. */
-export function fromSaved(data: unknown): Layout {
+export function fromSaved(data: unknown): LayoutFile {
   const d = data as Partial<SavedLayout> | null;
   if (!d || typeof d !== 'object' || d.format !== FORMAT || !Array.isArray(d.pieces)) {
     throw new LayoutFileError("This isn't a track layout file.");
@@ -78,12 +88,14 @@ export function fromSaved(data: unknown): Layout {
     const pose = { x: p.x, y: p.y, angle: normalizeAngle(deg(p.angle)) };
     return { uid: `p${i + 1}`, pieceId: p.piece, flipped: p.flipped === true, pose, ...(p.z ? { z: p.z } : {}) };
   });
-  return { pieces };
+  // An environment this app doesn't know is no reason to refuse the track.
+  const environment = environmentId(d.environment);
+  return environment ? { pieces, environment } : { pieces };
 }
 
-export const layoutToJson = (layout: Layout): string => JSON.stringify(toSaved(layout), null, 2);
+export const layoutToJson = (layout: LayoutFile): string => JSON.stringify(toSaved(layout), null, 2);
 
-export function layoutFromJson(text: string): Layout {
+export function layoutFromJson(text: string): LayoutFile {
   let data: unknown;
   try {
     data = JSON.parse(text);
@@ -115,12 +127,12 @@ async function pipe(bytes: Uint8Array, stream: CompressionStream | Decompression
 }
 
 /** The layout packed for a URL: compact JSON, deflated, base64url. */
-export async function encodeLayout(layout: Layout): Promise<string> {
+export async function encodeLayout(layout: LayoutFile): Promise<string> {
   const json = JSON.stringify(toSaved(layout));
   return toBase64Url(await pipe(new TextEncoder().encode(json), new CompressionStream('deflate-raw')));
 }
 
-export async function decodeLayout(code: string): Promise<Layout> {
+export async function decodeLayout(code: string): Promise<LayoutFile> {
   let json: string;
   try {
     json = new TextDecoder().decode(await pipe(fromBase64Url(code), new DecompressionStream('deflate-raw')));
@@ -131,7 +143,7 @@ export async function decodeLayout(code: string): Promise<Layout> {
 }
 
 /** A link to `base` (the app's address) that opens with this layout. */
-export async function shareUrl(layout: Layout, base: string): Promise<string> {
+export async function shareUrl(layout: LayoutFile, base: string): Promise<string> {
   const url = new URL(base);
   url.hash = `${LINK_PARAM}=${await encodeLayout(layout)}`;
   return url.toString();
