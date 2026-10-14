@@ -75,6 +75,19 @@ describe('magnets', () => {
     expect(attracts(car('wagon', true), car('wagon', true))).toBe(true);
   });
 
+  it('a long train with two engines pulls apart on real magnets, but not with forgiving ones or kept coupled', () => {
+    const consist = [car('battery-engine'), car('battery-engine'), ...wagons(14)];
+    const whole = (setup: (sim: TrainSim) => void) => {
+      const { sim, train } = start(oval('curve-large'), consist);
+      setup(sim);
+      run(sim, train, 10);
+      return sim.trains.length === 1 && train.couplings.every((c) => c.coupled);
+    };
+    expect(whole(() => {})).toBe(false);
+    expect(whole((sim) => (sim.realMagnets = false))).toBe(true);
+    expect(whole((sim) => (sim.keepCoupled = true))).toBe(true);
+  });
+
   it('a car turned the wrong way is left behind', () => {
     const { sim, train } = start(oval('curve-large'), [car('battery-engine'), car('wagon', true)]);
     run(sim, train, 3);

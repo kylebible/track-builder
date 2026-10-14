@@ -5,7 +5,8 @@ import * as D from '../pieces/dimensions';
 import type { PieceCategory, PieceDef } from '../pieces/types';
 import { buildPieceObject } from '../render/pieceMesh';
 import { thumbnail } from '../render/thumbnail';
-import { hasEndsChoice, iconPiece, SHAPES, variantFor, type Ends, type Hand, type Shape } from './variants';
+import { MODE, onBasicMode, setBasicMode } from '../pieces/basic';
+import { hasEndsChoice, iconPiece, isOffered, offeredIds, SHAPES, variantFor, type Ends, type Hand, type Shape } from './variants';
 
 // The parts palette: one tile per piece shape, with a plan-view drawing
 // made from the same path and connector data the 3D pieces use, plus the
@@ -103,7 +104,7 @@ export function modelIcon(piece: PieceDef): HTMLImageElement {
 
 /** Brio letters for the version shown, and a length where it helps. */
 function detail(shape: Shape, piece: PieceDef): string {
-  const letters = hasEndsChoice(shape) ? piece.brioIds : shape.ids.flatMap((id) => getPiece(id).brioIds);
+  const letters = hasEndsChoice(shape) ? piece.brioIds : offeredIds(shape).flatMap((id) => getPiece(id).brioIds);
   const parts = [letters.join(' / ')];
   if (shape.category === 'straight') parts.push(`${Math.round(pathLength(piece.paths[0]))} mm`);
   if (piece.bridge) parts.push(`${Math.round(pathLength(piece.paths[0]))} mm span`);
@@ -146,6 +147,8 @@ export class Palette {
   private readonly tiles = new Map<string, { button: HTMLButtonElement; shape: Shape }>();
   private readonly turn;
   private readonly endsControl;
+  private readonly modeControl;
+  private readonly sections: { section: HTMLElement; shapes: Shape[] }[] = [];
   hand: Hand = 'left';
   ends: Ends = 'mixed';
 
@@ -173,7 +176,20 @@ export class Palette {
       (e) => this.setEnds(e),
     );
     this.endsControl.el.title = 'Straights and curves also come with two pegs or two holes, for closing loops';
-    settings.append(this.turn.el, this.endsControl.el);
+    this.modeControl = segmented<'brio' | 'all'>(
+      'Pieces',
+      [
+        ['brio', 'Brio only'],
+        ['all', 'All'],
+      ],
+      (m) => setBasicMode(m === 'brio'),
+    );
+    this.modeControl.el.title = 'Basic mode: only track and accessories Brio sells, and real magnets that let go. All adds pieces from other brands and our own';
+    onBasicMode(() => {
+      this.render();
+      this.onChange();
+    });
+    settings.append(this.modeControl.el, this.turn.el, this.endsControl.el);
     container.appendChild(settings);
 
     const pieces = document.createElement('div');
@@ -185,7 +201,9 @@ export class Palette {
       heading.textContent = CATEGORY_NAMES[category];
       const grid = document.createElement('div');
       grid.className = 'palette-grid';
-      for (const shape of SHAPES.filter((s) => s.category === category)) {
+      const shapes = SHAPES.filter((s) => s.category === category);
+      this.sections.push({ section, shapes });
+      for (const shape of shapes) {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'tile';
@@ -261,7 +279,11 @@ export class Palette {
   private render(): void {
     this.turn.set(this.hand);
     this.endsControl.set(this.ends);
+    this.modeControl.set(MODE.basic ? 'brio' : 'all');
+    // Basic mode hides what Brio doesn't sell.
+    for (const { section, shapes } of this.sections) section.hidden = !shapes.some(isOffered);
     for (const { button, shape } of this.tiles.values()) {
+      button.hidden = !isOffered(shape);
       const id = variantFor(shape, this.ends, null);
       const piece = getPiece(id);
       const name = document.createElement('span');

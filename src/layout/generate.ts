@@ -1,6 +1,7 @@
 import { canMate, DEFAULT_PLAY, placeToMate, type Play } from '../geometry/joint';
 import { pathLength, poseAt } from '../geometry/path';
 import { applyPose, normalizeAngle, type Pose, type Vec2 } from '../geometry/pose';
+import { offered } from '../pieces/basic';
 import { getPiece } from '../pieces/catalog';
 import * as D from '../pieces/dimensions';
 import type { Gender } from '../pieces/types';
@@ -613,7 +614,7 @@ function planLoop(opts: SectionOptions, rand: () => number, compact = 0): Slot[]
   const dir = 1;
   const items: { slot: Slot; length: number }[] = [];
   for (let k = 0; k < opts.switches; k++) items.push({ slot: { kind: 'switch', outward: -dir }, length: D.MEDIUM_STRAIGHT });
-  for (const stop of shuffle([...STOPS], rand).slice(0, opts.stops)) items.push({ slot: { kind: 'stop', stop, length: stopLength(stop) }, length: stopLength(stop) });
+  for (const stop of shuffle(STOPS.filter((s) => offered(getPiece(s.id))), rand).slice(0, opts.stops)) items.push({ slot: { kind: 'stop', stop, length: stopLength(stop) }, length: stopLength(stop) });
   const climb = opts.climb !== 'none';
   // Corners, and the pieces in sides A and C (B and D) each.
   const inCorner = opts.pieces >= 20 && rand() < 0.35 ? 1 : 0;
@@ -732,7 +733,7 @@ function plan(opts: SectionOptions, rand: () => number, more = false): Slot[] {
     const i = [0, 1, -1, 2, -2, 3, -3].map((d) => aim + d).find(free);
     if (i !== undefined) put(i, { kind: 'switch' });
   }
-  const stops = shuffle([...STOPS], rand).slice(0, opts.stops);
+  const stops = shuffle(STOPS.filter((s) => offered(getPiece(s.id))), rand).slice(0, opts.stops);
   for (const stop of stops) {
     const spots = shuffle(
       slots.map((_, i) => i).filter(free),

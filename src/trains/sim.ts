@@ -59,6 +59,13 @@ export const PHYSICS = {
   dt: 0.0005,
 };
 
+/**
+ * Outside Basic mode magnets are forgiving: they hold this many times as
+ * hard and let faces slide this many times as far before peeling apart.
+ * Basic mode uses PHYSICS as it stands, the closest we have to the real thing.
+ */
+export const EASY_MAGNETS = { hold: 2, slide: 1.5 };
+
 /** How far an engine runs on full stores, mm under power. Tunable, chosen so a lap or few of a play-table layout uses a good part of them. */
 export const SUPPLIES = {
   waterMm: 15000,
@@ -346,6 +353,10 @@ export class TrainSim {
   private readonly choose: Chooser = (key, count) => (this.levers.get(key) ?? 0) % count;
   /** Trains set the switches ahead of them and wait for each other rather than collide. */
   autoroute = false;
+  /** Magnets as strong as real ones (Basic mode); off, they're EASY_MAGNETS. */
+  realMagnets = true;
+  /** Coupled vehicles never come apart on their own, so long and job trains stay whole. */
+  keepCoupled = false;
   /** Counts lever changes, so the view knows to redraw them. */
   leverVersion = 0;
   readonly dispatcher: Dispatcher;
@@ -885,6 +896,8 @@ export class TrainSim {
     const lateral = vehicles.map(() => 0);
 
     // Magnets and buffers between neighbours.
+    const hold = P.magnetHoldN * (this.realMagnets ? 1 : EASY_MAGNETS.hold);
+    const slide = P.magnetSlideMm * (this.realMagnets ? 1 : EASY_MAGNETS.slide);
     couplings.forEach((c, i) => {
       const a = vehicles[i];
       const b = vehicles[i + 1];
@@ -894,14 +907,14 @@ export class TrainSim {
       if (c.attract) {
         if (c.coupled) {
           if (g > 0) pull = Math.max(0, P.couplingStiffness * g + P.couplingDamping * closing);
-          if (pull > P.magnetHoldN || across > P.magnetSlideMm) {
-            const why = pull > P.magnetHoldN ? 'pulled apart' : 'slid apart on the bend';
+          if (!this.keepCoupled && (pull > hold || across > slide)) {
+            const why = pull > hold ? 'pulled apart' : 'slid apart on the bend';
             c.coupled = false;
             pull = 0;
             this.notice(train, `${train.name} came uncoupled behind the ${a.def.name.toLowerCase()}: the magnets ${why} on the ${pieceName(this.network, route.segmentAt(a.u).edge.uid).toLowerCase()}.`, a.geo.behindFace);
           }
         } else {
-          if (g < 0.3 && across < P.magnetSlideMm / 2) c.coupled = true;
+          if (g < 0.3 && across < slide / 2) c.coupled = true;
           if (g > 0 && g < P.magnetReachMm) pull = 0.5 * P.magnetHoldN * (1 - g / P.magnetReachMm) ** 2;
         }
       } else if (g < P.repelReachMm) {
