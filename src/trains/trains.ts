@@ -165,6 +165,8 @@ interface Press {
 
 export class Trains {
   readonly sim: TrainSim;
+  /** The view's size in CSS pixels, for placing cards and bubbles over the 3D view. */
+  private viewSize: { width: number; height: number };
   private readonly root = new THREE.Group();
   private readonly vehiclesRoot = new THREE.Group();
   private readonly leversRoot = new THREE.Group();
@@ -214,6 +216,10 @@ export class Trains {
     private readonly controls: ViewControls,
   ) {
     this.layout = host.layout;
+    // Measuring the page every frame, after the cards have moved, makes the browser lay it out again.
+    const measure = () => ({ width: container.clientWidth, height: container.clientHeight });
+    this.viewSize = measure();
+    new ResizeObserver(() => (this.viewSize = measure())).observe(container);
     this.sim = new TrainSim(this.layout);
     this.accessories = new AccessoryView(this.sim, host.pieceObjects);
     this.root.add(this.vehiclesRoot, this.leversRoot, this.markersRoot, this.accessories.root);
@@ -418,7 +424,7 @@ export class Trains {
 
   /** Bubbles over engines passing signs, and the tally of deliveries. */
   private drawPlaces(time: number): void {
-    const rect = this.container.getBoundingClientRect();
+    const rect = this.viewSize;
     const screen = (at: THREE.Vector3): string | null => {
       const p = at.clone().project(this.camera);
       if (p.z >= 1 || Math.abs(p.x) > 1.1 || Math.abs(p.y) > 1.1) return null;
@@ -556,7 +562,7 @@ export class Trains {
 
   /** Keep a card floating over each train, and its buttons current. */
   private drawCards(): void {
-    const rect = this.container.getBoundingClientRect();
+    const rect = this.viewSize;
     const seen = new Set<number>();
     for (const t of this.sim.trains) {
       seen.add(t.id);

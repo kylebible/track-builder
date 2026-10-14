@@ -276,7 +276,15 @@ npm install
 npm run dev     # local dev server
 npm test        # geometry and layout tests
 npm run build   # type-check and build to dist/
+npm run perf    # frame and edit timings for a 250-piece layout with trains
 ```
+
+`npm run perf` drives the app in headless Chromium, so it needs Playwright
+(`npm i -D playwright`, not installed by default). It reports draw calls,
+the JS time of a frame's train update, an edit and the layout check, on
+desktop and on a 4x CPU-throttled phone. Its frame rate uses software WebGL,
+so compare it between runs on the same machine rather than reading it as
+real-world fps.
 
 Pushes to `main` run the tests and deploy to GitHub Pages. In the repo's
 Settings → Pages, set **Source** to **GitHub Actions** once.
