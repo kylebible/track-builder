@@ -9,6 +9,7 @@ import { getStock, STOCK, type StockDef } from './stock';
 import { edgeGrade, edgeHeight } from './network';
 import { TrainSim, type StuckKind, type Train, type VehicleGeometry } from './sim';
 import { AXLE_HEIGHT, buildVehicle } from './trainMesh';
+import { AccessoryView } from './accessoryView';
 import { Synth } from '../sound/synth';
 import { TrainSounds } from '../sound/trainSounds';
 import './trains.css';
@@ -177,6 +178,7 @@ export class Trains {
   private carry: Carry | null = null;
   private press: Press | null = null;
   private thumbnails: Map<string, string> | null = null;
+  private readonly accessories: AccessoryView;
   readonly sounds: TrainSounds;
   private ride: Ride | null = null;
 
@@ -201,7 +203,8 @@ export class Trains {
   ) {
     this.layout = host.layout;
     this.sim = new TrainSim(this.layout);
-    this.root.add(this.vehiclesRoot, this.leversRoot, this.markersRoot);
+    this.accessories = new AccessoryView(this.sim, host.pieceObjects);
+    this.root.add(this.vehiclesRoot, this.leversRoot, this.markersRoot, this.accessories.root);
     scene.add(this.root);
 
     this.toggle = el('button', { id: 'trains-button', title: 'Trains: drag engines and cars onto the track (Y)', type: 'button' });
@@ -238,6 +241,7 @@ export class Trains {
         el('li', { innerHTML: '<b>Tap a car</b> on the track to turn it round. Red and blue ends are the magnets: red pulls blue.' }),
         el('li', { innerHTML: '<b>Drag a car</b> to lift it off. Drop it off the track to take it away.' }),
         el('li', { innerHTML: 'Each train has its own controls. Tap a switch’s <b>yellow knob</b> to change its way.' }),
+        el('li', { innerHTML: '<b>Tap a signal</b> to turn it red or green. Trains stop at stations, and under the cargo loader and by the crane to load and unload open wagons. The lifting bridge’s knob raises it.' }),
         el('li', { innerHTML: '<b>Ride along</b> (C) watches from the cab. Drag to look around; Esc gets off.' }),
       ),
     );
@@ -325,6 +329,7 @@ export class Trains {
     const status = t.status;
     if (status.kind === 'stuck') return SHORT[status.stuck];
     if (status.kind === 'running') return `${Math.round(status.speed)} mm/s`;
+    if (status.kind === 'waiting') return status.message;
     return t.throttle ? 'Starting' : 'Stopped';
   }
 
@@ -543,9 +548,13 @@ export class Trains {
   }
 
   /** What's under the pointer: a lever, or a vehicle (train and its place in it). */
-  private hit(e: PointerEvent): { lever: string } | { trainId: number; index: number } | null {
+  private hit(e: PointerEvent): { lever: string } | { accessory: string } | { trainId: number; index: number } | null {
     this.raycaster.setFromCamera(this.ndc(e), this.camera);
     this.root.updateMatrixWorld();
+    if (this.leversRoot.visible) {
+      const accessory = this.accessories.hit(this.raycaster);
+      if (accessory) return { accessory };
+    }
     if (this.leversRoot.visible) {
       const lever = this.raycaster.intersectObject(this.leversRoot, true)[0];
       if (lever) return { lever: lever.object.userData.uid as string };
@@ -576,6 +585,11 @@ export class Trains {
     if ('lever' in hit) {
       this.sim.toggleLever(hit.lever);
       this.drawLevers();
+      return;
+    }
+    if ('accessory' in hit) {
+      const error = this.sim.toggleAccessory(hit.accessory);
+      if (error) this.say(error);
       return;
     }
     this.press = { pointerId: e.pointerId, ...hit, x: e.clientX, y: e.clientY };
@@ -716,6 +730,7 @@ export class Trains {
     if (this.ride) this.placeCab(dt);
     this.drawCards();
     this.updateLeverVisibility();
+    this.accessories.update(this.layout, time, this.leversRoot.visible);
     const notices = this.sim.notices;
     if (notices.length && notices[notices.length - 1].time !== this.noticesSeen) {
       this.noticesSeen = notices[notices.length - 1].time;
