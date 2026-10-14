@@ -4,11 +4,13 @@ import { getPiece } from '../pieces/catalog';
 import { History } from '../layout/history';
 import {
   addPiece,
+  anchorPoints,
   canExtend,
   dragContext,
   EMPTY_LAYOUT,
   extendFrom,
   findJoints,
+  findSeat,
   findSnap,
   flipPiece,
   mirrorPieces,
@@ -48,6 +50,8 @@ interface Drag {
   active: boolean;
   transform: Pose;
   snap: Snap | null;
+  /** Lined up over a straight, for scenery that sits on track. */
+  seated: boolean;
 }
 
 export interface EditorDom {
@@ -111,7 +115,8 @@ export class Editor {
 
   /** A palette tile was tapped: add onto the selected end, or drop the piece loose. */
   pick(pieceId: string): void {
-    if (this.selection.kind === 'end') {
+    const ends = getPiece(pieceId).connectors;
+    if (this.selection.kind === 'end' && ends.length) {
       const end = this.selection.end;
       if (!canExtend(this.layout, end, pieceId)) {
         this.flash(`A ${getPiece(pieceId).name.toLowerCase()} has no end that fits this ${this.genderOf(end)}.`);
@@ -123,9 +128,8 @@ export class Editor {
     }
     const spot = this.freeSpot();
     const { layout, uid } = addPiece(this.layout, pieceId, { ...spot, angle: 0 }, this.flipPreference.get(pieceId) ?? false);
-    const ends = getPiece(pieceId).connectors;
     const next = ends[1] ?? ends[0];
-    this.commit(layout, { kind: 'end', end: { uid, connectorId: next.id } });
+    this.commit(layout, next ? { kind: 'end', end: { uid, connectorId: next.id } } : { kind: 'pieces', uids: new Set([uid]) });
   }
 
   /** The pieces the toolbar acts on: the selection, or the piece with the selected end. */
@@ -283,6 +287,7 @@ export class Editor {
       active: false,
       transform: IDENTITY,
       snap: null,
+      seated: false,
     };
   }
 
@@ -298,7 +303,9 @@ export class Editor {
     if (!at) return;
     const moved: Pose = { x: at.x - drag.grab.x, y: at.y - drag.grab.y, angle: 0 };
     drag.snap = findSnap(drag.context, moved);
-    drag.transform = drag.snap?.transform ?? moved;
+    const seat = !drag.snap && drag.uids.size === 1 ? findSeat(drag.start, [...drag.uids][0], moved) : null;
+    drag.seated = seat !== null;
+    drag.transform = drag.snap?.transform ?? seat ?? moved;
     this.refresh();
   }
 
@@ -371,7 +378,7 @@ export class Editor {
   /** A spot near the middle of the view that no piece is sitting on. */
   private freeSpot(): Vec2 {
     const base = { x: this.controls.target.x, y: -this.controls.target.z };
-    const taken = this.layout.pieces.flatMap((p) => worldEnds(p).map((e) => e.connector.pose));
+    const taken = this.layout.pieces.flatMap(anchorPoints);
     for (let ring = 0; ring < 20; ring++) {
       for (let i = 0; i < Math.max(1, ring * 6); i++) {
         const a = (i / Math.max(1, ring * 6)) * Math.PI * 2;
@@ -411,7 +418,8 @@ export class Editor {
     });
 
     const end = s.kind === 'end' ? s.end : null;
-    this.palette.setEnabled((id) => !end || canExtend(this.layout, end, id));
+    // Loose scenery can always be put down; it never joins the selected end.
+    this.palette.setEnabled((id) => !end || !getPiece(id).connectors.length || canExtend(this.layout, end, id));
 
     const has = this.targets().size > 0;
     const b = this.dom.buttons;
@@ -431,7 +439,11 @@ export class Editor {
   private describe(layout: Layout, open: number, joints: number): string {
     const s = this.selection;
     const count = `${layout.pieces.length} piece${layout.pieces.length === 1 ? '' : 's'}, ${joints} joint${joints === 1 ? '' : 's'}, ${open} open end${open === 1 ? '' : 's'}.`;
-    if (this.drag?.active) return this.drag.snap ? 'Snapping on. Let go to join.' : 'Drag near an open end to snap on.';
+    if (this.drag?.active) {
+      if (this.drag.snap) return 'Snapping on. Let go to join.';
+      if (this.drag.seated) return 'Lined up over the track. Let go to place it.';
+      return 'Drag near an open end to snap on.';
+    }
     if (s.kind === 'end') return `${this.genderOf(s.end) === 'peg' ? 'Peg' : 'Hole'} end selected: tap a piece to add it. ${count}`;
     if (s.kind === 'pieces') return `${s.uids.size} selected: drag to move, or rotate, flip, delete. ${count}`;
     if (!layout.pieces.length) return 'Tap a piece in the palette to start.';

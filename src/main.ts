@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Editor } from './builder/editor';
+import { loadSceneryModels } from './render/sceneryModels';
 import './style.css';
 
 const container = document.getElementById('app')!;
@@ -20,6 +21,9 @@ camera.position.set(0, 1000, 700);
 const orbit = new OrbitControls(camera, renderer.domElement);
 orbit.enableDamping = true;
 orbit.maxPolarAngle = Math.PI / 2 - 0.05;
+
+// Scenery pieces are built from these, so they have to be in before the editor.
+await loadSceneryModels();
 
 const editor = new Editor(scene, camera, orbit, {
   canvas: container,

@@ -2,6 +2,8 @@ import { pathLength, poseAt } from '../geometry/path';
 import { CATALOG } from '../pieces/catalog';
 import * as D from '../pieces/dimensions';
 import type { PieceCategory, PieceDef } from '../pieces/types';
+import { buildPieceObject } from '../render/pieceMesh';
+import { thumbnail } from '../render/thumbnail';
 
 // The parts palette: one tile per catalog piece, with a plan-view drawing
 // made from the same path and connector data the 3D pieces use.
@@ -12,6 +14,7 @@ const CATEGORY_NAMES: Record<PieceCategory, string> = {
   switch: 'Switches',
   crossing: 'Crossings',
   buffer: 'Buffer stops',
+  scenery: 'Scenery',
 };
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -58,9 +61,18 @@ function pieceIcon(piece: PieceDef): SVGSVGElement {
   return svg;
 }
 
+/** A rendered picture of a piece that carries a scenery model. */
+function modelIcon(piece: PieceDef): HTMLImageElement {
+  const img = document.createElement('img');
+  img.alt = piece.name;
+  img.src = thumbnail(buildPieceObject(piece));
+  return img;
+}
+
 /** A Brio letter where there is one, else which variant it is. */
 function shortLabel(piece: PieceDef): string {
   if (piece.brioIds.length) return piece.brioIds[0];
+  if (piece.model) return piece.name;
   if (piece.id.endsWith('-pp')) return '2 pegs';
   if (piece.id.endsWith('-hh')) return '2 holes';
   return '';
@@ -80,7 +92,7 @@ export class Palette {
         const tile = document.createElement('button');
         tile.className = 'tile';
         tile.title = `${piece.name}${piece.brioIds.length ? ` (${piece.brioIds.join(', ')})` : ''}`;
-        tile.appendChild(pieceIcon(piece));
+        tile.appendChild(piece.model ? modelIcon(piece) : pieceIcon(piece));
         const label = document.createElement('span');
         label.textContent = shortLabel(piece);
         tile.appendChild(label);

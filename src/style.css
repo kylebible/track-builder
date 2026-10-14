@@ -48,3 +48,5 @@ html, body { margin: 0; height: 100%; background: var(--bg); font-family: system
   #app { bottom: 132px; }
   #help { display: none; }
 }
+.tile img { width: 100%; aspect-ratio: 1; object-fit: contain; }
+.tile span { text-align: center; line-height: 1.15; }

@@ -19,7 +19,7 @@ export type TrackPath =
   /** `sweep` is signed: positive turns left (counter-clockwise). */
   | { kind: 'arc'; from: Pose; radius: number; sweep: number };
 
-export type PieceCategory = 'straight' | 'curve' | 'switch' | 'crossing' | 'buffer';
+export type PieceCategory = 'straight' | 'curve' | 'switch' | 'crossing' | 'buffer' | 'scenery';
 
 export interface PieceDef {
   /** Stable catalog id, used in saved layouts. */
@@ -30,4 +30,14 @@ export interface PieceDef {
   category: PieceCategory;
   connectors: Connector[];
   paths: TrackPath[];
+  /**
+   * A model drawn with the piece, by file name in public/models/scenery.
+   * Scenery that isn't track has no paths or connectors: it is placed and
+   * moved like track, but never joins anything.
+   */
+  model?: string;
+  /** Scenery that sits over a straight (a tunnel), snapped onto its middle when dragged near. */
+  seatsOnTrack?: boolean;
+  /** Turned over from the catalog piece, see `mirrorPiece`. */
+  mirrored?: boolean;
 }

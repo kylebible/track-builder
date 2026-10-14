@@ -1,5 +1,6 @@
 import { canMate, DEFAULT_PLAY, jointError, placeConnectorAt, placeToMate, worldConnector, type Play } from '../geometry/joint';
 import { applyPose, invertPose, normalizeAngle, rotationAbout, type Pose, type Vec2 } from '../geometry/pose';
+import { poseAt } from '../geometry/path';
 import { getPiece, mirrorPiece } from '../pieces/catalog';
 import type { Connector, PieceDef } from '../pieces/types';
 
@@ -200,9 +201,15 @@ export function transformPieces(layout: Layout, uids: ReadonlySet<string>, trans
   };
 }
 
+/** Where a piece is, for pivots and spacing: its ends, or its own origin if it has none (scenery). */
+export function anchorPoints(piece: PlacedPiece): Vec2[] {
+  const ends = worldEnds(piece);
+  return ends.length ? ends.map((e) => e.connector.pose) : [piece.pose];
+}
+
 /** The middle of a group of pieces' ends, used as a rotation pivot. */
 export function centerOf(layout: Layout, uids: ReadonlySet<string>): Vec2 {
-  const points = layout.pieces.filter((p) => uids.has(p.uid)).flatMap((p) => worldEnds(p).map((e) => e.connector.pose));
+  const points = layout.pieces.filter((p) => uids.has(p.uid)).flatMap(anchorPoints);
   const xs = points.map((p) => p.x);
   const ys = points.map((p) => p.y);
   return { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
@@ -222,8 +229,10 @@ export function flipPiece(layout: Layout, uid: string): Layout {
   const piece = findPiece(layout, uid);
   const joints = findJoints(layout);
   const ends = worldEnds(piece);
-  const anchor = ends.find((e) => partnerOf(joints, e)) ?? ends[0];
   const flipped = { ...piece, flipped: !piece.flipped };
+  // Scenery with no ends turns over where it stands.
+  if (!ends.length) return { pieces: layout.pieces.map((p) => (p.uid === uid ? flipped : p)) };
+  const anchor = ends.find((e) => partnerOf(joints, e)) ?? ends[0];
   const pose = placeConnectorAt(anchor.connector.pose, defOf(flipped), anchor.connectorId);
   return { pieces: layout.pieces.map((p) => (p.uid === uid ? { ...flipped, pose } : p)) };
 }
@@ -333,6 +342,31 @@ export function findSnap(context: DragContext, transform: Pose, range: SnapRange
     }
   }
   return best?.snap ?? null;
+}
+
+/**
+ * For one dragged scenery piece that sits over track (a tunnel), moved by
+ * `transform`: the transform that centres it on the nearest straight within
+ * `range`, lined up with it, or null if none is near.
+ */
+export function findSeat(layout: Layout, uid: string, transform: Pose, range: number = DEFAULT_SNAP_RANGE.mm): Pose | null {
+  const piece = findPiece(layout, uid);
+  if (!defOf(piece).seatsOnTrack) return null;
+  const moved = applyPose(transform, piece.pose);
+  let best: { seat: Pose; gap: number } | null = null;
+  for (const other of layout.pieces) {
+    if (other.uid === uid) continue;
+    for (const path of defOf(other).paths) {
+      if (path.kind !== 'straight') continue;
+      const mid = applyPose(other.pose, poseAt(path, path.length / 2));
+      const gap = Math.hypot(mid.x - moved.x, mid.y - moved.y);
+      if (gap > range || (best && gap >= best.gap)) continue;
+      // Either way round along the track, whichever is nearer to how it was turned.
+      const turned = Math.abs(normalizeAngle(moved.angle - mid.angle)) > Math.PI / 2;
+      best = { gap, seat: { ...mid, angle: normalizeAngle(mid.angle + (turned ? Math.PI : 0)) } };
+    }
+  }
+  return best ? applyPose(best.seat, invertPose(piece.pose)) : null;
 }
 
 /** Describe an end for messages: "Large curve, peg end". */
