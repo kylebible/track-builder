@@ -48,13 +48,57 @@ Live site: https://kylebible.github.io/track-builder/
 - Trains feel the slope: a battery engine gets up a ramp pulling one car,
   but a heavy train stalls partway and slides back down.
 
+## More track types
+
+- **Middle straight** (A3, 72 mm), alongside the mini, short, medium and
+  long straights.
+- **Bendy track**: put it down straight, then Bend (B) it 7.5° at a time up
+  to 45°, the way the Curves turn setting says (Shift+B straightens it). It
+  bends about the end it's joined by. Every bend counts as one bendy track
+  on the parts list.
+- **Double track**: double straight (K1), large double curve (EE) and short
+  double curve (EE1), two tracks 46 mm apart. A piece goes on by its first
+  track; Reverse (S) moves it across to join by the other.
+- **Arch bridge**: climbs a level over an N-length slope, runs across a
+  144 mm top on its own legs and comes back down, so floor track can pass
+  under the top. It needs no support blocks.
+- **Bridge spans**: a stone viaduct (three arches, 432 mm), a suspension
+  bridge (towers and cables, 432 mm), a steel truss bridge (216 mm) and a
+  red covered bridge (288 mm). Each is level track a level up on its own
+  structure, with a hole at both ends: climb to it with an N ramp and come
+  down with an N1, like the C straight in an up and over. No support blocks
+  go under a span or the ramp tops joined to it, and floor track can run
+  underneath (`src/render/bridges.ts` draws them).
+
+## Even more track types
+
+- **Half curves** (large and short): a sixteenth of a circle, for awkward gaps.
+- **Bumpy track**: an A length with three 4 mm humps that rock a train.
+- **Curved ramp**: a quarter turn on the E radius that climbs a level.
+- **Helix tower**: two turns round a central column, climbing a level per
+  turn and coming out right over where it went in. It eases off where each
+  turn passes over the one below, so every turn clears by a full level. No
+  support blocks.
+- **Curved viaduct**: a stone viaduct span turning an eighth of a circle.
+- **Five-point switch** (Q), **parallel switch** (F1/G1, an A long) and
+  **triple parallel switch** (F2/G2).
+- **Curved crossing** (H3): two E curves crossing in the middle.
+- **Double crossover** (K): a double straight with a crossover between
+  its tracks.
+- **Turntable**: a pit with eight ends round it. Trains run straight across
+  any line; the turning itself isn't simulated. An **engine shed** (scenery)
+  seats over a straight like the station does.
+
 **T switch** (T) and **star switch** (X) are built on a D straight with
 quarter curves into its ends. Every end where paths split has its own lever
 when trains run: three on a T, four on a star.
 
 Unmeasured guesses, all in `src/pieces/dimensions.ts` and
 `src/pieces/catalog.ts`: the ramp's exact profile (a smooth S here),
-the support block size, and which ends of N, T and X are pegs.
+the support block size, which ends of N, T and X are pegs, the bendy
+track's length and bend limit, the double curves' radii, and the sizes
+of the arch bridge and the bridge spans, and everything in "Even more track
+types" apart from the Brio letters' lengths and angles from the guide.
 
 ## Planning tools
 
