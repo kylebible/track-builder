@@ -46,6 +46,8 @@ export interface PieceDef {
   seatsOnTrack?: boolean;
   /** Seated scenery that holds the track up this high (a pier), standing on the floor under raised track. */
   holdsTrackAt?: number;
+  /** A lifting bridge: the stretch of its first path, from and to (mm along it), that rises. */
+  liftSpan?: [number, number];
   /** Turned over from the catalog piece, see `mirrorPiece`. */
   mirrored?: boolean;
 }

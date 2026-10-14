@@ -264,15 +264,6 @@ function wagon(def: StockDef, B: number): THREE.Object3D[] {
   for (const y of [DECK + 4 + h / 3, DECK + 4 + (2 * h) / 3]) {
     for (const side of [1, -1]) parts.push(panel(B - 6, 0.7, [0, y, side * (W / 2 + 0.1)], paint(BLACK)));
   }
-  // Crates, two by two, standing proud of the sides.
-  const crates = cargoGroup();
-  const cw = (B - 2 * t - 4) / 2;
-  const cd = (W - 2 * t - 2) / 2;
-  for (const [x, z] of [[-1, -1], [1, 1], [1, -1], [-1, 1]]) {
-    const crate = block([cw - 1, h + 3, cd - 1], [(x * cw) / 2, DECK + 5, (z * cd) / 2], crateWood, 0.8);
-    crates.add(crate);
-  }
-  parts.push(crates);
   return parts;
 }
 
@@ -369,7 +360,7 @@ export function showLoad(model: THREE.Object3D, def: StockDef, entry: ConsistEnt
   if (!found) loadParts.set(model, (found = { cargo: model.getObjectByName('cargo'), coal: model.getObjectByName('coal') }));
   const { cargo, coal } = found;
   if (cargo && def.cargo) {
-    const units = Math.round(((entry.load ?? 0) / def.cargo.capacity) * cargo.children.length);
+    const units = Math.round(((entry.units ?? 0) / def.cargo.capacity) * cargo.children.length);
     cargo.children.forEach((c, i) => (c.visible = i < units));
   }
   if (coal) {
@@ -526,6 +517,19 @@ function carrier(def: StockDef, B: number): THREE.Object3D[] {
   return parts;
 }
 
+/** A flat car with low sides and crates two by two. */
+function flat(def: StockDef, B: number): THREE.Object3D[] {
+  const W = def.width;
+  const parts: THREE.Object3D[] = [block([B, 5, W], [0, DECK], paint(def.color), 1.5)];
+  for (const side of [1, -1]) parts.push(block([B, 4, 2.4], [0, DECK + 5, side * (W / 2 - 1.2)], paint(CREAM), 0.8));
+  const crates = cargoGroup();
+  const cw = (B - 6) / 2;
+  const cd = (W - 6) / 2;
+  for (const [x, z] of [[-1, -1], [1, 1], [1, -1], [-1, 1]]) crates.add(block([cw - 1, 16, cd - 1], [(x * cw) / 2, DECK + 5, (z * cd) / 2], crateWood, 0.8));
+  parts.push(crates);
+  return parts;
+}
+
 /** A brake van for the back of a goods train: a cabin with an open end and a stove pipe. */
 function brakeVan(def: StockDef, B: number): THREE.Object3D[] {
   const W = def.width;
@@ -567,6 +571,7 @@ export function buildVehicle(def: StockDef): THREE.Group {
       livestock: () => livestock(def, B),
       van: () => van(def, B),
       carrier: () => carrier(def, B),
+      flat: () => flat(def, B),
       brake: () => brakeVan(def, B),
     }[def.look];
     template.add(...look());

@@ -99,7 +99,7 @@ export function planWork(place: PlaceDef, consist: readonly ConsistEntry[], rand
     }
     const cargo = def.cargo;
     if (!cargo) return;
-    const load = entry.load ?? 0;
+    const load = entry.units ?? 0;
     if (place.swaps?.includes(cargo.kind)) {
       if (cargo.kind === 'passengers') {
         const off = load ? 1 + Math.floor(rand() * load) : 0;
@@ -148,6 +148,11 @@ function summarize(tally: Map<string, number>): string {
   return parts.length ? parts.join(', ').replace(/^./, (c) => c.toUpperCase()) : 'All aboard!';
 }
 
+/** How long the work will take, seconds, with every vehicle worked at once. */
+export function workSeconds(work: Work): number {
+  return Math.max(0, ...work.queues.map((q) => q.reduce((t, j) => t + (j.action === 'refill' ? 1 / WORK.refillPerSecond : j.amount * (j.what === 'passengers' ? WORK.passengerSeconds : WORK.unitSeconds)), 0)));
+}
+
 /** The vehicles that have work to do, first and last, to line them up with the place. */
 export function workSpan(work: Work): [number, number] | null {
   const busy = work.queues.flatMap((q, i) => (q.length ? [i] : []));
@@ -188,10 +193,10 @@ export function doWork(work: Work, consist: ConsistEntry[], dt: number, delivere
       work.clocks[i] -= per;
       job.amount--;
       work.done++;
-      const load = entry.load ?? 0;
-      if (job.action === 'load') entry.load = load + 1;
+      const load = entry.units ?? 0;
+      if (job.action === 'load') entry.units = load + 1;
       else {
-        entry.load = Math.max(0, load - 1);
+        entry.units = Math.max(0, load - 1);
         delivered(job.what as CargoKind, 1);
       }
       if (job.amount <= 0) {

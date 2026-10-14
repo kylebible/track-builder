@@ -62,3 +62,14 @@ body.carrying-train, body.carrying-train * { cursor: grabbing !important; }
 @media (max-width: 700px) {
   #trains { top: auto; bottom: 0; right: 0; left: 0; width: auto; max-height: 55%; border-radius: 16px 16px 0 0; }
 }
+.tr-card-row > button.whistle { display: inline-grid; place-items: center; padding: 3px 6px; }
+.tr-card-row > button.whistle svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+#sound-button[aria-pressed='true'] { color: var(--muted); }
+/* Riding along: the ridden train's controls sit at the foot of the view. */
+.tr-card-row > button.ride { display: grid; place-items: center; padding: 3px 6px; }
+.tr-card-row > button.ride svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.tr-card-row > button.ride.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tr-card.pinned { left: 50%; top: auto; bottom: 16px; transform: translateX(-50%); margin-top: 0; font-size: 13px; padding: 8px 10px; }
+body.riding .tr-toast { bottom: 96px; }
+/* The build hints don't apply from the cab. */
+body.riding #status { display: none; }

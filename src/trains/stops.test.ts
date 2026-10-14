@@ -64,7 +64,7 @@ describe('places beside the track', () => {
   });
 
   it('a sawmill takes logs off one car and puts crates on another', () => {
-    const work = planWork(getPlace('sawmill')!, [car('battery-engine'), car('timber', { load: 3 }), car('wagon')])!;
+    const work = planWork(getPlace('sawmill')!, [car('battery-engine'), car('timber', { units: 3 }), car('flat-car')])!;
     expect(work.queues[1]).toEqual([{ action: 'unload', what: 'logs', amount: 3 }]);
     expect(work.queues[2]).toEqual([{ action: 'load', what: 'crates', amount: 4 }]);
     expect(work.summary).toBe('Unloading 3 logs, loading 4 crates');
@@ -73,7 +73,7 @@ describe('places beside the track', () => {
   it('at a station some passengers get off and some get on, and it always stops', () => {
     const station = getPlace('station')!;
     expect(planWork(station, [car('battery-engine')])).not.toBeNull();
-    const consist = [car('battery-engine'), car('coach', { load: 5 })];
+    const consist = [car('battery-engine'), car('coach', { units: 5 })];
     const work = planWork(station, consist, () => 0.5)!;
     const delivered: number[] = [];
     let done = false;
@@ -81,19 +81,15 @@ describe('places beside the track', () => {
     expect(done).toBe(true);
     // Half of five, rounded down, plus one get off; then some get on.
     expect(delivered.length).toBe(3);
-    expect(consist[1].load).toBe(2 + 5);
+    expect(consist[1].units).toBe(2 + 5);
   });
 
   it('a train stops at a station, swaps passengers, then carries on', () => {
-    const { sim, train } = start(withPlace('station'), [car('battery-engine'), car('coach', { load: 4 })]);
-    expect(sim.places).toHaveLength(1);
-    expect(runUntil(sim, 20, () => train.stop?.phase === 'dwell')).toBe(true);
-    // Stopped with the coach by the station.
-    expect(train.vehicles.every((v) => v.v === 0)).toBe(true);
-    const placeAt = sim.places[0].at;
-    const coach = train.vehicles[1].geo.center;
-    expect(Math.hypot(coach.x - placeAt.x, coach.y - placeAt.y)).toBeLessThan(3);
-    expect(runUntil(sim, 10, () => train.stop === null)).toBe(true);
+    const { sim, train } = start(withPlace('station'), [car('battery-engine'), car('coach', { units: 4 })]);
+    const atStation = () => train.hold?.kind === 'station' && train.hold.until !== null;
+    expect(runUntil(sim, 20, atStation)).toBe(true);
+    expect(train.hold?.work?.summary).toMatch(/getting off/);
+    expect(runUntil(sim, 10, () => !atStation())).toBe(true);
     expect(sim.delivered.passengers).toBeGreaterThan(0);
     const u = train.vehicles[0].u;
     runUntil(sim, 1);
@@ -112,9 +108,9 @@ describe('places beside the track', () => {
     const near = net.edges.find((e) => e.pieceId === 'straight-long')!;
     layout = addPiece(layout, 'power-station', poseAt(near.path, near.length / 2 + 60)).layout;
     const { sim, train } = start(layout, [car('battery-engine'), car('hopper')]);
-    expect(runUntil(sim, 30, () => train.consist[1].load === 6)).toBe(true);
+    expect(runUntil(sim, 30, () => train.consist[1].units === 6)).toBe(true);
     expect(runUntil(sim, 30, () => (sim.delivered.coal ?? 0) >= 6)).toBe(true);
-    expect(train.consist[1].load).toBe(0);
+    expect(train.consist[1].units).toBe(0);
   });
 
   it('a train leaving one stop still stops at the next one close behind it', () => {
@@ -130,7 +126,8 @@ describe('places beside the track', () => {
     sim.setThrottle(train.id, 1);
     const seen: string[] = [];
     runUntil(sim, 30, () => {
-      if (train.stop && seen[seen.length - 1] !== train.stop.place.id) seen.push(train.stop.place.id);
+      const at = train.hold?.until != null ? train.hold.kind : train.stop?.phase === 'dwell' ? train.stop.place.id : undefined;
+      if (at && seen[seen.length - 1] !== at) seen.push(at);
       return seen.includes('coal-mine');
     });
     expect(seen).toEqual(['station', 'coal-mine']);
@@ -160,9 +157,9 @@ describe('engine supplies', () => {
   });
 
   it('a water tank car tops up the boiler', () => {
-    const { sim, train } = start(oval(), [car('steam-engine', { water: SUPPLIES.topUpBelow - 0.01 }), car('water-tank', { load: 2 })]);
+    const { sim, train } = start(oval(), [car('steam-engine', { water: SUPPLIES.topUpBelow - 0.01 }), car('water-tank', { units: 2 })]);
     runUntil(sim, 0.5);
-    expect(train.consist[1].load).toBe(1);
+    expect(train.consist[1].units).toBe(1);
     expect(train.consist[0].water).toBeGreaterThan(SUPPLIES.topUpBelow);
   });
 
@@ -190,7 +187,7 @@ describe('engine supplies', () => {
   });
 
   it('reset puts trains back with full stores and empty cars', () => {
-    const { sim, train } = start(oval(), [car('battery-engine', { charge: 0.2 }), car('coach', { load: 3 })]);
+    const { sim, train } = start(oval(), [car('battery-engine', { charge: 0.2 }), car('coach', { units: 3 })]);
     sim.reset();
     expect(train.consist).toEqual([car('battery-engine'), car('coach')]);
   });

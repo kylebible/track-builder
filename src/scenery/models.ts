@@ -243,6 +243,13 @@ export function bridgePier(): THREE.Group {
 
 // ---- signal -----------------------------------------------------------------
 
+export const SIGNAL = {
+  /** Lamp centres in the model's frame. */
+  red: [5, 120, 0] as V3,
+  green: [5, 108, 0] as V3,
+  lampRadius: 4.5,
+};
+
 /** A colour light signal on a post. Its lamps face +x, toward the train. */
 export function signal(): THREE.Group {
   const postHeight = 100;
@@ -315,6 +322,157 @@ export function cottage(): THREE.Group {
   );
 }
 
+// ---- cargo --------------------------------------------------------------
+
+export const CRATE = { size: 22, height: 24 };
+
+/** A wooden crate with a metal plate on top, for magnets to lift. Bottom centred on the origin. */
+export function crate(): THREE.Group {
+  const { size, height } = CRATE;
+  return group(
+    'crate',
+    box('wood', [size, height, size], [0, 0, 0]),
+    ...[0.3, 0.7].map((h) => box('darkWood', [size + 0.6, 2.4, size + 0.6], [0, height * h, 0])),
+    cylinder('stone', 5, 1, [0, height, 0], 5, 12),
+  );
+}
+
+// ---- magnetic crane ---------------------------------------------------------
+
+export const CRANE = {
+  /** Height of the arm's pivot, on top of the tower. */
+  pivotHeight: 150,
+  boomLength: 160,
+  /** The hook reaches track this close to and this far from the crane's middle. */
+  minReach: 50,
+  maxReach: 150,
+  /** Where it stacks what it unloads, out from its middle. */
+  pileReach: 82,
+  /** How far below the boom the magnet hangs at rest. */
+  restDrop: 34,
+  magnetHeight: 8,
+};
+
+/** The crane's base and tower. The arm on top turns, so it is built separately: `craneArm`. */
+export function crane(): THREE.Group {
+  const { pivotHeight } = CRANE;
+  return group(
+    'crane',
+    cylinder('darkWood', 34, 8, [0, 0, 0], 34, 28),
+    cylinder('yellow', 26, 6, [0, 8, 0], 26, 28),
+    box('yellow', [18, pivotHeight - 22, 18], [0, 14, 0]),
+    ...[-1, 1].flatMap((s) => [box('black', [19, 3, 2], [0, 50, s * 9.5]), box('black', [19, 3, 2], [0, 100, s * 9.5])]),
+    cylinder('black', 12, 8, [0, pivotHeight - 8, 0], 12, 20),
+  );
+}
+
+/**
+ * The crane's turning arm: cab, boom along +x and counterweight, with the
+ * hook hanging from a trolley. Named parts: `crane-hook` (moved along the
+ * boom), `crane-rope` (one unit long, stretched to length) and
+ * `crane-magnet` (moved down the rope). Sits at the pivot height.
+ */
+export function craneArm(): THREE.Group {
+  const { boomLength, restDrop, magnetHeight } = CRANE;
+  const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 1, 6), paint('black'));
+  rope.geometry.translate(0, -0.5, 0);
+  rope.name = 'crane-rope';
+  rope.scale.y = restDrop;
+  const magnet = group('crane-magnet', cylinder('red', 9, magnetHeight, [0, -magnetHeight, 0], 9, 18), cylinder('black', 9.4, 2, [0, -magnetHeight, 0], 9.4, 18));
+  magnet.position.y = -restDrop;
+  const hook = group('crane-hook', box('black', [12, 5, 14], [0, -5, 0]), rope, magnet);
+  hook.position.x = boomLength - 20;
+  const arm = group(
+    'crane-arm',
+    box('red', [34, 28, 28], [-4, 0, 0]),
+    box('glass', [1, 12, 20], [13.5, 10, 0]),
+    gableRoof('red', 32, 8, 38, [-4, 28, 0]),
+    box('yellow', [boomLength, 8, 10], [boomLength / 2, 18, 0]),
+    box('yellow', [boomLength * 0.6, 4, 4], [boomLength * 0.32, 30, 0]),
+    box('darkWood', [26, 22, 26], [-34, 4, 0]),
+    hook,
+  );
+  hook.position.y = 18;
+  arm.position.y = CRANE.pivotHeight;
+  return arm;
+}
+
+// ---- cargo loader ---------------------------------------------------------
+
+export const LOADER = {
+  /** The chute's mouth, over the track's middle. */
+  chuteHeight: 96,
+  length: 80,
+};
+
+/** A hopper of crates on four legs over the track, which drops one into an open wagon stopped under it. */
+export function cargoLoader(): THREE.Group {
+  const { chuteHeight, length } = LOADER;
+  const legZ = D.TRACK_WIDTH / 2 + 12;
+  const legX = length / 2 - 6;
+  const top = chuteHeight + 26;
+  const legs = [-1, 1].flatMap((sx) => [-1, 1].map((sz) => box('darkWood', [8, top, 8], [sx * legX, 0, sz * legZ])));
+  const braces = [-1, 1].map((sz) => box('darkWood', [length - 4, 6, 6], [0, chuteHeight - 30, sz * legZ]));
+  // A funnel narrowing down to the chute.
+  const funnel = new THREE.Mesh(new THREE.CylinderGeometry(38, 14, 24, 4, 1), paint('yellow'));
+  funnel.rotation.y = Math.PI / 4;
+  funnel.position.set(0, chuteHeight + 14, 0);
+  const bin = box('yellow', [length, 34, 2 * legZ + 8], [0, top, 0]);
+  const rim = box('red', [length + 4, 4, 2 * legZ + 12], [0, top + 34, 0]);
+  const chute = box('red', [18, 8, 18], [0, chuteHeight - 2, 0]);
+  const heap = [-18, 0, 18].map((x, i) => box('wood', [16, 14, 16], [x, top + 30 + (i % 2) * 3, (i - 1) * 8]));
+  return group('cargo-loader', ...legs, ...braces, funnel, bin, rim, chute, ...heap);
+}
+
+// ---- lifting bridge -------------------------------------------------------
+
+export const LIFT_BRIDGE = {
+  towerHeight: 190,
+  /** The control box's knob, in the piece's frame. */
+  control: [D.LIFT_SPAN_FROM - 18, 40, -(D.TRACK_WIDTH / 2 + 30)] as V3,
+  /** Warning lamps on the towers, in the piece's frame. */
+  lamps: [D.LIFT_SPAN_FROM - 8, D.LIFT_SPAN_TO + 8].flatMap((x) => [-1, 1].map((s) => [x, 70, s * (D.TRACK_WIDTH / 2 + 16)] as V3)),
+};
+
+/**
+ * Two towers either side of the span of a lifting bridge piece. The track
+ * and the span are drawn from the piece; this frame starts at its first
+ * end and runs along +x.
+ */
+export function liftBridge(): THREE.Group {
+  const { towerHeight } = LIFT_BRIDGE;
+  const z = D.TRACK_WIDTH / 2 + 10;
+  const parts: THREE.Object3D[] = [];
+  for (const x of [D.LIFT_SPAN_FROM - 8, D.LIFT_SPAN_TO + 8]) {
+    for (const s of [-1, 1]) {
+      parts.push(box('stone', [18, 6, 18], [x, 0, s * z]));
+      parts.push(box('red', [10, towerHeight, 10], [x, 6, s * z]));
+      parts.push(box('darkWood', [6, 30, 6], [x, towerHeight - 70, s * (z + 8)]));
+      parts.push(box('black', [6, 8, 6], [x, LIFT_BRIDGE.lamps[0][1] - 4, s * (z + 6)]));
+    }
+    parts.push(box('red', [12, 12, 2 * z + 10], [x, towerHeight, 0]));
+    parts.push(cylinder('black', 6, 4, [x, towerHeight + 12, 0], 6, 12));
+  }
+  // Beams joining the tower tops, and the control box by the first tower.
+  for (const s of [-1, 1]) parts.push(box('red', [D.LIFT_SPAN_TO - D.LIFT_SPAN_FROM + 16, 8, 6], [(D.LIFT_SPAN_FROM + D.LIFT_SPAN_TO) / 2, towerHeight - 4, s * z]));
+  const [cx, , cz] = LIFT_BRIDGE.control;
+  parts.push(box('cream', [20, 26, 16], [cx, 0, cz]), box('red', [22, 3, 18], [cx, 26, cz]));
+  return group('lift-bridge', ...parts);
+}
+
+/** Girders along the lifting span, which rise with its track. Built at runtime with the span. */
+export function liftSpanGirders(): THREE.Group {
+  const length = D.LIFT_SPAN_TO - D.LIFT_SPAN_FROM - 2;
+  const x = (D.LIFT_SPAN_FROM + D.LIFT_SPAN_TO) / 2;
+  return group(
+    'lift-girders',
+    ...[-1, 1].flatMap((s) => [
+      box('red', [length, 14, 3], [x, 0, s * (D.TRACK_WIDTH / 2 + 1.5)]),
+      box('white', [length - 10, 2, 3.4], [x, 7, s * (D.TRACK_WIDTH / 2 + 1.5)]),
+    ]),
+  );
+}
+
 /** Every scenery model by file name, for the exporter. */
 export const SCENERY_MODELS: Record<string, () => THREE.Group> = {
   tunnel,
@@ -325,5 +483,14 @@ export const SCENERY_MODELS: Record<string, () => THREE.Group> = {
   'leafy-tree': leafyTree,
   'pine-tree': pineTree,
   cottage,
+  crane,
+  'cargo-loader': cargoLoader,
+  'lift-bridge': liftBridge,
   ...TRACKSIDE_MODELS,
+};
+
+/** Parts built at runtime alongside a model because they move, by model name. */
+export const MOVING_PARTS: Record<string, () => THREE.Group> = {
+  crane: craneArm,
+  'lift-bridge': liftSpanGirders,
 };

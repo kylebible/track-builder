@@ -3,6 +3,7 @@ import { heightAt, pathLength, poseAt } from '../geometry/path';
 import { applyPose, type Pose } from '../geometry/pose';
 import * as D from '../pieces/dimensions';
 import type { Connector, PieceDef, TrackPath } from '../pieces/types';
+import { MOVING_PARTS } from '../scenery/models';
 import { sceneryModel } from './sceneryModels';
 
 // Plan coordinates (x, y) in mm map to three.js (x, height, -y), so a
@@ -235,11 +236,30 @@ export function buildSupport(x: number, y: number, angle: number, height: number
   return group;
 }
 
+/** Part of a straight path: `length` mm of it starting `from` mm along. */
+const partOf = (path: TrackPath, from: number, length: number): TrackPath => ({ kind: 'straight', from: poseAt(path, from), length });
+
+/**
+ * A lifting bridge's track: fixed stubs at each end, and the span between
+ * them as its own group, `lift-deck`, which the trains layer raises.
+ */
+function liftingTrack(path: TrackPath, [from, to]: [number, number]): THREE.Object3D[] {
+  const length = pathLength(path);
+  const deck = new THREE.Group();
+  deck.name = 'lift-deck';
+  deck.add(new THREE.Mesh(sweepGeometry(partOf(path, from + 0.5, to - from - 1)), woodMaterial), MOVING_PARTS['lift-bridge']());
+  return [new THREE.Mesh(sweepGeometry(partOf(path, 0, from)), woodMaterial), new THREE.Mesh(sweepGeometry(partOf(path, to, length - to)), woodMaterial), deck];
+}
+
 /** A three.js object for one catalog piece, in its own plan frame. */
 export function buildPieceObject(piece: PieceDef): THREE.Group {
   const group = new THREE.Group();
   group.name = piece.id;
   piece.paths.forEach((path, i) => {
+    if (i === 0 && piece.liftSpan) {
+      group.add(...liftingTrack(path, piece.liftSpan));
+      return;
+    }
     // Paths of a switch overlap near the trunk; nudge later paths' depth so
     // the shared top surface doesn't flicker.
     const material = i === 0 ? woodMaterial : woodMaterial.clone();
@@ -257,6 +277,8 @@ export function buildPieceObject(piece: PieceDef): THREE.Group {
     // Turned over, the model mirrors across the piece's own x axis.
     if (piece.mirrored) model.scale.z = -1;
     group.add(model);
+    // Moving parts go on the piece itself, unmirrored; the trains layer moves them.
+    if (MOVING_PARTS[piece.model] && !piece.liftSpan) group.add(MOVING_PARTS[piece.model]());
   }
   group.traverse((o) => {
     if (o instanceof THREE.Mesh) {
