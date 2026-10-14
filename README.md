@@ -76,18 +76,6 @@ Layout files are JSON (`src/planning/file.ts`): each piece's catalog id,
 position in mm, heading in degrees and, for raised track, height in mm.
 It also names the environment it was built on.
 
-## Scenes
-
-The **Scene** button picks what the track sits on, at real size
-(`src/environments/`): a play table (1220 × 820 mm with a 20 mm rim, about
-400 mm high), a 2 × 1.4 m living room rug on a wooden floor, a hardwood
-floor, outdoor grass, or the original grid mat with 10 cm squares. The choice
-saves with the layout, in files and share links. On the table or rug the
-check reports track that runs past the edge. The table size is a guess at a
-common train table (`TABLE` in `src/environments/environments.ts`). New
-layouts start on the table; layouts saved before scenes existed stay on the
-grid mat.
-
 - Scenery (tunnel, station, level crossing, bridge pier, signal, trees,
   cottage) is at the bottom of the palette. It drags, rotates, flips and
   deletes like track. Drag a tunnel, station or pier near the middle of a
@@ -96,6 +84,27 @@ grid mat.
 
 Joints are never stored. Two ends count as joined whenever they mate within
 the joint play, so a loop that closes in the app closes on the floor.
+
+## Scenes
+
+The **Scene** button picks what the track sits on, at real size
+(`src/environments/`):
+
+- Indoors: a play table (1220 × 820 mm with a 20 mm rim, about 400 mm
+  high), a 2 × 1.4 m living room rug on a wooden floor, a hardwood floor,
+  or the original grid mat with 10 cm squares.
+- Outdoors: grass, town streets (200 mm roads in a 1.5 m grid with
+  pavements and zebra crossings, for level crossings), a meadow with a
+  32 cm river winding across it, a lake with a sandy beach, or a snowy
+  field.
+
+The choice saves with the layout, in files and share links. The check
+reports track that runs past the edge of the table or rug, and track lying on
+the ground in the river or lake: raise it over the water like a bridge.
+Raised track (on supports or up a ramp) can cross water. Sizes and where the
+water is live in `src/environments/environments.ts`; the table size is a
+guess at a common train table (`TABLE`). New layouts start on the table;
+layouts saved before scenes existed stay on the grid mat.
 
 ## Running trains
 

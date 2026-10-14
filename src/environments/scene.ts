@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { RUG, TABLE, type EnvironmentId } from './environments';
+import { LAKE, lakeShore, RIVER, riverCentre, RUG, TABLE, TOWN, type EnvironmentId } from './environments';
 
 // The three.js side of environments: the surface under the track and
 // everything around it, plus the sky colour and light that suit it. Each
@@ -24,6 +24,10 @@ const LOOKS: Record<EnvironmentId, EnvironmentLook> = {
   floor: { background: 0xf3ece0, fog: [2600, 7500], hemisphere: [0xffffff, 0xcfc4b0, 1.5], sun: 2.0 },
   grass: { background: 0xcfe5f3, fog: [3000, 9000], hemisphere: [0xe6f3ff, 0x9fb27a, 1.45], sun: 2.3 },
   grid: { background: 0xf6f1e7, fog: [2600, 7000], hemisphere: [0xffffff, 0xcfc4b0, 1.5], sun: 2.0 },
+  town: { background: 0xd7e7f2, fog: [3000, 9000], hemisphere: [0xf0f6ff, 0xb8b4a8, 1.5], sun: 2.2 },
+  river: { background: 0xcfe5f3, fog: [3000, 9000], hemisphere: [0xe6f3ff, 0x9fb27a, 1.45], sun: 2.3 },
+  lake: { background: 0xd4ebf7, fog: [3000, 9000], hemisphere: [0xeef7ff, 0xd8c9a4, 1.45], sun: 2.3 },
+  snow: { background: 0xe3eaf1, fog: [2600, 8000], hemisphere: [0xf4f8fc, 0xdfe6ee, 1.7], sun: 2.1 },
 };
 
 export function lookOf(id: EnvironmentId): EnvironmentLook {
@@ -60,6 +64,9 @@ function texture(c: HTMLCanvasElement, sizeMm: [number, number], areaMm: [number
   t.anisotropy = 8;
   return t;
 }
+
+/** Offsets that draw a mark on a 512 px tile again across every edge and corner, so the tile wraps. */
+const WRAP = [-512, 0, 512].flatMap((ox) => [-512, 0, 512].map((oy) => [ox, oy]));
 
 const shade = (base: [number, number, number], k: number) => `rgb(${base.map((v) => Math.max(0, Math.min(255, Math.round(v * k)))).join(',')})`;
 
@@ -182,7 +189,7 @@ function grassCanvas(): HTMLCanvasElement {
     const y = rand() * 512;
     const r = 30 + rand() * 70;
     const light = rand() < 0.5;
-    for (const [ox, oy] of [[0, 0], [-512, 0], [512, 0], [0, -512], [0, 512]]) {
+    for (const [ox, oy] of WRAP) {
       const grad = g.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, r);
       grad.addColorStop(0, light ? 'rgba(150, 190, 90, 0.16)' : 'rgba(70, 110, 40, 0.16)');
       grad.addColorStop(1, 'rgba(0,0,0,0)');
@@ -200,6 +207,155 @@ function grassCanvas(): HTMLCanvasElement {
     g.moveTo(x, y);
     g.lineTo(x + (rand() - 0.5) * 3, y - 2 - rand() * 4);
     g.stroke();
+  }
+  return c;
+}
+
+/**
+ * One town block, 1.5 m square, with half a street down each side, so tiles
+ * meet in a grid of streets: asphalt, a dashed centre line, pavements, and
+ * zebra crossings at every junction.
+ */
+function townCanvas(): HTMLCanvasElement {
+  const PX = 0.4;
+  const S = TOWN.block * PX;
+  const [c, g] = canvas(S, S);
+  const road = TOWN.road * PX;
+  const walk = TOWN.pavement * PX;
+  const rand = random(5);
+  // The block: a lawn with a paved border.
+  g.fillStyle = '#d8d4cb';
+  g.fillRect(0, 0, S, S);
+  g.fillStyle = '#9fc47e';
+  g.fillRect(road / 2 + walk, road / 2 + walk, S - road - 2 * walk, S - road - 2 * walk);
+  for (let i = 0; i < 2000; i++) {
+    g.fillStyle = rand() < 0.5 ? 'rgba(80,120,50,0.18)' : 'rgba(200,230,150,0.18)';
+    g.fillRect(road / 2 + walk + rand() * (S - road - 2 * walk), road / 2 + walk + rand() * (S - road - 2 * walk), 2, 2);
+  }
+  // Paving joints.
+  g.strokeStyle = 'rgba(120, 112, 100, 0.35)';
+  g.lineWidth = 1;
+  for (let d = road / 2; d < S - road / 2; d += 16) {
+    for (const [x0, y0, x1, y1] of [[d, road / 2, d, road / 2 + walk], [d, S - road / 2 - walk, d, S - road / 2], [road / 2, d, road / 2 + walk, d], [S - road / 2 - walk, d, S - road / 2, d]]) {
+      g.beginPath();
+      g.moveTo(x0, y0);
+      g.lineTo(x1, y1);
+      g.stroke();
+    }
+  }
+  // Streets along all four edges (half of each), with kerbs.
+  g.fillStyle = '#595c62';
+  for (const [x, y, w, h] of [[0, 0, S, road / 2], [0, S - road / 2, S, road / 2], [0, 0, road / 2, S], [S - road / 2, 0, road / 2, S]]) g.fillRect(x, y, w, h);
+  for (let i = 0; i < 5000; i++) {
+    const x = rand() * S;
+    const y = rand() * S;
+    if (x > road / 2 && x < S - road / 2 && y > road / 2 && y < S - road / 2) continue;
+    g.fillStyle = rand() < 0.5 ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.1)';
+    g.fillRect(x, y, 1.5, 1.5);
+  }
+  g.strokeStyle = '#b9b4aa';
+  g.lineWidth = 2;
+  g.strokeRect(road / 2, road / 2, S - road, S - road);
+  // Dashed centre lines along each edge, stopping short of the junctions.
+  g.fillStyle = '#f2efe6';
+  const junction = road / 2 + walk + 40 * PX;
+  for (let d = junction; d < S - junction - 30 * PX; d += 90 * PX) {
+    const len = Math.min(50 * PX, S - junction - d);
+    g.fillRect(d, -1.5, len, 3);
+    g.fillRect(d, S - 1.5, len, 3);
+    g.fillRect(-1.5, d, 3, len);
+    g.fillRect(S - 1.5, d, 3, len);
+  }
+  // Zebra crossings just outside each corner junction.
+  const stripe = 12 * PX;
+  for (const cx of [0, S]) {
+    for (const cy of [0, S]) {
+      const inward = (v: number) => (v === 0 ? 1 : -1);
+      for (let k = -road / 2 + 3; k < road / 2 - stripe; k += 2 * stripe) {
+        // Crossing the street that runs along x, and the one along y.
+        g.fillRect(cx + inward(cx) * (road / 2 + 4) + (inward(cx) < 0 ? -24 * PX : 0), cy + k, 24 * PX, stripe);
+        g.fillRect(cx + k, cy + inward(cy) * (road / 2 + 4) + (inward(cy) < 0 ? -24 * PX : 0), stripe, 24 * PX);
+      }
+    }
+  }
+  return c;
+}
+
+/** Fine pale sand, a 1 m tile. */
+function sandCanvas(): HTMLCanvasElement {
+  const [c, g] = canvas(512, 512);
+  const rand = random(17);
+  g.fillStyle = '#e6d3a8';
+  g.fillRect(0, 0, 512, 512);
+  for (let i = 0; i < 40; i++) {
+    const x = rand() * 512;
+    const y = rand() * 512;
+    const r = 40 + rand() * 90;
+    for (const [ox, oy] of WRAP) {
+      const grad = g.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, r);
+      grad.addColorStop(0, rand() < 0.5 ? 'rgba(250, 236, 200, 0.14)' : 'rgba(200, 175, 125, 0.1)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = grad;
+      g.fillRect(x + ox - r, y + oy - r, 2 * r, 2 * r);
+    }
+  }
+  for (let i = 0; i < 26000; i++) {
+    const k = rand();
+    g.fillStyle = k < 0.45 ? 'rgba(160, 130, 85, 0.35)' : k < 0.9 ? 'rgba(255, 248, 225, 0.45)' : 'rgba(110, 95, 75, 0.4)';
+    g.fillRect(rand() * 512, rand() * 512, 1, 1);
+  }
+  return c;
+}
+
+/** Soft snow with faint blue drifts, a 1 m tile. */
+function snowCanvas(): HTMLCanvasElement {
+  const [c, g] = canvas(512, 512);
+  const rand = random(23);
+  g.fillStyle = '#fafcff';
+  g.fillRect(0, 0, 512, 512);
+  // Long, low drifts: wide ellipses of the faintest blue.
+  for (let i = 0; i < 14; i++) {
+    const x = rand() * 512;
+    const y = rand() * 512;
+    const rx = 80 + rand() * 120;
+    for (const [ox, oy] of WRAP) {
+      g.save();
+      g.translate(x + ox, y + oy);
+      g.scale(1, 0.35);
+      const grad = g.createRadialGradient(0, 0, 0, 0, 0, rx);
+      grad.addColorStop(0, 'rgba(200, 218, 238, 0.28)');
+      grad.addColorStop(1, 'rgba(200, 218, 238, 0)');
+      g.fillStyle = grad;
+      g.fillRect(-rx, -rx, 2 * rx, 2 * rx);
+      g.restore();
+    }
+  }
+  for (let i = 0; i < 2500; i++) {
+    g.fillStyle = rand() < 0.5 ? 'rgba(185, 202, 222, 0.35)' : 'rgba(255, 255, 255, 1)';
+    g.fillRect(rand() * 512, rand() * 512, 1, 1);
+  }
+  return c;
+}
+
+/** Ripples on water, a 1 m tile; the texture drifts slowly to look alive. */
+function waterCanvas(): HTMLCanvasElement {
+  const [c, g] = canvas(512, 512);
+  const rand = random(29);
+  g.fillStyle = '#4489b6';
+  g.fillRect(0, 0, 512, 512);
+  g.lineCap = 'round';
+  for (let i = 0; i < 700; i++) {
+    const x = rand() * 512;
+    const y = rand() * 512;
+    const len = 8 + rand() * 30;
+    g.strokeStyle = rand() < 0.7 ? 'rgba(200, 232, 250, 0.35)' : 'rgba(30, 80, 120, 0.3)';
+    g.lineWidth = 1 + rand() * 1.5;
+    for (const [ox, oy] of WRAP) {
+      g.beginPath();
+      g.moveTo(x + ox, y + oy);
+      g.quadraticCurveTo(x + ox + len / 2, y + oy - 3, x + ox + len, y + oy);
+      g.stroke();
+    }
   }
   return c;
 }
@@ -312,12 +468,97 @@ function buildGrid(): THREE.Group {
   return new THREE.Group().add(mat, fine, metre);
 }
 
+function buildTown(): THREE.Group {
+  const t = texture(townCanvas(), [TOWN.block, TOWN.block], [FLOOR, FLOOR]);
+  // FLOOR is a whole number of blocks, so the tile edges (the streets) would
+  // cross in the middle; shift half a block so a layout started there sits
+  // in a block instead.
+  t.offset.set(0.5, 0.5);
+  return new THREE.Group().add(ground(new THREE.MeshStandardMaterial({ map: t, roughness: 0.9 }), 0));
+}
+
+function buildSnow(): THREE.Group {
+  const snow = new THREE.MeshStandardMaterial({ map: texture(snowCanvas(), [1000, 1000], [FLOOR, FLOOR]), roughness: 0.95 });
+  return new THREE.Group().add(ground(snow, 0));
+}
+
+/** Water lies this far below the land, inside banks this deep. */
+const WATER_LEVEL = -6;
+const BANK = 14;
+
+let water: THREE.MeshStandardMaterial | null = null;
+function waterMaterial(): THREE.MeshStandardMaterial {
+  water ??= new THREE.MeshStandardMaterial({ map: texture(waterCanvas(), [1000, 1000], [FLOOR, FLOOR]), roughness: 0.18, metalness: 0.05 });
+  return water;
+}
+
+/** Land with water showing through wherever its shapes leave gaps. */
+function landAndWater(land: THREE.Shape[], banks: THREE.Vector2[][], landMaterial: THREE.Material, bankColour: number): THREE.Group {
+  const group = new THREE.Group();
+  // Shape coordinates are plan mm, and so are its UVs: scale textures to suit.
+  const mesh = receive(new THREE.Mesh(new THREE.ShapeGeometry(land, 1), landMaterial));
+  mesh.rotation.x = -Math.PI / 2;
+  group.add(mesh);
+  const bank = new THREE.MeshStandardMaterial({ color: bankColour, roughness: 1, side: THREE.DoubleSide });
+  for (const line of banks) {
+    const positions: number[] = [];
+    for (let i = 0; i < line.length - 1; i++) {
+      const [a, b] = [line[i], line[i + 1]];
+      positions.push(a.x, 0, -a.y, b.x, 0, -b.y, b.x, -BANK, -b.y, a.x, 0, -a.y, b.x, -BANK, -b.y, a.x, -BANK, -a.y);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.computeVertexNormals();
+    group.add(receive(new THREE.Mesh(geometry, bank)));
+  }
+  group.add(ground(waterMaterial(), WATER_LEVEL));
+  return group;
+}
+
+/** A texture whose repeat suits ShapeGeometry's plan-mm UVs. */
+function planTexture(c: HTMLCanvasElement, tileMm: number): THREE.CanvasTexture {
+  const t = texture(c, [tileMm, tileMm], [1, 1]);
+  return t;
+}
+
+function buildRiver(): THREE.Group {
+  const H = FLOOR / 2;
+  const north: THREE.Vector2[] = [];
+  const south: THREE.Vector2[] = [];
+  for (let x = -H; x <= H; x += 40) {
+    north.push(new THREE.Vector2(x, riverCentre(x) + RIVER.width / 2));
+    south.push(new THREE.Vector2(x, riverCentre(x) - RIVER.width / 2));
+  }
+  const northBank = new THREE.Shape([...north, new THREE.Vector2(H, H), new THREE.Vector2(-H, H)]);
+  const southBank = new THREE.Shape([...south, new THREE.Vector2(H, -H), new THREE.Vector2(-H, -H)]);
+  const lawn = new THREE.MeshStandardMaterial({ map: planTexture(grassCanvas(), 1000), roughness: 1 });
+  return landAndWater([northBank, southBank], [north, south], lawn, 0x7a6248);
+}
+
+function buildLake(): THREE.Group {
+  const H = FLOOR / 2;
+  const shore: THREE.Vector2[] = [];
+  for (let i = 0; i <= 180; i++) {
+    const a = (i / 180) * 2 * Math.PI;
+    const r = lakeShore(a);
+    shore.push(new THREE.Vector2(LAKE.x + LAKE.rx * r * Math.cos(a), LAKE.y + LAKE.ry * r * Math.sin(a)));
+  }
+  const beach = new THREE.Shape([new THREE.Vector2(-H, -H), new THREE.Vector2(H, -H), new THREE.Vector2(H, H), new THREE.Vector2(-H, H)]);
+  beach.holes.push(new THREE.Path(shore));
+  const sand = new THREE.MeshStandardMaterial({ map: planTexture(sandCanvas(), 1000), roughness: 1 });
+  return landAndWater([beach], [shore], sand, 0xc9b183);
+}
+
 const BUILDERS: Record<EnvironmentId, () => THREE.Group> = {
   table: buildTable,
   rug: buildRug,
   floor: buildFloor,
-  grass: buildGrass,
   grid: buildGrid,
+  grass: buildGrass,
+  town: buildTown,
+  river: buildRiver,
+  lake: buildLake,
+  snow: buildSnow,
 };
 
 /** Shows one environment at a time in a scene, with its sky and light. */
@@ -349,5 +590,11 @@ export class EnvironmentScene {
     this.hemisphere.groundColor.set(look.hemisphere[1]);
     this.hemisphere.intensity = look.hemisphere[2];
     this.sun.intensity = look.sun;
+  }
+
+  /** Let the water drift; call once a frame with the time in ms. */
+  tick(time: number): void {
+    if (!water?.map) return;
+    water.map.offset.set(Math.sin(time / 9000) * 0.02, time / 400000);
   }
 }

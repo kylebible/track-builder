@@ -5,7 +5,7 @@ import type { Vec2 } from '../geometry/pose';
 import { getPiece } from '../pieces/catalog';
 import type { PieceCategory } from '../pieces/types';
 import type { Layout } from '../layout/layout';
-import { getEnvironment, offArea, type EnvironmentId } from '../environments/environments';
+import { getEnvironment, inWater, offArea, type EnvironmentId } from '../environments/environments';
 import { checkLayout, summarize, type Issue } from './check';
 import { layoutFromJson, layoutToJson, LayoutFileError, shareUrl, type LayoutFile } from './file';
 import { partsList, partsText } from './parts';
@@ -240,18 +240,27 @@ export class PlanningPanel {
     }
   }
 
-  /** Track that runs off the table or rug the layout is built on. */
+  /** Track that runs off the table or rug the layout is built on, or into its water. */
   private areaIssues(layout: Layout): Issue[] {
     const environment = getEnvironment(this.dom.environment());
+    const issues: Issue[] = [];
+    const wet = inWater(layout, environment);
+    if (wet && environment.water) {
+      const n = wet.uids.length;
+      const pieces = n === 1 ? 'A piece' : `${n} pieces`;
+      const message = `${pieces} on the ground run${n === 1 ? 's' : ''} into the ${environment.water.name}. Raise the track over it like a bridge.`;
+      issues.push({ kind: 'in-water', at: wet.at, uids: wet.uids, message });
+    }
     const off = offArea(layout, environment);
-    if (!off || !environment.area) return [];
+    if (!off || !environment.area) return issues;
     const size = `${environment.area.width / 10} × ${environment.area.depth / 10} cm`;
     const n = off.uids.length;
     const pieces = n === 1 ? 'A piece' : `${n} pieces`;
     const message = environment.edgeIsDrop
       ? `${pieces} hang${n === 1 ? 's' : ''} off the ${environment.name.toLowerCase()}. Its play area inside the rim is ${size}.`
       : `${pieces} run${n === 1 ? 's' : ''} off the ${environment.name.toLowerCase()} (${size}).`;
-    return [{ kind: 'off-area', at: off.at, uids: off.uids, message }];
+    issues.push({ kind: 'off-area', at: off.at, uids: off.uids, message });
+    return issues;
   }
 
   /** The layout as saved and shared, with what it's built on. */

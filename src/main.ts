@@ -188,6 +188,7 @@ renderer.setAnimationLoop((time) => {
   orbit.update();
   editor.tick(time);
   trains.tick(time);
+  environmentScene.tick(time);
   renderer.render(scene, camera);
 });
 

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { IDENTITY } from '../geometry/pose';
-import { addPiece, EMPTY_LAYOUT } from '../layout/layout';
+import { addPiece, EMPTY_LAYOUT, raisePieces } from '../layout/layout';
 import { decodeLayout, encodeLayout, layoutFromJson, layoutToJson } from '../planning/file';
-import { environmentId, getEnvironment, offArea, TABLE } from './environments';
+import { environmentId, getEnvironment, inLake, inRiver, inWater, LAKE, offArea, RIVER, riverCentre, TABLE } from './environments';
 
 const table = getEnvironment('table');
 /** A long straight (216 mm) running along x, starting at `x`. */
@@ -44,5 +44,29 @@ describe('environments', () => {
     const opened = layoutFromJson(json);
     expect(opened.pieces).toHaveLength(1);
     expect(opened.environment).toBeUndefined();
+  });
+
+  it('finds track on the ground in the river, but not raised over it', () => {
+    const river = getEnvironment('river');
+    // A long straight across the river at x = 0, where it runs at RIVER.y.
+    const across = addPiece(EMPTY_LAYOUT, 'straight-long', { x: 0, y: riverCentre(0) - 108, angle: Math.PI / 2 }).layout;
+    const wet = inWater(across, river)!;
+    expect(wet.uids).toEqual(['p1']);
+    expect(inRiver(wet.at)).toBe(true);
+    expect(inWater(raisePieces(across, new Set(['p1']), 64)!, river)).toBeNull();
+    expect(inWater(straightAt(-108), river)).toBeNull();
+    expect(RIVER.y - RIVER.width / 2 - RIVER.swing).toBeGreaterThan(300);
+  });
+
+  it('finds track in the lake, and none on the beach', () => {
+    const lake = getEnvironment('lake');
+    expect(inLake({ x: LAKE.x, y: LAKE.y })).toBe(true);
+    expect(inLake({ x: 0, y: 0 })).toBe(false);
+    expect(inWater(straightAt(LAKE.x - 108, LAKE.y), lake)!.uids).toEqual(['p1']);
+    expect(inWater(straightAt(-108), lake)).toBeNull();
+  });
+
+  it('has no water where there is none', () => {
+    for (const id of ['table', 'town', 'snow'] as const) expect(inWater(straightAt(LAKE.x - 108, LAKE.y), getEnvironment(id))).toBeNull();
   });
 });

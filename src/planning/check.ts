@@ -16,10 +16,11 @@ import { supportsOf, type Support } from '../layout/supports';
 //   passes over other track a full level up is a bridge, not an overlap.
 // - A height mismatch is two ends that line up in plan at different levels.
 // - A blocked support is one that would have to stand on the track below.
-// - Off the area is track past the edge of a table or rug (added by the
-//   panel, which knows what the layout is built on).
+// - Off the area is track past the edge of a table or rug, and in water is
+//   track on the ground in a river or lake (both added by the panel, which
+//   knows what the layout is built on).
 
-export type IssueKind = 'near-miss' | 'same-gender' | 'height' | 'overlap' | 'support' | 'open-end' | 'off-area';
+export type IssueKind = 'near-miss' | 'same-gender' | 'height' | 'overlap' | 'support' | 'open-end' | 'off-area' | 'in-water';
 
 export interface Issue {
   kind: IssueKind;
