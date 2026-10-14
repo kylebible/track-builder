@@ -1,6 +1,6 @@
 import { heightAt, pathLength, poseAt } from '../geometry/path';
 import { DEFAULT_PLAY, heightGap, jointError, type Play } from '../geometry/joint';
-import { applyPose, distance, rotate, type Vec2 } from '../geometry/pose';
+import { applyPose, distance, type Vec2 } from '../geometry/pose';
 import * as D from '../pieces/dimensions';
 import { getPiece } from '../pieces/catalog';
 import { baseOf, defOf, findJoints, nearbyPairs, openEnds, worldEnd, type EndRef, type Layout, type PlacedPiece, type WorldEnd } from '../layout/layout';
@@ -15,7 +15,8 @@ import { supportsOf, type Support } from '../layout/supports';
 // - An overlap is two pieces whose track runs into each other. Track that
 //   passes over other track a full level up is a bridge, not an overlap.
 // - A height mismatch is two ends that line up in plan at different levels.
-// - A blocked support is one that would have to stand on the track below.
+// - A blocked support is one that would have to stand on the track below,
+//   where not even an arch over that track fits.
 // - Off the area is track past the edge of a table or rug, and in water is
 //   track on the ground in a river or lake (both added by the panel, which
 //   knows what the layout is built on).
@@ -268,43 +269,19 @@ function overlaps(layout: Layout, meetings: Meeting[]): Issue[] {
 }
 
 /**
- * Supports that would have to stand where lower track runs: a raised end
- * right over a floor track. Sampled along every other piece.
+ * Supports that would have to stand where lower track runs, with no room
+ * for an arch over it (see layout/supports.ts).
  */
 function blockedSupports(layout: Layout, supports: Support[]): Issue[] {
-  const issues: Issue[] = [];
-  const reach = D.TRACK_WIDTH / 2 - DEFAULT_PLAY.mm;
-  // Anything further than this from a support's middle can't touch its footprint.
-  const footprint = Math.hypot(D.SUPPORT_LENGTH / 2, D.SUPPORT_WIDTH / 2) + reach;
-  for (const support of supports) {
-    const blockers = new Set<string>();
-    for (const piece of layout.pieces) {
-      if (support.uids.includes(piece.uid) || blockers.has(piece.uid)) continue;
-      const { samples, min, max } = samplesOf(piece);
-      if (support.at.x < min.x - footprint || support.at.x > max.x + footprint || support.at.y < min.y - footprint || support.at.y > max.y + footprint) continue;
-      for (const { p, z } of samples) {
-        if (z >= support.height - 1) continue;
-        // The track's centerline against the support's footprint.
-        const local = rotate({ x: p.x - support.at.x, y: p.y - support.at.y }, -support.angle);
-        const dx = Math.max(Math.abs(local.x) - D.SUPPORT_LENGTH / 2, 0);
-        const dy = Math.max(Math.abs(local.y) - D.SUPPORT_WIDTH / 2, 0);
-        if (Math.hypot(dx, dy) < reach) {
-          blockers.add(piece.uid);
-          break;
-        }
-      }
-    }
-    for (const uid of blockers) {
-      issues.push({
-        kind: 'support',
-        at: support.at,
-        z: support.height,
-        uids: [...support.uids, uid],
-        message: `The support under this raised end would stand on the ${pieceName(layout, uid).toLowerCase()} below. Move the joint along so it lands clear.`,
-      });
-    }
-  }
-  return issues;
+  return supports.flatMap((support) =>
+    (support.blockedBy ?? []).map((uid) => ({
+      kind: 'support' as const,
+      at: support.at,
+      z: support.height,
+      uids: [...support.uids, uid],
+      message: `The support under this raised end would stand on the ${pieceName(layout, uid).toLowerCase()} below, and there's no room for an arch over it. Move the joint along so it lands clear, or raise this track another level.`,
+    })),
+  );
 }
 
 const midpoint = (a: Vec2, b: Vec2): Vec2 => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
