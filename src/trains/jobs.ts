@@ -238,7 +238,7 @@ export function needs(economy: Economy, haveJob: (job: JobId) => boolean, hasSta
       const short = staff - s.crew.length;
       const job: JobId = 'workers';
       const why = !hasStation ? ' Add a station for them to come from.' : '';
-      out.push({ uid: s.uid, what: 'workers', job, message: `${name} needs ${short} worker${short > 1 ? 's' : ''}${s.crew.length ? '' : ': it has stopped'}.${why}`, urgent: !s.crew.length || !haveJob(job) });
+      out.push({ uid: s.uid, what: 'workers', job, message: `${name} needs ${short} worker${short > 1 ? 's' : ''}${s.crew.length ? '' : ': it has stopped'}.${why}`, urgent: !haveJob(job) });
     }
     if (s.tired) out.push({ uid: s.uid, what: 'tired', job: 'workers', message: `${s.tired} tired worker${s.tired > 1 ? 's' : ''} at the ${name.toLowerCase()} want${s.tired > 1 ? '' : 's'} a ride home.`, urgent: !haveJob('workers') });
     for (const kind of s.place.unloads ?? []) {

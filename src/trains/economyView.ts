@@ -39,7 +39,7 @@ export class EconomyView {
   private info: { uid: string; el: HTMLElement } | null = null;
   private lastRefresh = 0;
   private current: Need[] = [];
-  private needsKey = '';
+  private needsKey: string | null = null;
   private readonly carsInput: HTMLInputElement;
 
   constructor(
@@ -182,7 +182,7 @@ export class EconomyView {
   }
 
   private drawNeeds(): void {
-    const key = this.current.map((n) => `${n.message}${n.urgent}`).join('|');
+    const key = `${this.sim.useEconomy}/${this.sim.economy.sites.size}/${this.current.map((n) => `${n.message}${n.urgent}`).join('|')}`;
     if (key === this.needsKey) return;
     this.needsKey = key;
     if (!this.sim.useEconomy) {
