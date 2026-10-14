@@ -133,6 +133,8 @@ const templatesPanel = document.getElementById('templates-panel')!;
 new TemplatePicker(templatesPanel, (template) => {
   const hadOwn = editor.layout.pieces.length > 0;
   editor.load(template.build());
+  // A template too big for the table comes with the scene it's laid out for.
+  if (template.environment) setEnvironment(template.environment);
   templatesPanel.hidePopover();
   editor.flash(hadOwn ? `Started from the ${template.name.toLowerCase()}. Undo brings back yours.` : `Started from the ${template.name.toLowerCase()}.`);
   fitView();

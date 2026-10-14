@@ -19,7 +19,7 @@ describe('scene dressing', () => {
         if (z > 1) expect(Math.abs(x) < 850 && Math.abs(y) < 600, `${dress.name} has something at ${x}, ${y}`).toBe(false);
       }
     }
-  });
+  }, 30000); // walks every vertex of four scenes, which takes several seconds
 
   it('keeps buildings out of the middle town block', () => {
     let tall = 0;

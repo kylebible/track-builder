@@ -34,8 +34,12 @@ export const PHYSICS = {
   magnetHoldN: 0.9,
   /** Magnets snap together from this close. */
   magnetReachMm: 4,
-  /** Magnet faces slid this far across each other (overhangs swinging out on a bend) peel apart. */
-  magnetSlideMm: 12,
+  /**
+   * Magnet faces slid this far across each other (overhangs swinging out on a
+   * bend) peel apart. A big steam engine's tender swings about 19 mm across
+   * through a parallel switch's S-bend, which real trains run happily.
+   */
+  magnetSlideMm: 24,
   /** Same poles push apart up to this far. */
   repelReachMm: 8,
   repelForceN: 0.25,

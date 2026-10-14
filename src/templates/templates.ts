@@ -1,3 +1,4 @@
+import type { EnvironmentId } from '../environments/environments';
 import { IDENTITY, normalizeAngle, type Pose } from '../geometry/pose';
 import {
   addPiece,
@@ -24,6 +25,8 @@ export interface Template {
   /** One line under the name in the picker. */
   detail: string;
   build: () => Layout;
+  /** The scene it's laid out for, when it doesn't fit the play table. */
+  environment?: EnvironmentId;
 }
 
 /**
@@ -169,7 +172,7 @@ function figureEight(): Layout {
  * together. The second track goes off to the right. Returns the open end
  * after it.
  */
-function passingLoop(b: Builder, end: EndRef, between: Token[]): EndRef {
+function passingLoop(b: Builder, end: EndRef, between: Token[], laid?: { main: string[]; loop: string[] }): EndRef {
   const right = (layout: Layout, uid: string) => {
     // The branch that leaves the main line should end up to the right of travel.
     const from = worldEnd(layout, end).connector.pose;
@@ -178,8 +181,16 @@ function passingLoop(b: Builder, end: EndRef, between: Token[]): EndRef {
     return -side;
   };
   const first = b.add(end, 'switch-parallel', { via: 'trunk', prefer: right });
-  const main = b.run({ uid: first, connectorId: 'branch0' }, between)!;
-  b.run({ uid: first, connectorId: 'branch1' }, between);
+  const lay = (connectorId: string, into: string[] = []) => {
+    let at: EndRef = { uid: first, connectorId };
+    for (const token of between) {
+      at = b.run(at, [token])!;
+      into.push(at.uid);
+    }
+    return at;
+  };
+  const main = lay('branch0', laid?.main);
+  lay('branch1', laid?.loop);
   const second = b.add(main, 'switch-parallel-peg', { via: 'branch0' });
   return { uid: second, connectorId: 'trunk' };
 }
@@ -230,12 +241,122 @@ function hill(): Layout {
   return b.done();
 }
 
+/**
+ * A whole town: a loop round the edge of a big table with a passing loop
+ * and a station on each long side, a goods yard with the crane, loader and
+ * engine shed, a hill over a viaduct, a level crossing, a lifting bridge and
+ * a tunnel, and every place a train can work at along the way, from the coal
+ * mine to the post office. Too big for the play table: it comes with the
+ * town streets.
+ */
+function fullTown(): Layout {
+  const b = new Builder();
+  const first = b.place('straight-long');
+  let end: EndRef = { uid: first, connectorId: 'b' };
+  /** Lay one piece and note where it went. */
+  const lay = (token: Token): string => {
+    end = b.run(end, [token])!;
+    return end.uid;
+  };
+  const near = { main: [] as string[], loop: [] as string[] };
+  const far = { main: [] as string[], loop: [] as string[] };
+
+  // The near side, left to right: a level crossing, then the first station's passing loop.
+  const n1 = lay('D');
+  lay('level-crossing');
+  const n2 = lay('D');
+  end = passingLoop(b, end, ['D', 'D'], near);
+  const n3 = lay('D');
+  // Up the right-hand end over the hill.
+  for (const t of ['L', 'L', 'N:up', 'bridge-viaduct', 'N:down', 'A:pp', 'L', 'L']) lay(t);
+  // The far side, right to left: the goods yard, the lifting bridge, the second station's passing loop.
+  const f1 = lay('D');
+  const outward = (from: EndRef) => (layout: Layout, uid: string) => {
+    const at = worldEnd(layout, from).connector.pose;
+    const branch = worldEnd(layout, { uid, connectorId: 'branch1' }).connector.pose;
+    return -(Math.cos(at.angle) * (branch.y - at.y) - Math.sin(at.angle) * (branch.x - at.x));
+  };
+  const yard = b.add(end, 'switch-curved', { via: 'trunk', prefer: outward(end) });
+  const yardOut = b.run({ uid: yard, connectorId: 'branch1' }, ['L'])!;
+  const split = b.add(yardOut, 'switch-curved', { via: 'trunk', prefer: outward(yardOut) });
+  let siding = b.run({ uid: split, connectorId: 'branch0' }, ['D'])!;
+  const sidingA = siding.uid;
+  siding = b.run(siding, ['D'])!;
+  const sidingB = siding.uid;
+  b.run(siding, ['buffer']);
+  siding = b.run({ uid: split, connectorId: 'branch1' }, ['L', 'D'])!;
+  const sidingC = siding.uid;
+  b.run(siding, ['buffer']);
+  end = { uid: yard, connectorId: 'branch0' };
+  const f2 = lay('D');
+  lay('lift-bridge');
+  end = passingLoop(b, end, ['D', 'D'], far);
+  // A straight before the bend, so long cars leave the loop's S-bend before they turn.
+  const f3 = lay('D');
+  // Down the left-hand end, through the tunnel, and round to the start.
+  lay('L');
+  lay('L');
+  const w = ['D', 'D', 'A', 'D', 'D'].map(lay);
+  b.run(end, ['L', 'L']);
+
+  // What stands along the track, beside the piece it belongs to. Places
+  // stand inside the loop; `out` turns one round to stand outside it.
+  const by = (uid: string, id: string, opts: { out?: boolean; side?: number; along?: number } = {}) => {
+    const piece = b.layout.pieces.find((p) => p.uid === uid)!;
+    const { x, y, angle } = piece.pose;
+    const d = opts.along ?? 108;
+    const side = opts.side ?? 0;
+    const heading = angle + (opts.out ? Math.PI : 0);
+    b.place(id, { x: x + d * Math.cos(angle) - side * Math.sin(heading), y: y + d * Math.sin(angle) + side * Math.cos(heading), angle: heading });
+  };
+  // Near side: coal and water, the signs before the level crossing, the first station.
+  by(first, 'coal-mine');
+  by(first, 'whistle-board', { out: true });
+  by(n1, 'coaling-stage');
+  by(n1, 'slow-board', { out: true });
+  by(n2, 'water-tower');
+  by(n2, 'charging-post', { out: true });
+  by(near.main[0], 'station');
+  by(near.main[1], 'power-station');
+  by(near.loop[0], 'pump-house', { out: true });
+  by(near.loop[1], 'post-office', { out: true });
+  by(n3, 'farm');
+  by(n3, 'signal', { side: 60, along: 20, out: true });
+  // Far side: the yard, the market, the second station and the timber trade.
+  by(f1, 'market');
+  by(sidingA, 'cargo-loader');
+  by(sidingB, 'engine-shed', { along: 140 });
+  by(sidingC, 'crane', { side: 100, out: true });
+  by(f2, 'goods-shed');
+  by(f3, 'toy-factory');
+  by(far.main[0], 'sawmill');
+  by(far.main[1], 'station');
+  by(far.loop[0], 'post-office', { out: true });
+  by(far.loop[1], 'lumber-camp', { out: true });
+  by(far.main[1], 'signal', { side: 60, along: 200 });
+  // The left-hand end: a tunnel, and houses beyond it.
+  by(w[1], 'tunnel');
+  by(w[4], 'cottage', { out: true, side: 140 });
+  by(w[3], 'cottage', { out: true, side: 140 });
+  // Houses and trees in the middle, and round the edge.
+  const middle = b.layout.pieces.find((p) => p.uid === near.main[0])!.pose;
+  const scatter: [string, number, number, number][] = [
+    ['cottage', 120, 420, 0.2], ['cottage', 420, 380, -0.3], ['cottage', 760, 440, 0.1], ['cottage', 300, 700, Math.PI],
+    ['leafy-tree', -120, 560, 0], ['leafy-tree', 560, 620, 0], ['pine-tree', 900, 640, 0], ['leafy-tree', 1100, 400, 0],
+    ['pine-tree', -300, 380, 0], ['leafy-tree', -500, 640, 0], ['pine-tree', 1150, -260, 0], ['leafy-tree', -700, -230, 0],
+    ['pine-tree', -400, -260, 0], ['leafy-tree', 1400, 1100, 0], ['pine-tree', -900, 300, 0],
+  ];
+  for (const [id, x, y, angle] of scatter) b.place(id, { x: middle.x + x, y: middle.y + y, angle });
+  return b.done();
+}
+
 export const TEMPLATES: readonly Template[] = [
   { id: 'oval', name: 'Simple oval', detail: 'The classic first loop', build: oval },
   { id: 'figure-eight', name: 'Figure eight', detail: 'Two loops through a cross', build: figureEight },
   { id: 'passing-loops', name: 'Passing loops', detail: 'An oval where two trains can pass', build: passingLoops },
   { id: 'goods-yard', name: 'Goods yard', detail: 'An oval with two sidings', build: goodsYard },
   { id: 'hill', name: 'Over the hill', detail: 'Up a ramp and down again', build: hill },
+  { id: 'full-town', name: 'Full town', detail: 'Every place, station and yard, on town streets', build: fullTown, environment: 'town' },
 ];
 
 export function getTemplate(id: string): Template {

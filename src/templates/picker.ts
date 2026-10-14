@@ -57,7 +57,7 @@ export class TemplatePicker {
     h.textContent = 'Templates';
     const sub = document.createElement('p');
     sub.className = 'panel-sub';
-    sub.textContent = 'Start from a classic layout. Each one fits on a play table.';
+    sub.textContent = 'Start from a classic layout. Each one fits on a play table, except the full town, which comes with town streets.';
     title.append(h, sub);
     head.append(title);
 
