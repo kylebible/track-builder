@@ -5,6 +5,7 @@ import type { Layout } from '../layout/layout';
 import * as D from '../pieces/dimensions';
 import { toWorld } from '../render/pieceMesh';
 import { getStock, STOCK, type StockDef } from './stock';
+import { edgeGrade, edgeHeight } from './network';
 import { TrainSim, type StuckKind, type Train, type VehicleGeometry } from './sim';
 import { AXLE_HEIGHT, buildVehicle } from './trainMesh';
 import './trains.css';
@@ -99,7 +100,7 @@ function renderThumbnails(): Map<string, string> {
 
 type DropTarget =
   | { kind: 'attach'; trainId: number; end: 'front' | 'back'; geo: VehicleGeometry }
-  | { kind: 'track'; edgeKey: string; s: number; geo: { center: Vec2; heading: number } }
+  | { kind: 'track'; edgeKey: string; s: number; geo: { center: Vec2; heading: number; z: number; pitch: number } }
   | { kind: 'none'; at: Vec2 | null };
 
 interface Carry {
@@ -329,7 +330,7 @@ export class Trains {
       // Over the middle of the train, above its tallest roof.
       const xs = t.vehicles.map((v) => v.geo.center.x);
       const ys = t.vehicles.map((v) => v.geo.center.y);
-      const mid = toWorld((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...t.vehicles.map((v) => v.def.height)) + AXLE_HEIGHT + 14);
+      const mid = toWorld((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...t.vehicles.map((v) => v.geo.z + v.def.height)) + AXLE_HEIGHT + 14);
       const p = mid.project(this.camera);
       const visible = p.z < 1 && Math.abs(p.x) < 1.1 && Math.abs(p.y) < 1.1;
       card.hidden = !visible;
@@ -495,10 +496,12 @@ export class Trains {
       const geo = this.sim.attachPreview(best.trainId, best.end, stockId);
       if (geo) return { kind: 'attach', trainId: best.trainId, end: best.end, geo };
     }
-    const track = this.sim.nearestTrack(at, 45);
+    // Pointing at raised track, prefer that level over the floor under it.
+    const track = this.sim.nearestTrack(at, 45, hit ? point.y - D.TRACK_HEIGHT : undefined);
     if (track) {
       const pose = poseAt(track.edge.path, track.s);
-      return { kind: 'track', edgeKey: track.edge.key, s: track.s, geo: { center: pose, heading: pose.angle } };
+      const geo = { center: pose, heading: pose.angle, z: edgeHeight(track.edge, track.s), pitch: Math.atan(edgeGrade(track.edge, track.s)) };
+      return { kind: 'track', edgeKey: track.edge.key, s: track.s, geo };
     }
     return { kind: 'none', at };
   }
@@ -514,8 +517,9 @@ export class Trains {
       }
       return;
     }
-    ghost.position.copy(toWorld(target.geo.center.x, target.geo.center.y, 0));
+    ghost.position.copy(toWorld(target.geo.center.x, target.geo.center.y, target.geo.z));
     ghost.rotation.set(0, target.geo.heading, 0);
+    ghost.rotateZ(target.geo.pitch);
   }
 
   // ---- every frame ---------------------------------------------------------
@@ -558,16 +562,18 @@ export class Trains {
         mesh.userData.trainId = train.id;
         mesh.userData.index = i;
         const { center, heading } = v.geo;
-        mesh.position.copy(toWorld(center.x, center.y, 0));
+        mesh.position.copy(toWorld(center.x, center.y, v.geo.z));
         mesh.rotation.set(0, heading, 0);
+        // Nose up a ramp: the model's own front is +x.
+        mesh.rotateZ(v.geo.pitch);
         if (v.derailed) {
           // Off the rails: dropped and tipped over a little.
-          mesh.position.y = -AXLE_HEIGHT * 0.5;
+          mesh.position.y = v.geo.z - AXLE_HEIGHT * 0.5;
           mesh.rotateX(0.35);
           mesh.rotateZ(-0.15);
         }
       });
-      if (train.status.kind === 'stuck') this.markersRoot.add(this.stuckMarker(train.status.at, time));
+      if (train.status.kind === 'stuck') this.markersRoot.add(this.stuckMarker(train.status.at, this.heightNear(train.status.at), time));
     }
     for (const [key, mesh] of this.meshes) {
       if (!seen.has(key)) {
@@ -582,7 +588,7 @@ export class Trains {
         const v = carry.target.end === 'front' ? train.vehicles[0] : train.vehicles[train.vehicles.length - 1];
         const face = carry.target.end === 'front' ? v.geo.aheadFace : v.geo.behindFace;
         const ring = new THREE.Mesh(attachGeometry, attachMaterial);
-        ring.position.copy(toWorld(face.x, face.y, AXLE_HEIGHT + 2));
+        ring.position.copy(toWorld(face.x, face.y, v.geo.z + AXLE_HEIGHT + 2));
         ring.rotation.y = v.geo.heading + Math.PI / 2;
         ring.scale.setScalar(1 + 0.12 * Math.sin(time / 150));
         this.markersRoot.add(ring);
@@ -590,10 +596,25 @@ export class Trains {
     }
   }
 
-  private stuckMarker(at: Vec2, time: number): THREE.Object3D {
+  private readonly heights = new Map<string, number>();
+
+  /** Height of the track nearest a spot, remembered per spot since stuck markers redraw every frame. */
+  private heightNear(at: Vec2): number {
+    const key = `${at.x.toFixed(1)},${at.y.toFixed(1)}`;
+    let z = this.heights.get(key);
+    if (z === undefined) {
+      const track = this.sim.nearestTrack(at, 60);
+      z = track ? edgeHeight(track.edge, track.s) : 0;
+      if (this.heights.size > 50) this.heights.clear();
+      this.heights.set(key, z);
+    }
+    return z;
+  }
+
+  private stuckMarker(at: Vec2, z: number, time: number): THREE.Object3D {
     const ring = new THREE.Mesh(stuckGeometry, stuckMaterial);
     ring.rotation.x = Math.PI / 2;
-    ring.position.copy(toWorld(at.x, at.y, D.TRACK_HEIGHT + 30));
+    ring.position.copy(toWorld(at.x, at.y, z + D.TRACK_HEIGHT + 30));
     ring.scale.setScalar(1 + 0.15 * Math.sin(time / 180));
     return ring;
   }
@@ -605,25 +626,28 @@ export class Trains {
     });
     this.leversRoot.clear();
     for (const sw of this.sim.network.switches()) {
-      const choice = sw.choices[(this.sim.levers.get(sw.uid) ?? 0) % sw.choices.length];
-      // Switch paths all start at the trunk.
+      const { edge, end } = sw.choices[(this.sim.levers.get(sw.key) ?? 0) % sw.choices.length];
+      // Measured from the switch point, whichever end of the path that is.
+      const from = (d: number) => (end === 0 ? d : edge.length - d);
       const points: THREE.Vector3[] = [];
-      for (let s = 8; s <= Math.min(STRIPE_MM, choice.length); s += 4) {
-        const p = poseAt(choice.path, s);
-        points.push(toWorld(p.x, p.y, D.TRACK_HEIGHT + 0.6));
+      for (let d = 8; d <= Math.min(STRIPE_MM, edge.length); d += 4) {
+        const p = poseAt(edge.path, from(d));
+        points.push(toWorld(p.x, p.y, edgeHeight(edge, from(d)) + D.TRACK_HEIGHT + 0.6));
       }
       if (points.length > 1) {
         const stripe = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), points.length * 2, 2.2, 6), leverMaterial);
-        stripe.userData.uid = sw.uid;
+        stripe.userData.uid = sw.key;
         this.leversRoot.add(stripe);
       }
-      const p = poseAt(choice.path, Math.min(LEVER_REACH, choice.length));
+      const reach = from(Math.min(LEVER_REACH, edge.length));
+      const p = poseAt(edge.path, reach);
+      const z = edgeHeight(edge, reach);
       const knob = new THREE.Mesh(knobGeometry, leverMaterial);
-      knob.position.copy(toWorld(p.x, p.y, D.TRACK_HEIGHT + 22));
-      knob.userData.uid = sw.uid;
+      knob.position.copy(toWorld(p.x, p.y, z + D.TRACK_HEIGHT + 22));
+      knob.userData.uid = sw.key;
       const stem = new THREE.Mesh(stemGeometry, leverStem);
-      stem.position.copy(toWorld(p.x, p.y, D.TRACK_HEIGHT + 11));
-      stem.userData.uid = sw.uid;
+      stem.position.copy(toWorld(p.x, p.y, z + D.TRACK_HEIGHT + 11));
+      stem.userData.uid = sw.key;
       this.leversRoot.add(knob, stem);
     }
   }

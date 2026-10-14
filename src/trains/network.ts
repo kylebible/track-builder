@@ -1,11 +1,14 @@
-import { pathEnd, pathLength } from '../geometry/path';
+import { heightGap } from '../geometry/joint';
+import { gradeAt, heightAt, pathEnd, pathLength } from '../geometry/path';
 import { applyPose, distance, normalizeAngle, rotate, type Pose, type Vec2 } from '../geometry/pose';
-import { defOf, findJoints, openEnds, type Layout, type PlacedPiece } from '../layout/layout';
+import { baseOf, defOf, findJoints, openEnds, type Layout, type PlacedPiece } from '../layout/layout';
 import type { TrackPath } from '../pieces/types';
 
 // The layout as something wheels can run along: every running path of every
 // piece is an edge, and the ends of edges link up through the joints. A
-// facing switch offers several ways on, picked by its lever.
+// facing switch offers several ways on, picked by its lever. Every end of a
+// piece where more than one path meets is a switch point with its own lever:
+// one on an ordinary switch, three on a T switch, four on a star.
 
 /** How well the rails line up where one piece meets the next. */
 export interface JointFit {
@@ -36,7 +39,25 @@ export interface Edge {
   /** The path in plan coordinates. */
   path: TrackPath;
   length: number;
+  /** Height of the piece's bottom above the floor. */
+  base: number;
   ends: [EdgeEnd, EdgeEnd];
+}
+
+/** Height of the track bed at `s` along an edge, above the floor. */
+export const edgeHeight = (edge: Edge, s: number): number => edge.base + heightAt(edge.path, s);
+/** How steeply an edge climbs at `s`, mm up per mm along its path. */
+export const edgeGrade = (edge: Edge, s: number): number => gradeAt(edge.path, s);
+
+/** A piece end where a train can go more than one way, and the ways it offers. */
+export interface SwitchPoint {
+  /** `uid:connectorId`: what its lever is known by. */
+  key: string;
+  uid: string;
+  /** The end itself, facing out of the piece. */
+  at: Pose;
+  /** The ways on from here, in path order, with which end of each starts here. */
+  choices: { edge: Edge; end: 0 | 1 }[];
 }
 
 /** Where a train goes on from the end of an edge. */
@@ -94,6 +115,7 @@ export class TrackNetwork {
         index,
         path,
         length: pathLength(path),
+        base: baseOf(piece),
         ends: [{ kind: 'dead' }, { kind: 'dead' }],
       };
       this.edges.push(edge);
@@ -130,6 +152,7 @@ export class TrackNetwork {
     for (let i = 0; i < open.length; i++) {
       for (let j = i + 1; j < open.length; j++) {
         if (open[i].uid === open[j].uid) continue;
+        if (heightGap(open[i].connector, open[j].connector) > 1) continue;
         const fit = fitBetween(open[i].connector.pose, open[j].connector.pose, true);
         if (fit.gapMm <= GAP_RANGE.mm && fit.angleDeg <= GAP_RANGE.deg) pairs.push({ i, j, gap: fit.gapMm });
       }
@@ -159,26 +182,27 @@ export class TrackNetwork {
     return this.pieces.get(uid);
   }
 
-  /** Pieces where a train running into one end can go more than one way, with their choices in order. */
-  switches(): { uid: string; trunk: Pose; choices: Edge[] }[] {
-    const out: { uid: string; trunk: Pose; choices: Edge[] }[] = [];
+  /** Ends where a train running in can go more than one way, with their choices in order. */
+  switches(): SwitchPoint[] {
+    const out: SwitchPoint[] = [];
     for (const [key, list] of this.atConnector) {
       if (list.length < 2) continue;
       const uid = key.slice(0, key.indexOf(':'));
-      out.push({ uid, trunk: edgeEndPose(list[0].edge, list[0].end), choices: list.map((l) => l.edge).sort((a, b) => a.index - b.index) });
+      out.push({ key, uid, at: edgeEndPose(list[0].edge, list[0].end), choices: [...list].sort((a, b) => a.edge.index - b.edge.index) });
     }
     return out;
   }
 
   /**
    * Where a train leaving `edge` through its end `end` runs on to. At a
-   * facing switch, `choose` picks among the ways on (sorted by path).
+   * facing switch, `choose` picks among the ways on (sorted by path), by
+   * the switch point's key.
    */
-  onward(edge: Edge, end: 0 | 1, choose: (uid: string, count: number) => number): Onward {
+  onward(edge: Edge, end: 0 | 1, choose: (key: string, count: number) => number): Onward {
     const here = edge.ends[end];
     const pose = edgeEndPose(edge, end);
     if (here.kind === 'dead') return { kind: this.isBuffer(edge) ? 'buffer' : 'open', at: pose };
-    let uid = edge.uid;
+    let key = `${edge.uid}:internal`;
     let fit: JointFit | null = null;
     let candidates: { edge: Edge; end: 0 | 1 }[];
     if (here.kind === 'internal') {
@@ -188,13 +212,13 @@ export class TrackNetwork {
     } else {
       const partner = this.partner.get(`${edge.uid}:${here.connectorId}`);
       if (!partner) return { kind: 'open', at: pose };
-      uid = partner.uid;
+      key = `${partner.uid}:${partner.connectorId}`;
       fit = partner.fit;
       candidates = this.atConnector.get(`${partner.uid}:${partner.connectorId}`) ?? [];
     }
     if (!candidates.length) return { kind: 'open', at: pose };
     const sorted = [...candidates].sort((a, b) => a.edge.index - b.edge.index);
-    const pick = sorted.length > 1 ? sorted[choose(uid, sorted.length) % sorted.length] : sorted[0];
+    const pick = sorted.length > 1 ? sorted[choose(key, sorted.length) % sorted.length] : sorted[0];
     return { kind: 'edge', edge: pick.edge, enterAt: pick.end, fit, at: pose };
   }
 

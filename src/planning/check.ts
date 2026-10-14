@@ -1,9 +1,10 @@
-import { pathLength, poseAt } from '../geometry/path';
-import { DEFAULT_PLAY, jointError, type Play } from '../geometry/joint';
-import { applyPose, distance, type Vec2 } from '../geometry/pose';
+import { heightAt, pathLength, poseAt } from '../geometry/path';
+import { DEFAULT_PLAY, heightGap, jointError, type Play } from '../geometry/joint';
+import { applyPose, distance, rotate, type Vec2 } from '../geometry/pose';
 import * as D from '../pieces/dimensions';
 import { getPiece } from '../pieces/catalog';
-import { defOf, findJoints, openEnds, worldEnd, type EndRef, type Layout, type WorldEnd } from '../layout/layout';
+import { baseOf, defOf, findJoints, openEnds, worldEnd, type EndRef, type Layout, type WorldEnd } from '../layout/layout';
+import { supportsOf, type Support } from '../layout/supports';
 
 // The layout check: what would go wrong when building this on the floor.
 //
@@ -11,14 +12,19 @@ import { defOf, findJoints, openEnds, worldEnd, type EndRef, type Layout, type W
 //   to join but aren't within the joint play: a loop that doesn't quite
 //   close, or two pegs (or two holes) meeting.
 // - An open end is any other end with nothing on it.
-// - An overlap is two pieces whose track runs into each other.
+// - An overlap is two pieces whose track runs into each other. Track that
+//   passes over other track a full level up is a bridge, not an overlap.
+// - A height mismatch is two ends that line up in plan at different levels.
+// - A blocked support is one that would have to stand on the track below.
 
-export type IssueKind = 'near-miss' | 'same-gender' | 'overlap' | 'open-end';
+export type IssueKind = 'near-miss' | 'same-gender' | 'height' | 'overlap' | 'support' | 'open-end';
 
 export interface Issue {
   kind: IssueKind;
   /** Where to look, in plan mm. */
   at: Vec2;
+  /** Height above the floor of the spot to look at. */
+  z?: number;
   /** The pieces involved. */
   uids: string[];
   /** The open end, for open-end issues. */
@@ -70,12 +76,23 @@ export function checkLayout(layout: Layout, options: CheckOptions = {}): Issue[]
 
   for (const [a, b] of misses) {
     const at = midpoint(a.connector.pose, b.connector.pose);
+    const z = Math.max(a.connector.z ?? 0, b.connector.z ?? 0);
     const uids = [...new Set([a.uid, b.uid])];
-    if (a.connector.gender === b.connector.gender) {
+    const rise = heightGap(a.connector, b.connector);
+    if (rise > play.mm) {
+      issues.push({
+        kind: 'height',
+        at,
+        z,
+        uids,
+        message: `These ends line up but one is ${fmt(rise)} mm higher. Put a ramp in, or raise or lower one side.`,
+      });
+    } else if (a.connector.gender === b.connector.gender) {
       const what = a.connector.gender === 'peg' ? 'pegs' : 'holes';
       issues.push({
         kind: 'same-gender',
         at,
+        z,
         uids,
         message: `Two ${what} meet here, so these ends can't join. Swap one piece for a version with a ${a.connector.gender === 'peg' ? 'hole' : 'peg'}.`,
       });
@@ -87,6 +104,7 @@ export function checkLayout(layout: Layout, options: CheckOptions = {}): Issue[]
       issues.push({
         kind: 'near-miss',
         at,
+        z,
         uids,
         message: `These ends are ${parts.join(' and ')}, more than a joint gives (${play.mm} mm, ${play.deg}°).`,
       });
@@ -98,12 +116,16 @@ export function checkLayout(layout: Layout, options: CheckOptions = {}): Issue[]
     ...misses.map(([a, b]) => ({ uids: [a.uid, b.uid], at: midpoint(a.connector.pose, b.connector.pose) })),
   ];
   issues.push(...overlaps(layout, meetings));
+  // Ends already flagged as meeting at the wrong height explain their own support.
+  const flagged = new Set(issues.filter((i) => i.kind === 'height').map((i) => i.uids.slice().sort().join('|')));
+  issues.push(...blockedSupports(layout, supportsOf(layout)).filter((i) => !flagged.has(i.uids.slice().sort().join('|'))));
 
   for (const e of open) {
     if (paired.has(e)) continue;
     issues.push({
       kind: 'open-end',
       at: e.connector.pose,
+      z: e.connector.z,
       uids: [e.uid],
       end: { uid: e.uid, connectorId: e.connectorId },
       message: `Open ${e.connector.gender} end on a ${pieceName(layout, e.uid).toLowerCase()}.`,
@@ -145,6 +167,8 @@ interface Meeting {
 interface Sample {
   uid: string;
   p: Vec2;
+  /** Height of the track's bottom above the floor. */
+  z: number;
 }
 
 const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
@@ -172,7 +196,8 @@ function overlaps(layout: Layout, meetings: Meeting[]): Issue[] {
       const length = pathLength(path);
       const steps = Math.max(1, Math.ceil(length / SAMPLE_STEP));
       for (let i = 0; i <= steps; i++) {
-        const s = { uid: piece.uid, p: applyPose(piece.pose, poseAt(path, (length * i) / steps)) };
+        const along = (length * i) / steps;
+        const s = { uid: piece.uid, p: applyPose(piece.pose, poseAt(path, along)), z: baseOf(piece) + heightAt(path, along) };
         samples.push(s);
         const k = key(Math.floor(s.p.x / cell), Math.floor(s.p.y / cell));
         let bucket = grid.get(k);
@@ -182,7 +207,7 @@ function overlaps(layout: Layout, meetings: Meeting[]): Issue[] {
     }
   }
 
-  const hits = new Map<string, { uids: [string, string]; sum: Vec2; n: number }>();
+  const hits = new Map<string, { uids: [string, string]; sum: Vec2; z: number; under: boolean; n: number }>();
   for (const s of samples) {
     const cx = Math.floor(s.p.x / cell);
     const cy = Math.floor(s.p.y / cell);
@@ -190,24 +215,76 @@ function overlaps(layout: Layout, meetings: Meeting[]): Issue[] {
       for (let dy = -1; dy <= 1; dy++) {
         for (const t of grid.get(key(cx + dx, cy + dy)) ?? []) {
           if (t.uid <= s.uid) continue;
-          if (distance(s.p, t.p) >= OVERLAP_DISTANCE || atMeeting(s, t)) continue;
+          if (distance(s.p, t.p) >= OVERLAP_DISTANCE || Math.abs(s.z - t.z) >= D.HEADROOM || atMeeting(s, t)) continue;
           const k = pairKey(s.uid, t.uid);
           let hit = hits.get(k);
-          if (!hit) hits.set(k, (hit = { uids: [s.uid, t.uid], sum: { x: 0, y: 0 }, n: 0 }));
+          if (!hit) hits.set(k, (hit = { uids: [s.uid, t.uid], sum: { x: 0, y: 0 }, z: 0, under: false, n: 0 }));
           hit.sum.x += (s.p.x + t.p.x) / 2;
           hit.sum.y += (s.p.y + t.p.y) / 2;
+          hit.z = Math.max(hit.z, s.z, t.z);
+          // Clear of each other's track but not a level apart: too low to pass under.
+          if (Math.abs(s.z - t.z) > D.TRACK_HEIGHT) hit.under = true;
           hit.n++;
         }
       }
     }
   }
 
-  return [...hits.values()].map((h) => ({
-    kind: 'overlap' as const,
-    at: { x: h.sum.x / h.n, y: h.sum.y / h.n },
-    uids: h.uids,
-    message: `A ${pieceName(layout, h.uids[0]).toLowerCase()} and a ${pieceName(layout, h.uids[1]).toLowerCase()} overlap.`,
-  }));
+  return [...hits.values()].map((h) => {
+    const [a, b] = h.uids.map((uid) => pieceName(layout, uid).toLowerCase());
+    return {
+      kind: 'overlap' as const,
+      at: { x: h.sum.x / h.n, y: h.sum.y / h.n },
+      z: h.z,
+      uids: h.uids,
+      message: h.under
+        ? `A ${a} passes over a ${b} too low for a train to fit under. Track needs a full level (${D.LEVEL_HEIGHT} mm) to cross over.`
+        : `A ${a} and a ${b} overlap.`,
+    };
+  });
+}
+
+/**
+ * Supports that would have to stand where lower track runs: a raised end
+ * right over a floor track. Sampled along every other piece.
+ */
+function blockedSupports(layout: Layout, supports: Support[]): Issue[] {
+  const issues: Issue[] = [];
+  const reach = D.TRACK_WIDTH / 2 - DEFAULT_PLAY.mm;
+  for (const support of supports) {
+    const blockers = new Set<string>();
+    for (const piece of layout.pieces) {
+      if (support.uids.includes(piece.uid) || blockers.has(piece.uid)) continue;
+      for (const path of defOf(piece).paths) {
+        const length = pathLength(path);
+        const steps = Math.max(1, Math.ceil(length / SAMPLE_STEP));
+        for (let i = 0; i <= steps; i++) {
+          const along = (length * i) / steps;
+          if (baseOf(piece) + heightAt(path, along) >= support.height - 1) continue;
+          const p = applyPose(piece.pose, poseAt(path, along));
+          // The track's centerline against the support's footprint.
+          const local = rotate({ x: p.x - support.at.x, y: p.y - support.at.y }, -support.angle);
+          const dx = Math.max(Math.abs(local.x) - D.SUPPORT_LENGTH / 2, 0);
+          const dy = Math.max(Math.abs(local.y) - D.SUPPORT_WIDTH / 2, 0);
+          if (Math.hypot(dx, dy) < reach) {
+            blockers.add(piece.uid);
+            break;
+          }
+        }
+        if (blockers.has(piece.uid)) break;
+      }
+    }
+    for (const uid of blockers) {
+      issues.push({
+        kind: 'support',
+        at: support.at,
+        z: support.height,
+        uids: [...support.uids, uid],
+        message: `The support under this raised end would stand on the ${pieceName(layout, uid).toLowerCase()} below. Move the joint along so it lands clear.`,
+      });
+    }
+  }
+  return issues;
 }
 
 const midpoint = (a: Vec2, b: Vec2): Vec2 => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });

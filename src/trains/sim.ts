@@ -3,7 +3,7 @@ import type { Layout } from '../layout/layout';
 import * as D from '../pieces/dimensions';
 import { getPiece } from '../pieces/catalog';
 import { poseAt } from '../geometry/path';
-import { TrackNetwork, type Edge } from './network';
+import { edgeHeight, TrackNetwork, type Edge } from './network';
 import { Route, type Chooser } from './route';
 import { attracts, getStock, WHEEL_RADIUS, type ConsistEntry, type StockDef } from './stock';
 
@@ -12,8 +12,8 @@ import { attracts, getStock, WHEEL_RADIUS, type ConsistEntry, type StockDef } fr
 // one position and one speed. What stops a train comes from the geometry:
 // a long rigid wheelbase scrubs its flanges round a tight curve, a coupling
 // pulling across a bend presses the wheels into the groove, a wheel has to
-// climb out of a gap or over a step at a rough joint, and a magnet only
-// holds so hard. Forces in newtons, distances in mm, speeds in mm/s.
+// climb out of a gap or over a step at a rough joint, a ramp pulls it back
+// downhill, and a magnet only holds so hard. Forces in newtons, distances in mm, speeds in mm/s.
 
 /** Tunable estimates, not measurements. */
 export const PHYSICS = {
@@ -77,6 +77,10 @@ export interface Vehicle {
 export interface VehicleGeometry {
   center: Vec2;
   heading: number;
+  /** Height of the track under the middle of the vehicle, above the floor. */
+  z: number;
+  /** Nose up (positive) or down, radians, on a ramp. */
+  pitch: number;
   frontAxle: Vec2;
   rearAxle: Vec2;
   /** Magnet faces at the route-forward and route-back ends. */
@@ -93,6 +97,8 @@ export interface Drag {
   /** The joint crossing that pushed back hardest, if any. */
   jointAt: number | null;
   buffer: number;
+  /** Gravity's pull along the route on a ramp, positive pulling route-forward. */
+  slope: number;
 }
 
 export interface Coupling {
@@ -147,7 +153,7 @@ export interface Train {
   stillFor: number;
 }
 
-const ZERO_DRAG = (): Drag => ({ rolling: 0, curve: 0, joint: 0, jointAt: null, buffer: 0 });
+const ZERO_DRAG = (): Drag => ({ rolling: 0, curve: 0, joint: 0, jointAt: null, buffer: 0, slope: 0 });
 
 const sub = (a: Vec2, b: Vec2): Vec2 => ({ x: a.x - b.x, y: a.y - b.y });
 const dot = (a: Vec2, b: Vec2) => a.x * b.x + a.y * b.y;
@@ -178,12 +184,12 @@ export function pieceName(network: TrackNetwork, uid: string): string {
 export class TrainSim {
   network: TrackNetwork;
   readonly trains: Train[] = [];
-  /** Which way each switch lever points, by piece. */
+  /** Which way each switch lever points, by switch point (`uid:connectorId`). */
   readonly levers = new Map<string, number>();
   readonly notices: Notice[] = [];
   time = 0;
   private nextId = 1;
-  private readonly choose: Chooser = (uid, count) => (this.levers.get(uid) ?? 0) % count;
+  private readonly choose: Chooser = (key, count) => (this.levers.get(key) ?? 0) % count;
 
   constructor(layout: Layout) {
     this.network = new TrackNetwork(layout);
@@ -191,15 +197,20 @@ export class TrainSim {
 
   // ---- building trains ---------------------------------------------------
 
-  /** The track point nearest `point`, within `reach` mm. */
-  nearestTrack(point: Vec2, reach = 40): { edge: Edge; s: number } | null {
+  /**
+   * The track point nearest `point`, within `reach` mm in plan. Given a
+   * `height`, track at that level wins over track above or below it.
+   */
+  nearestTrack(point: Vec2, reach = 40, height?: number): { edge: Edge; s: number } | null {
     let best: { edge: Edge; s: number; d: number } | null = null;
     for (const edge of this.network.edges) {
       const steps = Math.max(1, Math.ceil(edge.length / 4));
       for (let i = 0; i <= steps; i++) {
         const s = (edge.length * i) / steps;
-        const d = distance(poseAt(edge.path, s), point);
-        if (d < reach && (!best || d < best.d)) best = { edge, s, d };
+        const plan = distance(poseAt(edge.path, s), point);
+        if (plan >= reach) continue;
+        const d = plan + (height === undefined ? 0 : Math.abs(edgeHeight(edge, s) - height));
+        if (!best || d < best.d) best = { edge, s, d };
       }
     }
     return best && { edge: best.edge, s: best.s };
@@ -461,9 +472,14 @@ export class TrainSim {
     }
   }
 
-  /** Point a switch's lever at its next way. Track already reserved ahead of trains is let go so they take the new way. */
-  toggleLever(uid: string): void {
-    this.levers.set(uid, (this.levers.get(uid) ?? 0) + 1);
+  /**
+   * Point a switch's lever at its next way, by switch point key, or every
+   * lever on a piece given just its uid. Track already reserved ahead of
+   * trains is let go so they take the new way.
+   */
+  toggleLever(key: string): void {
+    const keys = key.includes(':') ? [key] : this.network.switches().filter((sw) => sw.uid === key).map((sw) => sw.key);
+    for (const k of keys) this.levers.set(k, (this.levers.get(k) ?? 0) + 1);
     for (const train of this.trains) {
       const ahead = Math.max(...train.vehicles.map((v) => v.u + v.def.length / 2));
       const behind = Math.min(...train.vehicles.map((v) => v.u - v.def.length / 2));
@@ -531,6 +547,8 @@ export class TrainSim {
     const dir = { x: d.x / l, y: d.y / l };
     const heading = Math.atan2(dir.y, dir.x);
     const center = { x: (fa.x + ra.x) / 2, y: (fa.y + ra.y) / 2 };
+    const zf = route.heightAt(v.u + half * v.facing);
+    const zr = route.heightAt(v.u - half * v.facing);
     const reach = v.def.length / 2;
     const front = { x: center.x + dir.x * reach, y: center.y + dir.y * reach };
     const back = { x: center.x - dir.x * reach, y: center.y - dir.y * reach };
@@ -539,6 +557,8 @@ export class TrainSim {
     return {
       center,
       heading,
+      z: (zf + zr) / 2,
+      pitch: Math.atan2(zf - zr, 2 * half || 1),
       frontAxle: fa,
       rearAxle: ra,
       aheadFace: v.facing === 1 ? front : back,
@@ -619,6 +639,10 @@ export class TrainSim {
       const drag = ZERO_DRAG();
       drag.rolling = P.rollingResistance * weight;
       drag.curve = P.flangeFriction * ((weight / 2) * (Math.abs(Math.sin(v.geo.yaw[0])) + Math.abs(Math.sin(v.geo.yaw[1]))) + lateral[i]);
+      // Uphill along the route, gravity pulls back.
+      const grade = route.gradeAt(v.u);
+      drag.slope = grade ? (-weight * grade) / Math.sqrt(1 + grade * grade) : 0;
+      force[i] += drag.slope;
 
       // Wheels crossing from one piece to the next.
       for (const axle of [v.u + v.def.wheelbase / 2, v.u - v.def.wheelbase / 2]) {
@@ -746,11 +770,21 @@ export class TrainSim {
     const group = this.coupledGroup(train, vehicles.indexOf(head));
     const pull = engines.filter((v) => group.includes(v)).reduce((s, v) => s + Math.abs(v.motorForce), 0);
     const sum = (k: 'rolling' | 'curve' | 'joint') => group.reduce((s, v) => s + v.drag[k], 0);
+    // Gravity holding the train back, against the way the engines push.
+    const push = Math.sign(engines.reduce((s, v) => s + v.motorForce, 0)) || 1;
+    const climb = Math.max(0, -push * group.reduce((s, v) => s + v.drag.slope, 0));
     const parts = { rolling: sum('rolling'), curve: sum('curve'), joint: sum('joint') };
-    const need = parts.rolling + parts.curve + parts.joint;
+    const need = parts.rolling + parts.curve + parts.joint + climb;
     const numbers = `It needs ${need.toFixed(2)} N to move; the engine${engines.length > 1 ? 's give' : ' gives'} ${pull.toFixed(2)} N.`;
+    const uphill = climb >= parts.joint && climb >= parts.curve && climb >= parts.rolling * 0.5;
     if (engines.some((v) => v.slipping)) {
-      return stuck('slipping', `${name}'s wheels are spinning: the load is more than the engine can grip. ${numbers}`, head.geo.center);
+      const where = uphill ? ' on the ramp' : '';
+      return stuck('slipping', `${name}'s wheels are spinning${where}: the load is more than the engine can grip. ${numbers}${uphill ? ' Try fewer cars.' : ''}`, head.geo.center);
+    }
+    if (uphill) {
+      const v = group.reduce((a, b) => (Math.abs(b.drag.slope) > Math.abs(a.drag.slope) ? b : a));
+      const ramp = pieceName(this.network, train.route.segmentAt(v.u).edge.uid).toLowerCase();
+      return stuck('stalled', `${name} can't get up the ${ramp}: the climb takes ${climb.toFixed(2)} N on top of ${(parts.rolling + parts.curve + parts.joint).toFixed(2)} N of drag. ${numbers} Try fewer cars.`, v.geo.center);
     }
     if (parts.joint >= parts.curve && parts.joint >= parts.rolling * 0.5) {
       const v = group.reduce((a, b) => (b.drag.joint > a.drag.joint ? b : a));
@@ -799,7 +833,7 @@ export class TrainSim {
         const y = all[b];
         if (x.t === y.t && Math.abs(x.i - y.i) < 2) continue;
         if (x.t.wrecked && y.t.wrecked) continue;
-        if (!overlaps(x.v, y.v)) continue;
+        if (!overlaps(x.v, y.v) || passesOver(x.v, y.v)) continue;
         const at = { x: (x.v.geo.center.x + y.v.geo.center.x) / 2, y: (x.v.geo.center.y + y.v.geo.center.y) / 2 };
         const message = x.t === y.t ? `${x.t.name} ran into its own tail. The loop is too short for it.` : `${x.t.name} and ${y.t.name} crashed.`;
         for (const t of new Set([x.t, y.t])) {
@@ -827,6 +861,14 @@ function placementAt(route: Route, u: number): Placement {
   const seg = route.segmentAt(u);
   const along = Math.min(Math.max(u - seg.u0, 0), seg.edge.length);
   return { edgeKey: seg.edge.key, s: seg.reversed ? seg.edge.length - along : along, reversed: seg.reversed };
+}
+
+/**
+ * Whether two vehicles are on different levels, one passing over the other.
+ * A full level up counts as clear, as it does in the layout check.
+ */
+function passesOver(a: Vehicle, b: Vehicle): boolean {
+  return Math.abs(a.geo.z - b.geo.z) >= D.HEADROOM;
 }
 
 /** Whether two vehicles' footprints overlap (separating axis test on two rectangles). */

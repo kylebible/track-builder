@@ -60,6 +60,8 @@ body.dragging-piece, body.dragging-piece * { cursor: grabbing !important; }
 .icon-groove { fill: none; stroke: var(--groove); stroke-linecap: butt; }
 .icon-peg { fill: var(--peg); stroke: #fff; stroke-width: 3; }
 .icon-hole { fill: var(--hole); stroke: #fff; stroke-width: 3; }
+.icon-support { fill: var(--wood); stroke: var(--wood-edge); stroke-width: 1.5; }
+.icon-climb { fill: none; stroke: var(--wood-edge); stroke-linecap: round; stroke-linejoin: round; }
 
 /* ---- canvas and overlays ---------------------------------------------- */
 

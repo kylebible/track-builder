@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { jointError } from '../geometry/joint';
 import { deg, IDENTITY, type Pose } from '../geometry/pose';
+import { LEVEL_HEIGHT } from '../pieces/dimensions';
 import { History } from './history';
 import {
   addPiece,
@@ -14,6 +15,7 @@ import {
   flipPiece,
   mirrorPieces,
   openEnds,
+  raisePieces,
   removePieces,
   rotatePieces,
   sectionOf,
@@ -226,12 +228,24 @@ describe('scenery', () => {
     ({ layout } = addPiece(layout, 'tunnel', { x: 0, y: 0, angle: deg(-130) }));
     const mid = { x: 72 * Math.cos(deg(45)), y: 72 * Math.sin(deg(45)) };
     const seat = findSeat(layout, 'p2', { x: mid.x + 10, y: mid.y - 8, angle: 0 })!;
-    const pose = transformPieces(layout, new Set(['p2']), seat).pieces[1].pose;
+    const pose = transformPieces(layout, new Set(['p2']), seat.transform).pieces[1].pose;
     expect(pose.x).toBeCloseTo(mid.x, 9);
     expect(pose.y).toBeCloseTo(mid.y, 9);
     // It was turned nearer the track's backward heading, so it stays that way round.
     expect(pose.angle).toBeCloseTo(deg(-135), 9);
     expect(findSeat(layout, 'p2', { x: 300, y: 0, angle: 0 })).toBeNull();
+  });
+
+  it('seats a tunnel on raised track at its level, and a pier only under raised track', () => {
+    let { layout } = addPiece(EMPTY_LAYOUT, 'straight-medium', IDENTITY);
+    ({ layout } = addPiece(layout, 'tunnel', { x: 200, y: 200, angle: 0 }));
+    ({ layout } = addPiece(layout, 'bridge-pier', { x: 200, y: 200, angle: 0 }));
+    const near = { x: 72 - 200, y: -200, angle: 0 };
+    expect(findSeat(layout, 'p2', near)!.dz).toBe(0);
+    expect(findSeat(layout, 'p3', near)).toBeNull();
+    const raised = raisePieces(layout, new Set(['p1']), LEVEL_HEIGHT)!;
+    expect(findSeat(raised, 'p2', near)!.dz).toBe(LEVEL_HEIGHT);
+    expect(findSeat(raised, 'p3', near)!.dz).toBe(0);
   });
 
   it("doesn't seat scenery that stands beside the track", () => {

@@ -31,6 +31,31 @@ Live site: https://kylebible.github.io/track-builder/
   (Delete), fit the layout in view (V), undo and redo (Ctrl+Z,
   Ctrl+Shift+Z). The ? button lists them all.
 
+## Raised track
+
+- **Ramps** (N, and N1 with two pegs) climb 64 mm over a D length. A ramp
+  goes on by its low end, so it climbs away from the end you build from;
+  Reverse (S) turns it round to go down from raised track. Everything built
+  on from the top stays up there.
+- **Raise** and **Lower** (U, D) lift whatever is selected a level (64 mm)
+  at a time. Select connected (A) first to lift a whole stretch.
+- Supports are worked out, not placed: a stack of 64 mm blocks stands under
+  every raised end, shared by the two ends at a joint
+  (`src/layout/supports.ts`). The parts list counts the blocks.
+- Ends only join at the same height. Track a full level over other track is
+  a bridge; the check flags track crossing lower than that, ends that line
+  up at different heights, and supports that would stand on track below.
+- Trains feel the slope: a battery engine gets up a ramp pulling one car,
+  but a heavy train stalls partway and slides back down.
+
+**T switch** (T) and **star switch** (X) are built on a D straight with
+quarter curves into its ends. Every end where paths split has its own lever
+when trains run: three on a T, four on a star.
+
+Unmeasured guesses, all in `src/pieces/dimensions.ts` and
+`src/pieces/catalog.ts`: the ramp's exact profile (a smooth S here),
+the support block size, and which ends of N, T and X are pegs.
+
 ## Planning tools
 
 - **Parts** lists how many of each piece the layout uses, with every peg and
@@ -48,7 +73,7 @@ Live site: https://kylebible.github.io/track-builder/
   part, so nothing is uploaded anywhere.
 
 Layout files are JSON (`src/planning/file.ts`): each piece's catalog id,
-position in mm and heading in degrees.
+position in mm, heading in degrees and, for raised track, height in mm.
 
 - Scenery (tunnel, station, level crossing, bridge pier, signal, trees,
   cottage) is at the bottom of the palette. It drags, rotates, flips and

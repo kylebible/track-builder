@@ -24,3 +24,25 @@ export function poseAt(path: TrackPath, s: number): Pose {
 export function pathEnd(path: TrackPath): Pose {
   return poseAt(path, pathLength(path));
 }
+
+/**
+ * Height of the track bed at distance `s` along a path, above the piece's
+ * bottom. A ramp climbs in one smooth S: a half cosine wave, level at both
+ * ends and steepest in the middle, like the real ones.
+ */
+export function heightAt(path: TrackPath, s: number): number {
+  const rise = path.rise ?? 0;
+  if (!rise) return 0;
+  const length = pathLength(path);
+  const t = Math.min(Math.max(s, 0), length) / length;
+  return (rise * (1 - Math.cos(Math.PI * t))) / 2;
+}
+
+/** Rate of climb at `s` along a path, mm up per mm along. */
+export function gradeAt(path: TrackPath, s: number): number {
+  const rise = path.rise ?? 0;
+  if (!rise) return 0;
+  const length = pathLength(path);
+  const t = Math.min(Math.max(s, 0), length) / length;
+  return ((rise * Math.PI) / (2 * length)) * Math.sin(Math.PI * t);
+}

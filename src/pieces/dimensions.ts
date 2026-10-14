@@ -53,6 +53,35 @@ export const CRISS_CROSS_ANGLE = Math.PI / 4;
 
 export const BUFFER_STOP_LENGTH = 40;
 
+/** N ascending track: a D-length straight that climbs 64 mm. */
+export const RAMP_LENGTH = LONG_STRAIGHT;
+export const RAMP_RISE = 64;
+
+/**
+ * Height of one level of raised track: what one N ramp climbs, and (an
+ * UNMEASURED assumption) the height of one stacking support block.
+ */
+export const LEVEL_HEIGHT = RAMP_RISE;
+/** Footprint of a support block, along and across the track. UNMEASURED. */
+export const SUPPORT_LENGTH = 30;
+export const SUPPORT_WIDTH = 52;
+
+/**
+ * Track that passes under other track needs this much headroom, from the
+ * lower track's bottom to the upper track's bottom: one full level. Half
+ * way up a ramp is too low.
+ */
+export const HEADROOM = LEVEL_HEIGHT - 4;
+
+/**
+ * T and X (star) switches: built on a D-length straight, with quarter-circle
+ * curves that run into its ends, so their centerline radius is half a D.
+ * The guide's 88 mm is that radius at the inner edge (108 - 20), which fits
+ * how we read the other curve radii.
+ */
+export const T_SWITCH_LENGTH = LONG_STRAIGHT;
+export const T_SWITCH_RADIUS = T_SWITCH_LENGTH / 2;
+
 /**
  * Real-world play in a joint: two ends this close in position and angle
  * count as connected. Tunable.

@@ -9,10 +9,17 @@ export interface Play {
 
 export const DEFAULT_PLAY: Play = { mm: JOINT_PLAY_MM, deg: JOINT_PLAY_DEG };
 
-/** A connector of a piece placed in the world at `placement`. */
-export function worldConnector(placement: Pose, connector: Connector): Connector {
-  return { ...connector, pose: applyPose(placement, connector.pose) };
+/**
+ * A connector of a piece placed in the world at `placement`, with the
+ * piece's bottom `base` mm above the floor. The result's `z` is the end's
+ * height above the floor.
+ */
+export function worldConnector(placement: Pose, connector: Connector, base = 0): Connector {
+  return { ...connector, pose: applyPose(placement, connector.pose), z: base + (connector.z ?? 0) };
 }
+
+/** How far apart two ends are in height, mm. */
+export const heightGap = (a: Connector, b: Connector): number => Math.abs((a.z ?? 0) - (b.z ?? 0));
 
 /**
  * Where to place `piece` so its connector `connectorId` mates exactly with
@@ -38,9 +45,9 @@ export function jointError(a: Pose, b: Pose): JointError {
   return { gapMm: distance(a, b), angleDeg: Math.abs((misalignment * 180) / Math.PI) };
 }
 
-/** Two world connectors form a real joint: peg into hole, within play. */
+/** Two world connectors form a real joint: peg into hole, at the same height, within play. */
 export function canMate(a: Connector, b: Connector, play: Play = DEFAULT_PLAY): boolean {
-  if (a.gender === b.gender) return false;
+  if (a.gender === b.gender || heightGap(a, b) > play.mm) return false;
   const e = jointError(a.pose, b.pose);
   return e.gapMm <= play.mm && e.angleDeg <= play.deg + 1e-9;
 }
