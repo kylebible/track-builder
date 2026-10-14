@@ -1,6 +1,6 @@
 import { poseAt } from '../geometry/path';
 import { normalizeAngle, type Pose, type Vec2 } from '../geometry/pose';
-import type { Edge, JointFit, TrackNetwork } from './network';
+import { edgeGrade, edgeHeight, type Edge, type JointFit, type TrackNetwork } from './network';
 
 // The stretch of track one train is on, laid out as a single line measured
 // in mm (`u`). It grows at either end as the train runs on, taking the way
@@ -30,7 +30,8 @@ export interface RouteEnd {
   at: Vec2;
 }
 
-export type Chooser = (uid: string, count: number) => number;
+/** Picks a way on at a switch point, by the point's key (`uid:connectorId`). */
+export type Chooser = (key: string, count: number) => number;
 
 export class Route {
   segments: Segment[];
@@ -82,6 +83,22 @@ export class Route {
     const angle = seg.reversed ? normalizeAngle(p.angle + Math.PI) : p.angle;
     const over = u - clamped;
     return { x: p.x + over * Math.cos(angle), y: p.y + over * Math.sin(angle), angle };
+  }
+
+  /** Height of the track bed at `u` above the floor. Off either end it stays level. */
+  heightAt(u: number): number {
+    const clamped = Math.min(Math.max(u, this.start), this.end);
+    const seg = this.segmentAt(clamped);
+    const s = clamped - seg.u0;
+    return edgeHeight(seg.edge, seg.reversed ? seg.edge.length - s : s);
+  }
+
+  /** How steeply the track climbs at `u` running along the route, mm up per mm. */
+  gradeAt(u: number): number {
+    if (u < this.start || u > this.end) return 0;
+    const seg = this.segmentAt(u);
+    const s = u - seg.u0;
+    return seg.reversed ? -edgeGrade(seg.edge, seg.edge.length - s) : edgeGrade(seg.edge, s);
   }
 
   /** Signed curvature at `u` (1/mm, positive turning left). */

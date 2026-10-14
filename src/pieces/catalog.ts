@@ -20,6 +20,7 @@ const endOf = (path: TrackPath, id: string, gender: Gender): Connector => ({
   id,
   gender,
   pose: pathEnd(path),
+  ...(path.rise ? { z: path.rise } : {}),
 });
 
 const straightPath = (length: number, from: Pose = ORIGIN): TrackPath => ({
@@ -95,6 +96,19 @@ const curves: PieceDef[] = CURVES.flatMap((c) =>
 );
 
 /**
+ * N ascending track: a long straight that climbs one level from its `a` end
+ * to its `b` end. Turned end for end it goes down. N has a peg and a hole
+ * (which end has which is UNCONFIRMED; we put the hole at the bottom), N1
+ * two pegs.
+ */
+const ramps: PieceDef[] = [
+  { suffix: '', name: 'Ramp', brio: 'N', ends: ['hole', 'peg'] as Ends },
+  { suffix: '-pp', name: 'Ramp, two pegs', brio: 'N1', ends: ['peg', 'peg'] as Ends },
+].map((v) =>
+  twoEnded('ramp' + v.suffix, v.name, [v.brio], 'ramp', { ...straightPath(D.RAMP_LENGTH), rise: D.RAMP_RISE }, v.ends),
+);
+
+/**
  * A piece with one trunk end at the origin and several branch ends. Brio
  * sells each switch shape as a pair that differ only in which way round the
  * pegs are; which letter has the peg on the trunk is not confirmed.
@@ -150,6 +164,51 @@ const switches: PieceDef[] = [
     [arcPath(D.SHORT_CURVE_RADIUS, D.CURVE_ANGLE)],
   ]),
 ];
+
+/**
+ * T switch: a D straight across the top, and two quarter curves from the
+ * trunk that run into its ends, so a train from the trunk turns left or
+ * right, and one along the top can carry straight on or turn down the trunk.
+ * Genders are UNCONFIRMED; like the other switches it comes both ways round.
+ */
+function tSwitch(): PieceDef[] {
+  const r = D.T_SWITCH_RADIUS;
+  const left = arcPath(r, Math.PI / 2);
+  const right = arcPath(r, -Math.PI / 2);
+  const top = straightPath(D.T_SWITCH_LENGTH, { x: r, y: -r, angle: Math.PI / 2 });
+  const make = (suffix: string, label: string, trunk: Gender, ends: Gender): PieceDef => ({
+    id: 'switch-t' + suffix,
+    name: 'T switch' + label,
+    brioIds: suffix ? [] : ['T'],
+    category: 'switch',
+    paths: [left, right, top],
+    connectors: [startOf(left, 'trunk', trunk), endOf(left, 'branch0', ends), endOf(right, 'branch1', ends)],
+  });
+  return [make('', ', hole trunk', 'hole', 'peg'), make('-peg', ', peg trunk', 'peg', 'hole')];
+}
+
+/**
+ * X star switch: two D straights crossing at right angles, with a quarter
+ * curve joining every pair of neighbouring ends, so from any end a train
+ * can go straight on or turn either way. Genders are UNCONFIRMED; we give
+ * each straight a peg and a hole, like the criss cross.
+ */
+function starSwitch(): PieceDef {
+  const r = D.T_SWITCH_RADIUS;
+  const main = straightPath(D.T_SWITCH_LENGTH);
+  const across = straightPath(D.T_SWITCH_LENGTH, { x: r, y: -r, angle: Math.PI / 2 });
+  const back: Pose = { x: 2 * r, y: 0, angle: Math.PI };
+  return {
+    id: 'switch-star',
+    name: 'Star switch',
+    brioIds: ['X'],
+    category: 'switch',
+    paths: [main, across, arcPath(r, Math.PI / 2), arcPath(r, -Math.PI / 2), arcPath(r, Math.PI / 2, back), arcPath(r, -Math.PI / 2, back)],
+    connectors: [startOf(main, 'a', 'hole'), endOf(main, 'b', 'peg'), startOf(across, 'c', 'hole'), endOf(across, 'd', 'peg')],
+  };
+}
+
+const bigSwitches: PieceDef[] = [...tSwitch(), starSwitch()];
 
 /** Two straights of equal length crossing at their midpoints. */
 function crossing(
@@ -222,14 +281,14 @@ const scenery: PieceDef[] = [
   },
   { ...loose('tunnel', 'Tunnel'), seatsOnTrack: true },
   { ...loose('station', 'Station'), seatsOnTrack: true },
-  { ...loose('bridge-pier', 'Bridge pier'), seatsOnTrack: true },
+  { ...loose('bridge-pier', 'Bridge pier'), seatsOnTrack: true, holdsTrackAt: D.LEVEL_HEIGHT },
   loose('signal', 'Signal'),
   loose('leafy-tree', 'Leafy tree'),
   loose('pine-tree', 'Pine tree'),
   loose('cottage', 'Cottage'),
 ];
 
-export const CATALOG: readonly PieceDef[] = [...straights, ...curves, ...switches, ...crossings, ...buffers, ...scenery];
+export const CATALOG: readonly PieceDef[] = [...straights, ...curves, ...ramps, ...switches, ...bigSwitches, ...crossings, ...buffers, ...scenery];
 
 const byId = new Map(CATALOG.map((p) => [p.id, p]));
 

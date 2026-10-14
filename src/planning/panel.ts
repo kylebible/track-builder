@@ -9,6 +9,16 @@ import { getEnvironment, offArea, type EnvironmentId } from '../environments/env
 import { checkLayout, summarize, type Issue } from './check';
 import { layoutFromJson, layoutToJson, LayoutFileError, shareUrl, type LayoutFile } from './file';
 import { partsList, partsText } from './parts';
+import { LEVEL_HEIGHT } from '../pieces/dimensions';
+
+/** Two stacked support blocks, drawn like the palette's track icons. */
+function supportIcon(): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 40 34');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.innerHTML = '<rect class="icon-support" x="12" y="3" width="16" height="13" rx="1.5"/><rect class="icon-support" x="12" y="18" width="16" height="13" rx="1.5"/>';
+  return svg;
+}
 
 // The planning panels behind the toolbar's Parts, Check and Save buttons.
 // Each one redraws from the layout whenever it changes.
@@ -32,6 +42,7 @@ export interface PlanningDom {
 const CATEGORY_NAMES: Record<PieceCategory, string> = {
   straight: 'Straights',
   curve: 'Curves',
+  ramp: 'Ramps',
   switch: 'Switches',
   crossing: 'Crossings',
   buffer: 'Buffer stops',
@@ -160,6 +171,19 @@ export class PlanningPanel {
       section.append(rows);
       return section;
     });
+    if (list.supports) {
+      // Supports aren't track: they come from the raised ends, see layout/supports.ts.
+      const section = el('section');
+      section.append(el('h3', '', 'Supports'));
+      const rows = el('ul', 'parts');
+      const row = el('li');
+      const text = el('div', 'part-text');
+      text.append(el('span', 'part-name', 'Support block'), el('span', 'part-detail', `${LEVEL_HEIGHT} mm tall, stacked under raised track`));
+      row.append(supportIcon(), text, el('span', 'part-count', `×${list.supports}`));
+      rows.append(row);
+      section.append(rows);
+      sections.push(section);
+    }
     this.partsBody.replaceChildren(...sections);
   }
 
@@ -238,7 +262,7 @@ export class PlanningPanel {
   /** Rings on the track for every problem while the check is open, or just the one being looked at. */
   private updateMarks(): void {
     const shown = this.checkOpen ? this.issues : this.focused ? [this.focused] : [];
-    const marks = shown.filter((i) => i.kind !== 'open-end').map((i) => ({ at: i.at, focused: i === this.focused }));
+    const marks = shown.filter((i) => i.kind !== 'open-end').map((i) => ({ at: i.at, z: i.z, focused: i === this.focused }));
     this.editor.setMarks(marks);
   }
 

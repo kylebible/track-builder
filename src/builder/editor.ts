@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { deg, IDENTITY, type Pose, type Vec2 } from '../geometry/pose';
 import { getPiece } from '../pieces/catalog';
+import { LEVEL_HEIGHT } from '../pieces/dimensions';
 import type { Gender } from '../pieces/types';
 import { History } from '../layout/history';
 import {
   addPiece,
+  baseOf,
   anchorPoints,
   canExtend,
   centerOf,
@@ -19,6 +21,7 @@ import {
   mirrorPieces,
   openEnds,
   partnerOf,
+  raisePieces,
   removePieces,
   rotatePieces,
   sectionOf,
@@ -52,6 +55,8 @@ interface Drag {
   start: Layout;
   context: DragContext;
   grab: Vec2;
+  /** The level the drag moves across. */
+  height: number;
   screen: Vec2;
   active: boolean;
   transform: Pose;
@@ -62,6 +67,8 @@ interface Drag {
   flexed: FlexResult | null;
   /** Lined up over a straight, for scenery that sits on track. */
   seated: boolean;
+  /** How far the drag lifts the pieces: onto a raised end, or onto raised track. */
+  dz: number;
 }
 
 /** A piece being dragged out of the palette, and where it would go if let go now. */
@@ -93,7 +100,7 @@ export interface EditorDom {
   status: HTMLElement;
   /** Shown while the layout is empty. */
   empty: HTMLElement;
-  buttons: Record<'undo' | 'redo' | 'rotateLeft' | 'rotateRight' | 'flip' | 'swap' | 'section' | 'remove' | 'fit', HTMLButtonElement>;
+  buttons: Record<'undo' | 'redo' | 'rotateLeft' | 'rotateRight' | 'flip' | 'swap' | 'raise' | 'lower' | 'section' | 'remove' | 'fit', HTMLButtonElement>;
   /** Frame the whole layout in the view. */
   onFit: () => void;
   /** The layout to start with, such as the one saved last time. */
@@ -105,6 +112,8 @@ export interface EditorDom {
 /** A spot the layout check wants looked at. */
 export interface Mark {
   at: Vec2;
+  /** Height above the floor, for problems on raised track. */
+  z?: number;
   /** Highlighted, because it is the one being looked at. */
   focused: boolean;
 }
@@ -148,6 +157,8 @@ export class Editor {
     b.rotateRight.onclick = () => this.rotate(-1);
     b.flip.onclick = () => this.flip();
     b.swap.onclick = () => this.swap();
+    b.raise.onclick = () => this.raise(1);
+    b.lower.onclick = () => this.raise(-1);
     b.section.onclick = () => this.selectSection();
     b.remove.onclick = () => this.remove();
     b.fit.onclick = () => dom.onFit();
@@ -230,7 +241,7 @@ export class Editor {
         this.flash(`A ${getPiece(pieceId).name.toLowerCase()} has no end that fits this ${target ?? 'end'}.`);
         return;
       }
-      const attach = attachEnd(pieceId, target);
+      const attach = attachEnd(pieceId, target, worldEnd(this.layout, end).connector.z);
       const ext = extendFrom(this.layout, end, pieceId, flipFor(pieceId, attach, hand), attach)!;
       this.commit(ext.layout, ext.next ? { kind: 'end', end: ext.next } : { kind: 'pieces', uids: new Set([ext.uid]) });
       return;
@@ -255,7 +266,7 @@ export class Editor {
       const target = end.connector.gender;
       const pieceId = variantFor(shape, this.palette.ends, target);
       if (!canExtend(this.layout, end, pieceId)) continue;
-      const attach = attachEnd(pieceId, target);
+      const attach = attachEnd(pieceId, target, end.connector.z);
       const ext = extendFrom(this.layout, end, pieceId, flipFor(pieceId, attach, hand), attach);
       if (!ext) continue;
       const middle = centerOf(ext.layout, new Set([ext.uid]));
@@ -343,6 +354,25 @@ export class Editor {
     return null;
   }
 
+  /** Lift the selection a level (onto supports), or lower it a level. */
+  raise(direction: 1 | -1): void {
+    const uids = this.targets();
+    if (!uids.size) return;
+    const next = raisePieces(this.layout, uids, direction * LEVEL_HEIGHT);
+    if (!next) {
+      this.flash('That is already down on the floor.');
+      return;
+    }
+    // Lifting one piece out of joined track leaves its neighbours behind.
+    const joints = findJoints(this.layout);
+    const torn = [...uids].some((uid) => worldEnds(findPiece(this.layout, uid)).some((e) => {
+      const partner = partnerOf(joints, e);
+      return partner && !uids.has(partner.uid);
+    }));
+    this.commit(next, { kind: 'pieces', uids });
+    if (torn) this.flash(`${direction > 0 ? 'Raised' : 'Lowered'} just the selection. Select connected (A) to move a whole stretch.`);
+  }
+
   remove(): void {
     const uids = this.targets();
     if (!uids.size) return;
@@ -418,9 +448,10 @@ export class Editor {
     return null;
   }
 
-  /** Plan coordinates of the point on the floor under the pointer. */
-  private floorPoint(e: { clientX: number; clientY: number }): Vec2 | null {
+  /** Plan coordinates of the point under the pointer on the floor, or on a level `height` mm up. */
+  private floorPoint(e: { clientX: number; clientY: number }, height = 0): Vec2 | null {
     this.raycaster.setFromCamera(this.ndc(e), this.camera);
+    this.ground.constant = -height;
     const point = this.raycaster.ray.intersectPlane(this.ground, new THREE.Vector3());
     return point ? { x: point.x, y: -point.z } : null;
   }
@@ -459,7 +490,10 @@ export class Editor {
   }
 
   private pointerDown(e: PointerEvent): void {
-    if (e.button !== 0) return;
+    // Presses on the toolbar or a panel over the view aren't the floor's;
+    // without this, the release cleared the selection before a toolbar
+    // button's click could act on it.
+    if (e.button !== 0 || !this.overFloor(e)) return;
     this.pressStart = { x: e.clientX, y: e.clientY };
     const hit = this.hit(e);
     if (!hit) return;
@@ -470,7 +504,9 @@ export class Editor {
       this.refresh();
       return;
     }
-    const grab = this.floorPoint(e);
+    // Raised track is dragged across its own level, so it stays under the pointer.
+    const height = baseOf(findPiece(this.layout, hit.uid));
+    const grab = this.floorPoint(e, height);
     if (!grab) return;
     const s = this.selection;
     const uids =
@@ -489,9 +525,11 @@ export class Editor {
       active: false,
       transform: IDENTITY,
       snap: null,
+      height,
       flex: flexContext(this.layout, uids, grab),
       flexed: null,
       seated: false,
+      dz: 0,
     };
   }
 
@@ -507,7 +545,7 @@ export class Editor {
       drag.active = true;
       this.selection = { kind: 'pieces', uids: drag.uids };
     }
-    const at = this.floorPoint(e);
+    const at = this.floorPoint(e, drag.height);
     if (!at) return;
     // Joined track flexes within its joint play; pulled well past that,
     // the pieces unclip and move freely.
@@ -516,7 +554,8 @@ export class Editor {
     drag.snap = drag.flexed ? null : findSnap(drag.context, moved);
     const seat = !drag.flexed && !drag.snap && drag.uids.size === 1 ? findSeat(drag.start, [...drag.uids][0], moved) : null;
     drag.seated = seat !== null;
-    drag.transform = drag.snap?.transform ?? seat ?? moved;
+    drag.transform = drag.snap?.transform ?? seat?.transform ?? moved;
+    drag.dz = drag.snap?.dz ?? seat?.dz ?? 0;
     this.refresh();
   }
 
@@ -571,6 +610,10 @@ export class Editor {
       this.flip();
     } else if (k === 's') {
       this.swap();
+    } else if (k === 'u') {
+      this.raise(1);
+    } else if (k === 'd') {
+      this.raise(-1);
     } else if (k === 'a') {
       this.selectSection();
     } else if (k === 't') {
@@ -631,12 +674,16 @@ export class Editor {
     const joints = findJoints(layout);
     const open = openEnds(layout, joints);
     const s = this.selection;
+    const endAt = (end: EndRef) => {
+      const c = worldEnd(layout, end).connector;
+      return { ...c.pose, z: c.z };
+    };
     const snapAt = drop
-      ? drop.joins && worldEnd(layout, drop.joins).connector.pose
+      ? drop.joins && endAt(drop.joins)
       : drag?.snap
         ? this.snapPoint(drag)
         : drag?.flexed?.closed
-          ? worldEnd(layout, drag.flexed.closed.b).connector.pose
+          ? endAt(drag.flexed.closed.b)
           : null;
     this.view.update({
       layout,
@@ -663,7 +710,7 @@ export class Editor {
     const b = this.dom.buttons;
     b.undo.disabled = !this.history.canUndo;
     b.redo.disabled = !this.history.canRedo;
-    for (const button of [b.rotateLeft, b.rotateRight, b.flip, b.section, b.remove]) button.disabled = !has;
+    for (const button of [b.rotateLeft, b.rotateRight, b.flip, b.raise, b.lower, b.section, b.remove]) button.disabled = !has;
     b.swap.disabled = this.targets().size !== 1;
     b.fit.disabled = layout.pieces.length === 0;
 
@@ -680,12 +727,12 @@ export class Editor {
 
   /** The layout as the drag has it now: flexed, or with the pieces moved. */
   private dragged(drag: Drag): Layout {
-    return drag.flexed?.layout ?? transformPieces(drag.start, drag.uids, drag.transform);
+    return drag.flexed?.layout ?? transformPieces(drag.start, drag.uids, drag.transform, drag.dz);
   }
 
-  private snapPoint(drag: Drag): Vec2 {
+  private snapPoint(drag: Drag): Vec2 & { z?: number } {
     const fixed = drag.context.fixedEnds.find((e) => e.uid === drag.snap!.fixed.uid && e.connectorId === drag.snap!.fixed.connectorId)!;
-    return fixed.connector.pose;
+    return { ...fixed.connector.pose, z: fixed.connector.z };
   }
 
   /** A hint for what to do next, and the layout's counts. */

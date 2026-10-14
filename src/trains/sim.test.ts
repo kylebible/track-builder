@@ -110,14 +110,14 @@ describe('running', () => {
     run(light.sim, light.train, 15);
     expect(light.train.status.kind).toBe('running');
 
-    const heavy = start(oval('curve-short'), [car('battery-engine'), car('timber'), car('timber'), car('timber'), car('timber')]);
+    const heavy = start(oval('curve-short'), [car('battery-engine'), car('timber'), car('timber'), car('timber'), car('timber'), car('timber')]);
     run(heavy.sim, heavy.train, 15);
     expect(heavy.train.status).toMatchObject({ kind: 'stuck', stuck: 'stalled' });
     if (heavy.train.status.kind === 'stuck') expect(heavy.train.status.message).toMatch(/short curve/);
   });
 
   it('the same load that stalls on short curves gets round large ones', () => {
-    const { sim, train } = start(oval('curve-large'), [car('battery-engine'), car('timber'), car('timber'), car('timber'), car('timber')]);
+    const { sim, train } = start(oval('curve-large'), [car('battery-engine'), car('timber'), car('timber'), car('timber'), car('timber'), car('timber')]);
     run(sim, train, 15);
     expect(train.status.kind).toBe('running');
   });

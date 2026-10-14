@@ -11,15 +11,21 @@ export interface Connector {
   id: string;
   pose: Pose;
   gender: Gender;
+  /** Height of this end above the bottom of the piece, mm: the top of a ramp. */
+  z?: number;
 }
 
-/** A running surface along the track centerline, in piece-local coordinates. */
+/**
+ * A running surface along the track centerline, in piece-local coordinates.
+ * `rise` is how much it climbs from start to end (a ramp); it starts level
+ * with the bottom of the piece.
+ */
 export type TrackPath =
-  | { kind: 'straight'; from: Pose; length: number }
+  | { kind: 'straight'; from: Pose; length: number; rise?: number }
   /** `sweep` is signed: positive turns left (counter-clockwise). */
-  | { kind: 'arc'; from: Pose; radius: number; sweep: number };
+  | { kind: 'arc'; from: Pose; radius: number; sweep: number; rise?: number };
 
-export type PieceCategory = 'straight' | 'curve' | 'switch' | 'crossing' | 'buffer' | 'scenery';
+export type PieceCategory = 'straight' | 'curve' | 'ramp' | 'switch' | 'crossing' | 'buffer' | 'scenery';
 
 export interface PieceDef {
   /** Stable catalog id, used in saved layouts. */
@@ -38,6 +44,8 @@ export interface PieceDef {
   model?: string;
   /** Scenery that sits over a straight (a tunnel), snapped onto its middle when dragged near. */
   seatsOnTrack?: boolean;
+  /** Seated scenery that holds the track up this high (a pier), standing on the floor under raised track. */
+  holdsTrackAt?: number;
   /** Turned over from the catalog piece, see `mirrorPiece`. */
   mirrored?: boolean;
 }

@@ -57,8 +57,8 @@ export interface FlexContext {
   bodies: Body[];
   links: Link[];
   /** Open ends of the flexing track, and every other open end they could close onto. */
-  open: { end: EndRef; body: number; pose: Pose; gender: string }[];
-  others: { end: EndRef; body: number; pose: Pose; gender: string }[];
+  open: { end: EndRef; body: number; pose: Pose; gender: string; z: number }[];
+  others: { end: EndRef; body: number; pose: Pose; gender: string; z: number }[];
 }
 
 export interface FlexResult {
@@ -136,7 +136,7 @@ export function flexContext(layout: Layout, dragged: ReadonlySet<string>, grab: 
   let world = -1;
   for (const e of openEnds(layout, joints)) {
     const end = { uid: e.uid, connectorId: e.connectorId };
-    const entry = { end, pose: e.connector.pose, gender: e.connector.gender };
+    const entry = { end, pose: e.connector.pose, gender: e.connector.gender, z: e.connector.z ?? 0 };
     const body = bodyOf.get(e.uid);
     if (body !== undefined) {
       open.push({ ...entry, body });
@@ -201,7 +201,8 @@ function nearestClosure(context: FlexContext, bodies: Body[], range: SnapRange):
   for (const m of context.open) {
     const mp = endNow(bodies, m);
     for (const f of context.others) {
-      if (f.body === m.body || f.gender === m.gender) continue;
+      // Flexing never lifts track, so only ends at the same height can close.
+      if (f.body === m.body || f.gender === m.gender || Math.abs(f.z - m.z) > context.play.mm) continue;
       if (bodies[m.body].role === 'held' && bodies[f.body].role === 'held') continue;
       const fp = endNow(bodies, f);
       const e = jointError(mp, fp);

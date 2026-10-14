@@ -1,4 +1,5 @@
 import { pathLength, poseAt } from '../geometry/path';
+import { applyPose } from '../geometry/pose';
 import { getPiece } from '../pieces/catalog';
 import * as D from '../pieces/dimensions';
 import type { PieceCategory, PieceDef } from '../pieces/types';
@@ -14,6 +15,7 @@ import { hasEndsChoice, iconPiece, SHAPES, variantFor, type Ends, type Hand, typ
 const CATEGORY_NAMES: Record<PieceCategory, string> = {
   straight: 'Straights',
   curve: 'Curves',
+  ramp: 'Ramps',
   switch: 'Switches',
   crossing: 'Crossings',
   buffer: 'Buffer stops',
@@ -59,6 +61,18 @@ export function pieceIcon(piece: PieceDef): SVGSVGElement {
   for (const d of lines) add('path', { d, class: 'icon-wood', 'stroke-width': D.TRACK_WIDTH });
   for (const d of lines) add('path', { d, class: 'icon-groove', 'stroke-width': D.GROOVE_SPACING + D.GROOVE_WIDTH });
   for (const d of lines) add('path', { d, class: 'icon-wood', 'stroke-width': D.GROOVE_SPACING - D.GROOVE_WIDTH });
+  // Uphill chevrons on a ramp.
+  for (const path of piece.paths.filter((p) => p.rise)) {
+    const length = pathLength(path);
+    for (const f of [0.35, 0.6]) {
+      const p = poseAt(path, length * f);
+      const at = (along: number, side: number) => {
+        const q = applyPose(p, { x: along, y: side, angle: 0 });
+        return `${q.x.toFixed(1)} ${(-q.y).toFixed(1)}`;
+      };
+      add('path', { d: `M${at(-9, 11)} L${at(5, 0)} L${at(-9, -11)}`, class: 'icon-climb', 'stroke-width': 5 });
+    }
+  }
   for (const c of piece.connectors) {
     const { x, y, angle } = c.pose;
     if (c.gender === 'peg') {
@@ -89,6 +103,7 @@ function detail(shape: Shape, piece: PieceDef): string {
   const letters = hasEndsChoice(shape) ? piece.brioIds : shape.ids.flatMap((id) => getPiece(id).brioIds);
   const parts = [letters.join(' / ')];
   if (shape.category === 'straight') parts.push(`${Math.round(pathLength(piece.paths[0]))} mm`);
+  if (shape.category === 'ramp') parts.push(`up ${D.RAMP_RISE} mm`);
   return parts.filter(Boolean).join(' · ');
 }
 
