@@ -48,3 +48,6 @@ body.carrying-train, body.carrying-train * { cursor: grabbing !important; }
 @media (max-width: 700px) {
   #trains { top: auto; bottom: 0; right: 0; left: 0; width: auto; max-height: 55%; border-radius: 16px 16px 0 0; }
 }
+.tr-card-row > button.whistle { display: inline-grid; place-items: center; padding: 3px 6px; }
+.tr-card-row > button.whistle svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+#sound-button[aria-pressed='true'] { color: var(--muted); }
