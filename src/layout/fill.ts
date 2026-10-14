@@ -107,6 +107,8 @@ export function trackMoves(): TrackMove[] {
   for (const base of CATALOG) {
     if (base.category !== 'straight' && base.category !== 'curve' && base.category !== 'ramp') continue;
     if (base.connectors.length !== 2 || base.paths.length !== 1) continue;
+    // Plain, common track only: not bridge spans, helixes, bumpy track, every bend of a bendy track, or rare pieces.
+    if (base.bridge || base.structure || base.paths[0].bumps || base.bend !== undefined || base.noFill) continue;
     for (const flipped of [false, true]) {
       const def: PieceDef = defOf({ pieceId: base.id, flipped });
       for (const attach of def.connectors) {

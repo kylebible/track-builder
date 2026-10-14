@@ -133,7 +133,7 @@ describe('generating a section', () => {
       expect(blocked(loop.layout)).toEqual([]);
       expectSound(loop.layout);
       const run = generateSection(EMPTY_LAYOUT, { pieces: 24, switches: 2, stops: 2, seed }, { blocked, budgetMs: 500 })!;
-      expect(run.laid).toBeGreaterThanOrEqual(18);
+      expect(run.laid).toBeGreaterThanOrEqual(12);
       expect(blocked(run.layout)).toEqual([]);
       expectSound(run.layout);
     }

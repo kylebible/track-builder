@@ -17,7 +17,8 @@ const container = document.getElementById('app')!;
 const button = (id: string) => document.getElementById(id) as HTMLButtonElement;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
+// Past 2x the extra pixels cost a phone far more than they show.
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.NoToneMapping;
@@ -74,6 +75,8 @@ function focusOn(at: Vec2): void {
 
 let saved = true;
 let planning: PlanningPanel | null = null;
+let planningTimer = 0;
+const PLANNING_DELAY_MS = 120;
 const restored = loadAutosave();
 /** What the track is built on: a table, a rug, the floor. */
 // Layouts saved before environments existed were built on the grid mat, so they stay on it.
@@ -94,6 +97,7 @@ const editor = new Editor(scene, camera, orbit, {
     rotateRight: button('rotate-right'),
     flip: button('flip'),
     swap: button('swap'),
+    bend: button('bend'),
     raise: button('raise'),
     lower: button('lower'),
     section: button('section'),
@@ -112,7 +116,10 @@ const editor = new Editor(scene, camera, orbit, {
   initial: restored ?? undefined,
   onChange: (layout) => {
     saved = autosave({ ...layout, environment });
-    planning?.update(layout);
+    // The check is the slow part of an edit on a big layout; a burst of
+    // edits (a held key, quick undos) runs it once, when they stop.
+    window.clearTimeout(planningTimer);
+    planningTimer = window.setTimeout(() => planning?.update(editor.layout), PLANNING_DELAY_MS);
   },
 });
 
@@ -217,4 +224,4 @@ if (codeFromHash(location.hash)) openSharedLayout();
 else if (editor.layout.pieces.length) fitView();
 
 // Handy for poking at the layout from the browser console.
-Object.assign(window, { editor, trains, fitView, orbit, setEnvironment });
+Object.assign(window, { editor, trains, fitView, orbit, setEnvironment, renderer });

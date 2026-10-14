@@ -41,6 +41,8 @@
 .tr-card button:disabled { opacity: 0.4; cursor: default; }
 .tr-card-load { color: var(--muted); font-size: 11px; max-width: 260px; white-space: normal; }
 .tr-card-load[hidden] { display: none; }
+.tr-dest { flex: 1; font: inherit; padding: 3px 6px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); cursor: pointer; }
+.tr-dest:hover { border-color: var(--line-strong); }
 .tr-check { display: flex; align-items: center; gap: 6px; margin-top: 12px; color: var(--ink); cursor: pointer; }
 .tr-deliveries { margin: 8px 0 0; color: var(--ink); font-weight: 600; line-height: 1.4; }
 .tr-deliveries[hidden] { display: none; }
