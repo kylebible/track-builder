@@ -15,7 +15,9 @@ import { AXLE_HEIGHT } from './trainMesh';
 // from the loader, and crates riding in wagons. Moving parts of the models
 // (the span, the crane's arm) belong to the editor's piece objects, found by
 // name; everything else is drawn here. Also holds the tap targets that
-// switch signals and lift the bridge.
+// switch signals, lift the bridge and turn the turntable, and the turntable
+// bridge's lamps: green at both ends while it stands lined up, flashing
+// while it turns.
 
 /** Height of a crate's bottom in a wagon, above the track's bottom: on the wagon's floorboards. */
 const WAGON_FLOOR = AXLE_HEIGHT + WHEEL_RADIUS + 5;
@@ -29,6 +31,7 @@ const warnGeometry = new THREE.SphereGeometry(3.6, 12, 8);
 const hitMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
 const knobMaterial = new THREE.MeshStandardMaterial({ color: 0xf2c230, roughness: 0.4, emissive: 0x6b4f00, emissiveIntensity: 0.25 });
 const knobGeometry = new THREE.SphereGeometry(8, 20, 14);
+const turntableLampGeometry = new THREE.SphereGeometry(3, 12, 8);
 
 const ease = (t: number) => t * t * (3 - 2 * t);
 const clamp01 = (t: number) => Math.min(1, Math.max(0, t));
@@ -58,10 +61,10 @@ export class AccessoryView {
     });
   }
 
-  /** The accessory a tap landed on, if any. */
-  hit(raycaster: THREE.Raycaster): string | null {
+  /** The accessory a tap landed on, if any, where, and how far along the ray. */
+  hit(raycaster: THREE.Raycaster): { uid: string; point: THREE.Vector3; distance: number } | null {
     const found = raycaster.intersectObject(this.root, true).find((i) => i.object.userData.accessory);
-    return found ? (found.object.userData.accessory as string) : null;
+    return found ? { uid: found.object.userData.accessory as string, point: found.point, distance: found.distance } : null;
   }
 
   update(layout: Layout, time: number, controls: boolean): void {
@@ -106,6 +109,19 @@ export class AccessoryView {
           if (c.userData.warn !== undefined && c instanceof THREE.Mesh) c.material = open && c.userData.warn === flash ? litRed : unlit;
         });
         fixture.getObjectByName('knob')!.visible = controls;
+      } else if (acc.kind === 'turntable') {
+        const state = this.sim.tables.get(acc.uid);
+        if (!state || acc.line !== 0) continue;
+        const bridge = object?.getObjectByName('turntable-bridge');
+        if (bridge) bridge.rotation.y = state.angle;
+        const deck = fixture.getObjectByName('deck')!;
+        deck.rotation.y = state.angle;
+        const still = state.angle === state.target;
+        const flash = Math.floor(time / 300) % 2;
+        deck.children.forEach((c) => {
+          if (c.userData.lamp !== undefined && c instanceof THREE.Mesh) c.material = still ? litGreen : c.userData.lamp === flash ? litRed : unlit;
+        });
+        fixture.getObjectByName('hit')!.visible = controls;
       } else if (acc.kind === 'crane') {
         this.drawCrane(acc, piece, object, crateAt);
       } else if (acc.kind === 'loader') {
@@ -185,6 +201,23 @@ export class AccessoryView {
       stem.position.set(x, y - 6, z);
       knob.add(ball, stem);
       g.add(tag(knob));
+    } else if (acc.kind === 'turntable') {
+      // In the piece's frame the pivot is half the first line along it.
+      const r = this.sim.turntables.find((t) => t.uid === acc.uid)?.radius ?? D.TURNTABLE_DIAMETER / 2;
+      const hit = new THREE.Mesh(new THREE.CylinderGeometry(r, r, D.TRACK_HEIGHT, 32), hitMaterial);
+      hit.name = 'hit';
+      hit.position.set(r, D.TRACK_HEIGHT / 2, 0);
+      g.add(tag(hit));
+      const deck = new THREE.Group();
+      deck.name = 'deck';
+      deck.position.set(r, 0, 0);
+      [-1, 1].forEach((end, i) => {
+        const lamp = new THREE.Mesh(turntableLampGeometry, unlit);
+        lamp.position.set(end * (r - 9), D.TRACK_HEIGHT + 9, -end * (D.TRACK_WIDTH / 2 + 2));
+        lamp.userData.lamp = i;
+        deck.add(lamp);
+      });
+      g.add(deck);
     }
     this.fixtures.set(acc.uid, g);
     this.root.add(g);
