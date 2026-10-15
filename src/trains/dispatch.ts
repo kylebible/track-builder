@@ -59,6 +59,8 @@ export interface RouteOptions {
   keepRunning?: boolean;
   /** Only go the way its engines face, never backing up. */
   ahead?: boolean;
+  /** Only back up, the opposite way to the way its engines face. */
+  back?: boolean;
 }
 
 /** A train that got where it was sent. */
@@ -160,7 +162,7 @@ export class RouteGraph {
     start: Heading,
     remaining: number,
     target: { edgeKey: string; s: number },
-    opts: { cost?: (edge: Edge) => number; fixed?: Map<string, number>; behind?: number } = {},
+    opts: { cost?: (edge: Edge, way: Heading) => number; fixed?: Map<string, number>; behind?: number } = {},
   ): { path: Heading[]; distance: number } | null {
     const cost = opts.cost ?? (() => 0);
     if (start.edge.key === target.edgeKey) {
@@ -184,7 +186,8 @@ export class RouteGraph {
       if (node.cost > (best.get(headingKey(node.h)) ?? Infinity)) continue;
       for (const w of this.ways(node.h).next) {
         if (w.switchKey && opts.fixed?.has(w.switchKey) && opts.fixed.get(w.switchKey) !== w.index) continue;
-        const extra = cost(w.edge);
+        const extra = cost(w.edge, w);
+        if (extra === Infinity) continue;
         if (w.edge.key === target.edgeKey) {
           const into = w.edge.length - toLeave(w, target.s);
           const c = node.cost + extra + into;
@@ -272,6 +275,8 @@ export class Dispatcher {
   graph: RouteGraph;
   /** Which train holds each piece, by piece uid. */
   readonly holds = new Map<string, number>();
+  /** Which way along each piece the train holding it is going, by piece uid. */
+  private readonly holdWays = new Map<string, { trainId: number; heading: string }>();
   /** Trains that got where they were sent, newest last. */
   readonly arrivals: Arrival[] = [];
   private readonly controls = new Map<number, Control>();
@@ -284,12 +289,14 @@ export class Dispatcher {
   rebuild(): void {
     this.graph = new RouteGraph(this.sim.network);
     this.holds.clear();
+    this.holdWays.clear();
     for (const c of this.controls.values()) c.sticky.clear();
   }
 
   /** Let go of everything: autoroute is off. */
   clear(): void {
     this.holds.clear();
+    this.holdWays.clear();
     this.controls.clear();
   }
 
@@ -340,7 +347,7 @@ export class Dispatcher {
     const align = opts.align ?? 'middle';
     // Whichever way round is shorter: on ahead, or backing up.
     let best: { dir: 1 | -1; distance: number } | null = null;
-    for (const dir of opts.ahead ? [facing as 1 | -1] : ([1, -1] as const)) {
+    for (const dir of opts.ahead ? [facing as 1 | -1] : opts.back ? [-facing as 1 | -1] : ([1, -1] as const)) {
       const way = this.wayTo(train, dir, target, align, null);
       if (way && (!best || Math.abs(way.distance) < Math.abs(best.distance))) best = { dir, distance: way.distance };
     }
@@ -354,12 +361,12 @@ export class Dispatcher {
   }
 
   /** How far a train has to go to a place or accessory (by uid), the shorter way (or only ahead), or null if it can't get there. */
-  distanceTo(train: Train, uid: string, opts: { ahead?: boolean } = {}): number | null {
+  distanceTo(train: Train, uid: string, opts: { ahead?: boolean; back?: boolean } = {}): number | null {
     const target = this.target({ kind: 'place', uid });
     if (!target) return null;
     const facing = Math.sign(train.vehicles.reduce((s, v) => s + (v.def.motor ? v.facing : 0), 0)) as 1 | -1 | 0;
     let best: number | null = null;
-    for (const dir of opts.ahead ? (facing ? [facing] : []) : ([1, -1] as const)) {
+    for (const dir of opts.ahead ? (facing ? [facing] : []) : opts.back ? (facing ? [-facing as 1 | -1] : []) : ([1, -1] as const)) {
       const way = this.wayTo(train, dir, target, 'middle', null);
       if (way && (best === null || Math.abs(way.distance) < best)) best = Math.abs(way.distance);
     }
@@ -418,7 +425,7 @@ export class Dispatcher {
     }
     const { start, remaining } = this.startOf(train, dir);
     const plan = this.graph.plan(start, remaining, target, {
-      cost: (e) => (this.heldByOther(e.uid, train.id) || this.turnedAway(e) ? DISPATCH.busyCost : 0),
+      cost: (e, w) => (this.sim.tooSteep(train, headingKey(w)) ? Infinity : this.heldByOther(e.uid, train.id) || this.turnedAway(e) ? DISPATCH.busyCost : 0),
       fixed: control?.sticky,
       behind: align === 'front' ? DISPATCH.arriveMm * 2 : 0,
     });
@@ -456,9 +463,12 @@ export class Dispatcher {
     const under = new Map<number, Set<string>>();
     for (const t of trains) {
       const { front, back } = span(t);
-      const uids = new Set(t.route.segments.filter((s) => s.u0 + s.edge.length > back - 2 && s.u0 < front + 2).map((s) => s.edge.uid));
+      const on = t.route.segments.filter((s) => s.u0 + s.edge.length > back - 2 && s.u0 < front + 2);
+      const uids = new Set(on.map((s) => s.edge.uid));
       under.set(t.id, uids);
       for (const uid of uids) this.holds.set(uid, t.id);
+      const dir = driveDir(t);
+      if (dir) for (const s of on) this.holdWays.set(s.edge.uid, { trainId: t.id, heading: headingKey({ edge: s.edge, leave: (dir > 0) !== s.reversed ? 1 : 0 }) });
     }
     for (const t of trains) this.lookAhead(t, under);
   }
@@ -536,9 +546,14 @@ export class Dispatcher {
     let d = remaining;
     let k = 0;
     let split = false;
+    // Where the last switch piece taken on this time starts, and how many pieces had been taken on before it.
+    let gate: { d: number; from: number } | null = null;
+    const order: string[] = [];
     for (;;) {
-      if (d >= need && (d >= DISPATCH.sectionMm || d >= travel + 20)) break;
       const { next, end } = this.graph.ways(h);
+      // Far enough, but never stopping partway along a single line, where a train coming the other way could meet it.
+      const boundary = next.length !== 1 || this.graph.switchUids.has(next[0].edge.uid) || d >= DISPATCH.sectionMm * 4;
+      if (d >= need && (d >= DISPATCH.sectionMm || d >= travel + 20) && boundary) break;
       if (!next.length) {
         if (end === 'open') {
           this.stopAt(control, f, dir, d - DISPATCH.gapMm);
@@ -557,12 +572,19 @@ export class Dispatcher {
       if (reserved.has(pick.edge.uid) && d >= need) break;
       const holder = this.holds.get(pick.edge.uid);
       if (holder !== undefined && holder !== train.id) {
-        this.stopAt(control, f, dir, d - DISPATCH.gapMm);
+        // A train coming the other way: wait before the switch that leads onto this line, not
+        // nose to nose with it halfway along, so it can come off the line there and pass.
+        const back = gate && this.coming(holder, pick) && gate.d - DISPATCH.gapMm >= (speed * speed) / (2 * DISPATCH.brake) ? gate : null;
+        if (back) for (const uid of order.splice(back.from)) reserved.delete(uid);
+        this.stopAt(control, f, dir, (back ? back.d : d) - DISPATCH.gapMm);
         train.waitReason = `Waiting for ${this.sim.train(holder)?.name ?? 'another train'}`;
         break;
       }
+      if (this.graph.switchUids.has(pick.edge.uid) && pick.edge.uid !== h.edge.uid) gate = { d, from: order.length };
       this.holds.set(pick.edge.uid, train.id);
+      this.holdWays.set(pick.edge.uid, { trainId: train.id, heading: headingKey(pick) });
       reserved.add(pick.edge.uid);
+      order.push(pick.edge.uid);
       if (pick.switchKey) {
         sticky.set(pick.switchKey, pick.index);
         this.sim.setLever(pick.switchKey, pick.index, next.length);
@@ -591,6 +613,13 @@ export class Dispatcher {
     if (!dispatch.keepRunning) this.sim.setThrottle(train.id, 0);
     this.controls.delete(train.id);
     release();
+  }
+
+  /** Whether the train holding a piece is running along it the opposite way to `way`. */
+  private coming(holder: number, way: Heading): boolean {
+    const held = this.holdWays.get(way.edge.uid);
+    if (!held || held.trainId !== holder) return false;
+    return held.heading.startsWith(`${way.edge.key}>`) && held.heading !== headingKey(way);
   }
 
   private stopAt(control: Control, f: number, dir: 1 | -1, d: number): void {
