@@ -301,6 +301,14 @@ function fullTown(): Layout {
     }
   };
 
+  /** A switch whose branch, facing trains running the wrong way, leads out to a buffer stop. */
+  const turnBack = (): string => {
+    const uid = curvedSwitch(end, { via: 'branch0', prefer: rightOf(end) });
+    end = { uid, connectorId: 'trunk' };
+    cap(b.run({ uid, connectorId: 'branch1' }, ['A'])!);
+    return uid;
+  };
+
   // Each long side, in the way trains run along it: three passing loops, the
   // middle one longest, a switch to each cut-across line between them, and
   // the way into a yard in the middle of the town. Both sides use the same
@@ -333,7 +341,12 @@ function fullTown(): Layout {
     return s;
   };
   const near = side([first]);
-  const e = ['L', 'L', 'D', 'D', 'A', 'D', 'D', 'D', 'L', 'L'].map(lay);
+  // Round the right-hand end, past a turn-back siding: a train that has backed
+  // out of a yard runs the wrong way round, and here it can run in, back out
+  // and carry on the right way round again.
+  const e = ['L', 'L', 'D', 'D'].map(lay);
+  e.push(turnBack());
+  e.push(...['D', 'D', 'D', 'L', 'L'].map(lay));
   const far = side([]);
   // Round the left-hand end, through the tunnel, and back to the start.
   const w = ['L', 'L', 'D', 'D', 'D', 'A', 'D', 'D', 'L'].map(lay);
