@@ -9,7 +9,7 @@ import { baseOf } from '../layout/layout';
 import { attracts, CRATE_KG, getStock, supplyLevel, WHEEL_RADIUS, type CargoKind, type ConsistEntry, type StockDef, type Supply } from './stock';
 import { doWork, getPlace, planWork, workSeconds, workSpan, type PlaceDef, type Visit, type Work } from './stops';
 import { Economy, type Site } from './economy';
-import { freshAboard, jobConsist, nextStop, type JobId } from './jobs';
+import { freshAboard, JOB_POWER, JOB_TRAIN, jobConsist, nextStop, type JobId } from './jobs';
 import { ACCESSORY, findAccessories, onRoute, type Accessory, type AccessoryKind, type Job } from './accessories';
 import { Dispatcher, type Arrival, type Destination, type DestinationPoint, type Dispatch, type RouteOptions } from './dispatch';
 import { findTurntables, headingToward, lineAt, lineToward, turn, turnPoint, TURNTABLE, type Turntable, type TurntableState } from './turntable';
@@ -254,6 +254,8 @@ export interface Notice {
   message: string;
   at: Vec2;
   time: number;
+  /** Set when the notice is a train getting stuck, and how. */
+  stuck?: StuckKind;
 }
 
 export interface Train {
@@ -376,6 +378,8 @@ export class TrainSim {
   realMagnets = true;
   /** Coupled vehicles never come apart on their own, so long and job trains stay whole. */
   keepCoupled = false;
+  /** Job trains' engines pull harder the more cars they have (off in Basic mode, where engines are as strong as real ones). */
+  jobPower = false;
   /** Counts lever changes, so the view knows to redraw them. */
   leverVersion = 0;
   readonly dispatcher: Dispatcher;
@@ -993,6 +997,7 @@ export class TrainSim {
 
     const force = vehicles.map(() => 0);
     const lateral = vehicles.map(() => 0);
+    const boost = this.powerBoost(train);
 
     // Magnets and buffers between neighbours.
     const hold = P.magnetHoldN * (this.realMagnets ? 1 : EASY_MAGNETS.hold);
@@ -1087,9 +1092,10 @@ export class TrainSim {
           const way = train.throttle * v.facing;
           const m = v.def.motor;
           const free = m.freeSpeedMm * (train.odometer < train.slowUntil ? STOPPING.slowFactor : 1);
-          let f = m.stallForceN * (1 - (v.v * way) / free);
-          f = Math.max(-m.stallForceN, Math.min(m.stallForceN, f));
-          const grip = m.grip * weight;
+          const stall = m.stallForceN * boost;
+          let f = stall * (1 - (v.v * way) / free);
+          f = Math.max(-stall, Math.min(stall, f));
+          const grip = m.grip * weight * boost;
           if (Math.abs(f) > grip) {
             f = Math.sign(f) * grip;
             v.slipping = true;
@@ -1348,8 +1354,29 @@ export class TrainSim {
     if (train.stillFor >= PHYSICS.stallSeconds && train.status.kind !== 'stuck') {
       const stuck = this.diagnose(train);
       train.status = stuck;
-      this.notice(train, stuck.message, stuck.at);
+      this.notice(train, stuck.message, stuck.at, stuck.stuck);
     }
+  }
+
+  /** How many times its usual pull each of a train's engines gives: job trains get more with more cars, up to a limit. */
+  powerBoost(train: Train): number {
+    if (!this.jobPower || train.job === 'free') return 1;
+    const cars = train.vehicles.filter((v) => !v.def.motor && v.def.look !== 'tender').length;
+    const engines = train.vehicles.filter((v) => v.def.motor).length || 1;
+    return Math.min(JOB_POWER.most, Math.max(1, cars / engines / JOB_POWER.carsPerEngine));
+  }
+
+  /**
+   * Couple another engine on a stalled train, like the one it has, at the
+   * end its engine is (the front if neither), with full stores. Returns an error message if it won't fit.
+   */
+  addEngine(id: number): string | null {
+    const train = this.train(id);
+    if (!train) return 'That train has gone.';
+    const engine = train.consist.find((c) => getStock(c.stockId).motor)?.stockId ?? JOB_TRAIN.engine;
+    const atBack = !getStock(train.consist[0].stockId).motor && !!getStock(train.consist[train.consist.length - 1].stockId).motor;
+    const end = atBack ? 'back' : 'front';
+    return this.attach(id, end, engine);
   }
 
   /** Why a train with its motor on isn't moving. */
@@ -1674,8 +1701,8 @@ export class TrainSim {
     this.notice(train, message, at);
   }
 
-  private notice(train: Train, message: string, at: Vec2): void {
-    this.notices.push({ trainId: train.id, message, at, time: this.time });
+  private notice(train: Train, message: string, at: Vec2, stuck?: StuckKind): void {
+    this.notices.push({ trainId: train.id, message, at, time: this.time, stuck });
     if (this.notices.length > 20) this.notices.shift();
   }
 
