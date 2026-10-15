@@ -24,6 +24,45 @@ describe('yard', () => {
     expect(sim.trains.length).toBe(n);
   });
 
+  it('releases reserved cars when the engine fetching them is removed', () => {
+    const sim = town();
+    sim.yard.stock();
+    const before = sim.yard.spares();
+    const job = [...before.keys()].find((j) => sim.yard.fetch(j))!;
+    const engine = sim.trains.find((t) => t.errand)!;
+    expect(engine).toBeDefined();
+    expect(sim.yard.spares().has(job)).toBe(false);
+    sim.removeTrain(engine.id);
+    sim.advance(0.1);
+    expect(sim.yard.spares()).toEqual(before);
+  });
+
+  it('stocks newly loaded sidings with hands-off mode already on, without duplicating cars on later edits', () => {
+    const sim = new TrainSim(getTemplate('oval').build());
+    sim.operator.setOn(true);
+    expect(sim.yard.spares().size).toBe(0);
+    const layout = getTemplate('full-town').build();
+    sim.setLayout(layout);
+    expect(sim.yard.spares().size).toBeGreaterThan(0);
+    const ids = sim.trains.map((t) => t.id);
+    sim.setLayout(layout);
+    expect(sim.trains.map((t) => t.id)).toEqual(ids);
+  });
+
+  it('leaves occupied siding space alone when stocking spare cars', () => {
+    const source = town();
+    source.yard.stock();
+    const parked = source.trains[0];
+    const sim = town();
+    const existing = sim.addTrain(parked.consist, parked.placement);
+    if (typeof existing === 'string') throw new Error(existing);
+    const added = sim.yard.stock();
+    expect(sim.trains).toHaveLength(added + 1);
+    sim.advance(0.1);
+    expect(sim.trains).toHaveLength(added + 1);
+    expect(sim.trains.some((t) => t.wrecked)).toBe(false);
+  });
+
   it('an engine comes out of the shed, turns on the turntable, backs onto its cars and goes to work', () => {
     const sim = town();
     sim.yard.stock();

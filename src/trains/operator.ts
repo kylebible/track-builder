@@ -1,6 +1,6 @@
 import { headingKey } from './dispatch';
 import { ECONOMY, staffOf } from './economy';
-import { JOBS, needs, type JobId } from './jobs';
+import { JOBS, needs, suppliesGoods, takesGoods, type JobId } from './jobs';
 import type { Train, TrainSim } from './sim';
 import type { Supply } from './stock';
 
@@ -84,13 +84,16 @@ export class Operator {
     this.since.clear();
     this.sim.economy.shiftScale = on ? this.shiftScale() : 1;
     // Spare cars into the sidings, for engines from the shed to fetch.
-    if (on && !this.sim.yard.stocked) this.sim.yard.stock();
+    if (on) this.sim.yard.stock();
   }
 
   /** The track changed: size things afresh. */
   rebuild(): void {
     this.cap = null;
-    if (this.on) this.sim.economy.shiftScale = this.shiftScale();
+    if (this.on) {
+      this.sim.economy.shiftScale = this.shiftScale();
+      this.sim.yard.stock();
+    }
   }
 
   tick(dt: number): void {
@@ -195,8 +198,8 @@ export class Operator {
         continue;
       }
       // A job is worth a train only where something makes its goods and somewhere takes them.
-      const makes = sites.some((s) => job.goods.some((k) => s.place.loads?.includes(k) || s.place.swaps?.includes(k)));
-      const takes = sites.some((s) => job.goods.some((k) => s.place.unloads?.includes(k) || s.place.swaps?.includes(k)));
+      const makes = sites.some((s) => job.goods.some((k) => suppliesGoods(s, k)));
+      const takes = sites.some((s) => job.goods.some((k) => takesGoods(s, k, sites)));
       const fuel = job.id === 'coal' && sites.some((s) => s.place.id === 'coaling-stage' || s.place.id === 'power-station');
       if (!makes || !(takes || fuel)) continue;
       const short = now.filter((n) => n.job === job.id).length;

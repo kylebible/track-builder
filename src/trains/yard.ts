@@ -1,6 +1,6 @@
 import { distance, type Vec2 } from '../geometry/pose';
 import { headingKey, type Heading } from './dispatch';
-import { JOB_TRAIN, JOBS, getJob, jobConsist, type JobId } from './jobs';
+import { JOB_TRAIN, JOBS, getJob, jobConsist, suppliesGoods, takesGoods, type JobId } from './jobs';
 import { edgeEndPose, type Edge } from './network';
 import { getStock, type ConsistEntry } from './stock';
 import type { Train, TrainSim } from './sim';
@@ -54,6 +54,8 @@ interface Errand {
 export class Yard {
   private rakes: Rake[] = [];
   private errands: Errand[] = [];
+  /** Roads already stocked, by siding uid and track geometry, including roads whose cars have been fetched. */
+  private stockedRoads = new Map<string, string>();
   /** The sidings have been filled since jobs were last switched on. */
   stocked = false;
 
@@ -63,6 +65,7 @@ export class Yard {
   reset(): void {
     this.rakes = [];
     this.errands = [];
+    this.stockedRoads.clear();
     this.stocked = false;
   }
 
@@ -78,7 +81,10 @@ export class Yard {
   /** Rakes still standing in the sidings, by job. */
   spares(): Map<JobId, number> {
     const out = new Map<JobId, number>();
-    for (const r of this.live()) out.set(r.job, (out.get(r.job) ?? 0) + 1);
+    for (const r of this.live()) {
+      if (this.errands.some((e) => e.rakeId === r.trainId)) continue;
+      out.set(r.job, (out.get(r.job) ?? 0) + 1);
+    }
     return out;
   }
 
@@ -88,28 +94,46 @@ export class Yard {
   }
 
   private live(): Rake[] {
-    this.rakes = this.rakes.filter((r) => this.sim.train(r.trainId) && !this.errands.some((e) => e.rakeId === r.trainId) && !this.sim.train(r.trainId)!.vehicles.some((v) => v.def.motor));
+    this.rakes = this.rakes.filter((r) => {
+      const train = this.sim.train(r.trainId);
+      return train && !train.wrecked && !train.vehicles.some((v) => v.def.motor);
+    });
     return this.rakes;
+  }
+
+  /** Space for cars being put down, including cars placed by hand. */
+  private clear(train: Train): boolean {
+    return this.sim.trains.every((other) => other === train || other.vehicles.every((v) =>
+      train.vehicles.every((w) => distance(v.geo.center, w.geo.center) > (v.def.length + w.def.length) / 2 + 20)));
   }
 
   // ---- filling the sidings ----------------------------------------------------
 
   /** Jobs this layout has work for, the ones it's likeliest to want first. */
   private jobs(): JobId[] {
-    const places = this.sim.places.map((p) => p.place);
-    return JOBS.filter((j) => j.id !== 'free' && j.id !== 'workers' && j.goods.some((g) => places.some((p) => p.loads?.includes(g)) && places.some((p) => p.unloads?.includes(g)))).map((j) => j.id);
+    const sites = [...this.sim.economy.sites.values()];
+    return JOBS.filter((j) => j.id !== 'free' && j.id !== 'workers' && j.goods.some((g) => sites.some((s) => suppliesGoods(s, g)) && sites.some((s) => takesGoods(s, g, sites)))).map((j) => j.id);
   }
 
   /** Park rakes of spare cars along every car sidings, one job after another. */
   stock(): number {
     this.stocked = true;
+    const points = this.sim.places.filter((p) => p.place.spares);
+    for (const uid of this.stockedRoads.keys()) if (!points.some((p) => p.uid === uid)) this.stockedRoads.delete(uid);
     const jobs = this.jobs();
     if (!jobs.length) return 0;
     let n = 0;
     let turn = 0;
-    for (const point of this.sim.places.filter((p) => p.place.spares)) {
+    for (const point of points) {
       const road = this.road(point.edgeKey);
       if (!road) continue;
+      if ([...this.stockedRoads.values()].includes(road.signature)) {
+        this.stockedRoads.set(point.uid, road.signature);
+        continue;
+      }
+      this.stockedRoads.set(point.uid, road.signature);
+      // Keep any cars that survived a track edit; never stock over them.
+      if (this.live().some((r) => r.sidings === point.uid)) continue;
       let d = YARD.gapMm;
       for (;;) {
         const job = jobs[turn % jobs.length];
@@ -119,6 +143,10 @@ export class Yard {
         const at = road.at(d + length / 2);
         const train = this.sim.addTrain(consist, { edgeKey: at.edge.key, s: at.s, reversed: at.reversed }, `Spare ${getJob(job).name.toLowerCase()} cars`);
         if (typeof train === 'string') break;
+        if (!this.clear(train)) {
+          this.sim.removeTrain(train.id);
+          break;
+        }
         this.rakes.push({ trainId: train.id, job, sidings: point.uid, d });
         d += length + YARD.gapMm;
         turn++;
@@ -134,7 +162,7 @@ export class Yard {
    * the buffer: the edge, how far along its path, and whether a rake there
    * faces the path's start (its front toward the way out).
    */
-  private road(edgeKey: string): { length: number; at: (d: number) => { edge: Edge; s: number; reversed: boolean } } | null {
+  private road(edgeKey: string): { length: number; signature: string; at: (d: number) => { edge: Edge; s: number; reversed: boolean } } | null {
     const graph = this.sim.dispatcher.graph;
     const first = this.sim.network.edge(edgeKey);
     if (!first || graph.switchUids.has(first.uid)) return null;
@@ -159,6 +187,7 @@ export class Yard {
       const length = headings.reduce((s, h) => s + h.edge.length, 0);
       return {
         length,
+        signature: JSON.stringify(headings.map(({ edge, leave }) => [edge.key, edge.path, edge.base, leave])),
         at: (d: number) => {
           for (const h of headings) {
             if (d <= h.edge.length) return { edge: h.edge, s: h.leave === 1 ? d : h.edge.length - d, reversed: h.leave === 0 };
@@ -182,7 +211,7 @@ export class Yard {
   fetch(job: JobId): Train | null {
     // Only the rake nearest the way out can be reached: the others wait behind it.
     const live = this.live();
-    const rake = live.find((r) => r.job === job && !live.some((o) => o.sidings === r.sidings && o.d > r.d));
+    const rake = live.find((r) => r.job === job && !this.errands.some((e) => e.rakeId === r.trainId) && !live.some((o) => o.sidings === r.sidings && o.d > r.d));
     if (!rake) return null;
     const consist: ConsistEntry[] = jobConsist(job, 0);
     for (const shed of this.sim.network.layout.pieces.filter((p) => p.pieceId === 'engine-shed')) {
@@ -198,8 +227,7 @@ export class Yard {
         // Facing out of the shed: onto its turntable, or on along the track.
         const ahead = this.ahead(train);
         const table = ahead ? this.tableAhead(ahead) : null;
-        const clear = this.sim.trains.every((o) => o === train || o.vehicles.every((v) => train.vehicles.every((w) => distance(v.geo.center, w.geo.center) > (v.def.length + w.def.length) / 2 + 20)));
-        if (!clear || (!table && (!ahead || !this.sim.dispatcher.graph.live.has(headingKey(ahead))))) {
+        if (!this.clear(train) || (!table && (!ahead || !this.sim.dispatcher.graph.live.has(headingKey(ahead))))) {
           this.sim.removeTrain(train.id);
           continue;
         }
