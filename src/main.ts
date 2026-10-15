@@ -95,6 +95,10 @@ const editor = new Editor(scene, camera, orbit, {
   buttons: {
     undo: button('undo'),
     redo: button('redo'),
+    select: button('select-mode'),
+    copy: button('copy'),
+    paste: button('paste'),
+    duplicate: button('duplicate'),
     rotateLeft: button('rotate-left'),
     rotateRight: button('rotate-right'),
     flip: button('flip'),
