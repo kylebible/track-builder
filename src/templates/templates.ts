@@ -301,10 +301,9 @@ function fullTown(): Layout {
     }
   };
 
-  /** A switch whose branch, facing trains running the wrong way, leads out to a buffer stop. */
+  /** A switch whose branch leads out to a buffer stop, where a train can turn back. */
   const turnBack = (): string => {
-    const uid = curvedSwitch(end, { via: 'branch0', prefer: rightOf(end) });
-    end = { uid, connectorId: 'trunk' };
+    const uid = branchOff('out');
     cap(b.run({ uid, connectorId: 'branch1' }, ['A'])!);
     return uid;
   };
@@ -323,14 +322,16 @@ function fullTown(): Layout {
   }
   const side = (start: string[]): Side => {
     const s: Side = { d: [...start], loops: [], join: '', leave: '', yard: '' };
-    const plan = ['D', 'D', 'loop2', 'D', 'join', 'D', 'yard', 'loop3', 'AA', 'D', 'leave', 'D', 'loop2', 'D', 'D'].slice(start.length);
+    const plan = ['D', 'D', 'loop2', 'D', 'join', 'D', 'AA', 'loop3', 'yard', 'D', 'leave', 'D', 'loop2', 'D', 'D'].slice(start.length);
     for (const slot of plan) {
       if (slot === 'D') s.d.push(lay('D'));
       else if (slot === 'AA') s.d.push(lay('A'), lay('A'));
       else if (slot === 'join') s.join = joinFromIn();
       else if (slot === 'leave') s.leave = branchOff('in');
       else if (slot === 'yard') {
-        s.yard = branchOff('in');
+        // Facing back the way trains come, so one that leaves the yard heads
+        // on the right way round; an engine backs in to fetch cars.
+        s.yard = joinFromIn();
         lay('A');
       } else {
         const laid = { main: [] as string[], loop: [] as string[] };
@@ -341,9 +342,9 @@ function fullTown(): Layout {
     return s;
   };
   const near = side([first]);
-  // Round the right-hand end, past a turn-back siding: a train that has backed
-  // out of a yard runs the wrong way round, and here it can run in, back out
-  // and carry on the right way round again.
+  // Round the right-hand end, past a turn-back siding: a train can run in, back
+  // out and go round the other way. The yards turn trains running that way
+  // round back again, so no train is ever shut into going one way round.
   const e = ['L', 'L', 'D', 'D'].map(lay);
   e.push(turnBack());
   e.push(...['D', 'D', 'D', 'L', 'L'].map(lay));
@@ -362,12 +363,12 @@ function fullTown(): Layout {
    * fanning out to the left, each ending at a buffer stop. The ends it
    * doesn't use get a buffer stop of their own.
    */
-  const turntableRoads = (lead: EndRef, roads: Token[][]): { table: string; roads: string[] } => {
+  const turntableRoads = (lead: EndRef, roads: Token[][], fan: 1 | -1 = 1): { table: string; roads: string[] } => {
     const from = worldEnd(b.layout, lead).connector.pose;
     const table = b.add(lead, 'turntable');
     const ends = openEnds(b.layout)
       .filter((o) => o.uid === table)
-      .map((o) => ({ end: { uid: table, connectorId: o.connectorId } as EndRef, turn: normalizeAngle(o.connector.pose.angle - from.angle) }))
+      .map((o) => ({ end: { uid: table, connectorId: o.connectorId } as EndRef, turn: fan * normalizeAngle(o.connector.pose.angle - from.angle) }))
       // Straight on first, then out to the left a little, then square to the left.
       .sort((x, y) => (x.turn > -0.01 ? x.turn : 10 - x.turn) - (y.turn > -0.01 ? y.turn : 10 - y.turn));
     const out: string[] = [];
@@ -380,10 +381,11 @@ function fullTown(): Layout {
     return { table, roads: out };
   };
   // In the middle of the town, a yard off each side round a turntable. The
-  // engine yard's roads: one for the shed, one up a hill onto a viaduct.
-  const engines = turntableRoads(b.run({ uid: near.yard, connectorId: 'branch1' }, ['D', 'R'])!, [['D'], ['D'], ['N:up', 'bridge-viaduct', 'A:pp']]);
-  // The goods yard's: the loader, the crane, and a road for spare cars.
-  const yard = turntableRoads(b.run({ uid: far.yard, connectorId: 'branch1' }, ['D', 'R'])!, [['D'], ['D'], ['A']]);
+  // engine yard's roads: a long one for spare cars straight across, one for
+  // the shed, and one up a hill onto a viaduct.
+  const engines = turntableRoads(b.run({ uid: near.yard, connectorId: 'branch1' }, ['D', 'L'])!, [['D', 'D', 'D'], ['D'], ['N:up', 'bridge-viaduct', 'A:pp']], -1);
+  // The goods yard's: a long road for spare cars straight across the turntable, the crane, and the loader.
+  const yard = turntableRoads(b.run({ uid: far.yard, connectorId: 'branch1' }, ['D', 'L'])!, [['D', 'D', 'D'], ['D'], ['A']], -1);
 
   // What stands along the track. `in` puts a place on the side toward the
   // middle of the town, `out` on the side away from it.
@@ -458,7 +460,9 @@ function fullTown(): Layout {
   by(e[5], 'signal', 'in', { side: 60, along: 20 });
   // The yards in the middle.
   by(engines.roads[1], 'engine-shed');
-  by(yard.roads[0], 'cargo-loader');
+  by(engines.roads[0], 'car-sidings', 'in', { side: 0 });
+  by(yard.roads[0], 'car-sidings', 'in', { side: 0 });
+  by(yard.roads[2], 'cargo-loader');
   by(yard.roads[1], 'crane', 'out', { side: 90 });
 
   // A few houses and trees in the middle, beside the yards. The town's own

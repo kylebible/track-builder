@@ -496,6 +496,20 @@ export function slowBoard(): THREE.Group {
   return signPost('slow-board', [board, bar]);
 }
 
+/** A blue board with a little white car on it: spare cars wait here. */
+export function carSidingsBoard(): THREE.Group {
+  const board = box('blue', [2, 18, 26], [0, 0, 0]);
+  board.position.set(0, 60, 0);
+  const car = box('white', [2.4, 6, 16], [0, 0, 0]);
+  car.position.set(0, 61, 0);
+  const wheels = [-5, 5].map((x) => {
+    const w = box('black', [2.4, 3, 3], [0, 0, 0]);
+    w.position.set(0, 56.5, x);
+    return w;
+  });
+  return signPost('car-sidings', [board, car, ...wheels]);
+}
+
 export const TRACKSIDE_MODELS: Record<string, () => THREE.Group> = {
   'water-tower': waterTower,
   'pump-house': pumpHouse,
@@ -512,5 +526,6 @@ export const TRACKSIDE_MODELS: Record<string, () => THREE.Group> = {
   'goods-shed': goodsShed,
   depot,
   'whistle-board': whistleBoard,
+  'car-sidings': carSidingsBoard,
   'slow-board': slowBoard,
 };

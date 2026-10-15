@@ -46,6 +46,11 @@ export interface PlaceDef {
    * there works at it, leaving its load or fetching one.
    */
   store?: boolean;
+  /**
+   * Spare cars wait on the track here, for an engine from the shed to come
+   * and fetch them when a new job train is wanted (see yard.ts).
+   */
+  spares?: boolean;
 }
 
 export const PLACES: readonly PlaceDef[] = [
@@ -109,6 +114,10 @@ export const PLACES: readonly PlaceDef[] = [
     id: 'depot', name: 'Storage depot', store: true, loads: ['coal', 'water', 'milk', 'animals', 'logs', 'crates', 'cars'], unloads: ['coal', 'water', 'milk', 'animals', 'logs', 'crates', 'cars'], staff: 1,
     holds: { coal: 16, water: 16, milk: 12, animals: 8, logs: 9, crates: 12, cars: 9 }, blurb: 'Stores goods nobody has room for yet.',
     explain: 'When every place that takes a load is full, a job train leaves it here instead of standing about loaded. When somewhere runs short, a train fetches it back.',
+  },
+  {
+    id: 'car-sidings', name: 'Car sidings', spares: true, blurb: 'Spare cars wait here for an engine.',
+    explain: 'Spare cars wait on this road. When the jobs want another train, an engine comes out of the engine shed, backs onto them and takes them to work.',
   },
   { id: 'whistle-board', name: 'Whistle board', pass: 'whistle', blurb: 'Engines whistle as they pass.', explain: 'Engines whistle as they pass. No train needs to stop.' },
   { id: 'slow-board', name: 'Slow board', pass: 'slow', blurb: 'Trains slow down past it.', explain: 'Trains slow down past it. No train needs to stop.' },
