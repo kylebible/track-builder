@@ -2,12 +2,16 @@ import { LOOP_STOPS, MAX_SECTION_PIECES, MAX_SECTION_STOPS, type Climb, type Sec
 import { offered } from '../pieces/basic';
 import { getPiece } from '../pieces/catalog';
 import { getPlace } from '../trains/stops';
+import type { Connections } from '../layout/connect';
 
 // The Generate panel: settings for a new section of track, a line on what
 // came out, and buttons to roll another, use it, or stop. The editor owns
 // the section and its preview; this only draws the controls.
 
 export interface GeneratePanelState {
+  mode: 'section' | 'connect';
+  connections: Connections | null;
+  openEnds: number;
   options: SectionOptions;
   section: Section | null;
   /** Building on from a selected end, rather than starting loose. */
@@ -21,6 +25,7 @@ export interface GeneratePanelState {
 }
 
 export interface GeneratePanelActions {
+  mode: (mode: GeneratePanelState['mode']) => void;
   change: (options: Partial<SectionOptions>) => void;
   another: () => void;
   /** Finish at an end tapped next, or anywhere. */
@@ -127,6 +132,16 @@ function loopTo(index: number, value: string, onPick: (id: string) => void): HTM
 const counts = (n: number): [string, number][] => Array.from({ length: n + 1 }, (_, i) => [String(i), i]);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+function action(text: string, cls: string, onClick: () => void, disabled = false): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = `action compact ${cls}`;
+  b.textContent = text;
+  b.disabled = disabled;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
 export function renderGeneratePanel(panel: HTMLElement, state: GeneratePanelState | null, act: GeneratePanelActions): void {
   if (!state) {
     panel.hidden = true;
@@ -139,8 +154,11 @@ export function renderGeneratePanel(panel: HTMLElement, state: GeneratePanelStat
   const head = document.createElement('div');
   head.className = 'panel-head';
   const title = document.createElement('div');
-  title.innerHTML = '<h2>Generate a section</h2><p class="panel-sub"></p>';
-  title.querySelector('p')!.textContent = o.loop
+  title.innerHTML = '<h2></h2><p class="panel-sub"></p>';
+  title.querySelector('h2')!.textContent = state.mode === 'connect' ? 'Connect all open ends' : 'Generate a section';
+  title.querySelector('p')!.textContent = state.mode === 'connect'
+    ? 'Adds paths between the open ends on your layout.'
+    : o.loop
     ? 'A loop stands on its own.'
     : state.pickingEnd
       ? 'Tap the open end it should finish at.'
@@ -151,6 +169,47 @@ export function renderGeneratePanel(panel: HTMLElement, state: GeneratePanelStat
 
   const form = document.createElement('div');
   form.className = 'generate-form';
+  form.append(seg('Generate', [['A section', 'section'], ['Connect all open ends', 'connect']], state.mode, act.mode));
+
+  if (state.mode === 'connect') {
+    const hint = document.createElement('p');
+    hint.className = 'panel-sub';
+    hint.textContent = 'Pairs open ends with paths that fit around the track already down. Preview the result, then use the connections together.';
+    form.append(hint);
+    const result = document.createElement('p');
+    result.className = 'generate-result';
+    result.setAttribute('role', 'status');
+    const plan = state.connections;
+    if (state.openEnds === 0) result.textContent = 'There are no open ends to connect.';
+    else if (state.openEnds === 1) result.textContent = 'There is one open end. Add another open end to connect it to.';
+    else if (state.busy) result.textContent = `Finding paths… ${plan ? plan.initialEnds - plan.remaining.length : 0} of ${state.openEnds} ends connected so far.`;
+    else if (!plan?.uids.length) {
+      result.textContent = `No paths found. ${plural(state.openEnds, 'open end')} left. Try again, move track, or use Fill gap for a pair.`;
+      result.dataset.state = 'problem';
+    } else {
+      const connected = plan.initialEnds - plan.remaining.length;
+      result.textContent = `${connected} of ${plan.initialEnds} ends connected · ${plural(plan.pairs.length, 'path')} · ${plural(plan.uids.length, 'piece')}.`;
+      if (plan.remaining.length) {
+        result.textContent += ` ${plural(plan.remaining.length, 'end')} left open, marked in red.`;
+        if (plan.remaining.length === 1) result.textContent += ' An odd number of ends leaves one without a partner.';
+        else result.textContent += ' Try again for another pairing, or move track to make room.';
+        result.dataset.state = 'problem';
+      }
+      if (plan.trapped) {
+        result.textContent += ' These connections make a train trap: the layout check shows how to fix it.';
+        result.dataset.state = 'problem';
+      }
+    }
+    const actions = document.createElement('div');
+    actions.className = 'fill-actions';
+    actions.append(
+      action('Try again', '', act.another, state.busy || state.openEnds < 2),
+      action('Use connections', 'primary', act.use, state.busy || !plan?.uids.length),
+      action('Cancel', '', act.cancel),
+    );
+    panel.replaceChildren(head, form, result, actions);
+    return;
+  }
 
   const pieces = slider('Pieces', 4, MAX_SECTION_PIECES, o.pieces, (pieces) => act.change({ pieces }));
   const stops = slider('Stops & accessories', 0, MAX_SECTION_STOPS, o.stops, (stops) => act.change({ stops }));
@@ -213,19 +272,10 @@ export function renderGeneratePanel(panel: HTMLElement, state: GeneratePanelStat
 
   const actions = document.createElement('div');
   actions.className = 'fill-actions';
-  const button = (text: string, cls: string, onClick: () => void, disabled = false) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = `action compact ${cls}`;
-    b.textContent = text;
-    b.disabled = disabled;
-    b.addEventListener('click', onClick);
-    return b;
-  };
   actions.append(
-    button('Another', '', act.another, state.busy),
-    button('Use this', 'primary', act.use, state.busy || !s),
-    button('Cancel', '', act.cancel),
+    action('Another', '', act.another, state.busy),
+    action('Use this', 'primary', act.use, state.busy || !s),
+    action('Cancel', '', act.cancel),
   );
   panel.replaceChildren(head, form, result, actions);
 }
