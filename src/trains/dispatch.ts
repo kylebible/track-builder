@@ -102,6 +102,16 @@ interface Way extends Heading {
 
 /** Path ends this close count as meeting (joined, or a gap the wheels bridge). */
 const GAP_JOIN_MM = 13;
+/** Half the longest car: how far along the track a car's body reaches from a point under it. */
+const REACH_MM = 70;
+
+/** A point on a track's centreline, with the lowest and highest a car over it can stand (on a ramp, one end is lower). */
+type Sample = Vec2 & { z: number; lo: number; hi: number };
+
+/** Whether cars over two points can be at heights too close for one to pass over the other. */
+const sameLevel = (a: Sample, b: Sample) => a.lo < b.hi + D.HEADROOM && b.lo < a.hi + D.HEADROOM;
+/** The same, for a car standing at height `z`. */
+const atLevel = (z: number, q: Sample) => q.lo - D.HEADROOM < z && z < q.hi + D.HEADROOM;
 
 export const headingKey = (h: Heading) => `${h.edge.key}>${h.leave}`;
 /** Distance from `s` along an edge's path to the end a heading leaves through. */
@@ -149,7 +159,7 @@ export class RouteGraph {
         const [u, v] = a.edge.uid < b.edge.uid ? [a.edge.uid, b.edge.uid] : [b.edge.uid, a.edge.uid];
         if (neighbours.has(`${u}|${v}`) || this.conflicts.get(u)?.has(v)) continue;
         if (a.box[0] > b.box[2] - C || b.box[0] > a.box[2] - C || a.box[1] > b.box[3] - C || b.box[1] > a.box[3] - C) continue;
-        const close = a.pts.some((p) => b.pts.some((q) => Math.abs(p.z - q.z) < D.HEADROOM && distance(p, q) < C));
+        const close = a.pts.some((p) => b.pts.some((q) => sameLevel(p, q) && distance(p, q) < C));
         if (!close) continue;
         for (const [x, y] of [[u, v], [v, u]]) {
           if (!this.conflicts.has(x)) this.conflicts.set(x, new Set());
@@ -159,19 +169,22 @@ export class RouteGraph {
     }
   }
 
-  private readonly sampled = new Map<string, (Vec2 & { z: number })[]>();
+  private readonly sampled = new Map<string, Sample[]>();
 
-  /** Points along an edge's centreline every few mm, start to end, with the track height. */
-  samples(edge: Edge): (Vec2 & { z: number })[] {
+  /** Points along an edge's centreline every few mm, start to end, with the track height and the height range of a car over each. */
+  samples(edge: Edge): Sample[] {
     let points = this.sampled.get(edge.key);
     if (!points) {
       const n = Math.max(1, Math.ceil(edge.length / 6));
-      points = [];
-      for (let i = 0; i <= n; i++) {
-        const s = (edge.length * i) / n;
-        const p = poseAt(edge.path, s);
-        points.push({ x: p.x, y: p.y, z: edgeHeight(edge, s) });
-      }
+      const step = edge.length / n;
+      const zs: number[] = [];
+      for (let i = 0; i <= n; i++) zs.push(edgeHeight(edge, step * i));
+      const reach = Math.round(REACH_MM / Math.max(step, 1e-6));
+      points = zs.map((z, i) => {
+        const p = poseAt(edge.path, step * i);
+        const near = zs.slice(Math.max(0, i - reach), i + reach + 1);
+        return { x: p.x, y: p.y, z, lo: Math.min(...near), hi: Math.max(...near) };
+      });
       this.sampled.set(edge.key, points);
     }
     return points;
@@ -599,7 +612,9 @@ export class Dispatcher {
     // from one passing loop to the next. A train never waits halfway along
     // single track, where one coming the other way could meet it head on.
     const speed = Math.max(...train.vehicles.map((v) => Math.abs(v.v)));
-    const need = Math.min((speed * speed) / (2 * DISPATCH.brake) + speed * 0.1 + DISPATCH.marginMm, travel + 20);
+    const stopping = (speed * speed) / (2 * DISPATCH.brake) + speed * 0.1;
+    // Never less than it takes to stop: lining up for work at its destination can carry it past the spot.
+    const need = Math.max(stopping + DISPATCH.gapMm, Math.min(stopping + DISPATCH.marginMm, travel + 20));
     const sticky = new Map<string, number>();
     let h: Heading = start;
     let d = remaining;
@@ -708,7 +723,7 @@ export class Dispatcher {
         for (const p of [v.geo.center, v.geo.aheadFace, v.geo.behindFace]) {
           if (distance(p, points[0]) > edge.length + DISPATCH.clearMm) continue;
           for (const q of points) {
-            if (distance(p, q) < DISPATCH.clearMm && Math.abs(q.z - v.geo.z) < D.HEADROOM) return other.id;
+            if (distance(p, q) < DISPATCH.clearMm && atLevel(v.geo.z, q)) return other.id;
           }
         }
       }
@@ -728,12 +743,12 @@ export class Dispatcher {
     const others = this.sim.network.edges.filter(
       (e) => e.uid === next.edge.uid && e !== next.edge && ([0, 1] as const).every((k) => distance(poseAt(e.path, k ? e.length : 0), end) > 1),
     );
-    const obstacles = others.flatMap((e) => this.graph.samples(e));
+    const obstacles: Sample[] = others.flatMap((e) => this.graph.samples(e));
     for (const other of this.sim.trains) {
       if (other === train) continue;
-      for (const v of other.vehicles) for (const p of [v.geo.center, v.geo.aheadFace, v.geo.behindFace]) obstacles.push({ x: p.x, y: p.y, z: v.geo.z });
+      for (const v of other.vehicles) for (const p of [v.geo.center, v.geo.aheadFace, v.geo.behindFace]) obstacles.push({ x: p.x, y: p.y, z: v.geo.z, lo: v.geo.z, hi: v.geo.z });
     }
-    const near = obstacles.filter((q) => distance(q, end) < DISPATCH.clearMm + 300 && Math.abs(q.z - end.z) < D.HEADROOM);
+    const near = obstacles.filter((q) => distance(q, end) < DISPATCH.clearMm + 300 && sameLevel(q, end));
     const most = Math.min(h.edge.length, 300);
     for (let x = DISPATCH.gapMm; x < most; x += 3) {
       const p = poseAt(h.edge.path, h.leave === 1 ? h.edge.length - x : x);

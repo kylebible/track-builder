@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { IDENTITY } from '../geometry/pose';
 import { addPiece, EMPTY_LAYOUT, extendFrom, type EndRef, type Extension, type Layout } from '../layout/layout';
+import { layoutFromJson } from '../planning/file';
 import { getTemplate } from '../templates/templates';
 import { DISPATCH, RouteGraph, headingKey } from './dispatch';
 import { TrainSim, type Train } from './sim';
@@ -252,5 +253,26 @@ describe('keeping clear where lines come close', () => {
     }
     expect(crashed(sim)).toBe(false);
     expect(nearest).toBeGreaterThan(DISPATCH.clearMm + 1);
+  });
+
+  it('a ramp coming down past a lower line counts as too close where a car on it is still low enough to hit', () => {
+    // From a layout where trains hit each other: a ramp drops from the upper level beside a curve on the floor.
+    const layout = layoutFromJson(
+      JSON.stringify({
+        format: 'track-builder-layout',
+        version: 2,
+        pieces: [
+          { piece: 'ramp-pp', x: -1456, y: 419.714, angle: 180 },
+          { piece: 'curve-large', x: -1672, y: 419.714, angle: 180, z: 64 },
+          { piece: 'curve-large', x: -1651.978, y: 477.128, angle: -133.9416 },
+        ],
+      }),
+    );
+    const graph = new RouteGraph(new TrainSim(layout).network);
+    const [ramp, top, floor] = layout.pieces.map((p) => p.uid);
+    // The ramp's high end passes right by the floor curve, but a car standing there tilts down to the floor's level.
+    expect(graph.conflicts.get(ramp)?.has(floor)).toBe(true);
+    // Fully up a level, cars pass over.
+    expect(graph.conflicts.get(top)?.has(floor) ?? false).toBe(false);
   });
 });
