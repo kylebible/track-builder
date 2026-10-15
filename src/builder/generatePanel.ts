@@ -3,14 +3,17 @@ import { offered } from '../pieces/basic';
 import { getPiece } from '../pieces/catalog';
 import { getPlace } from '../trains/stops';
 import type { Connections } from '../layout/connect';
+import { BUILDING_INTERVALS, JOB_BUILDINGS, type BuildingOptions, type Buildings } from '../layout/buildings';
 
 // The Generate panel: settings for a new section of track, a line on what
 // came out, and buttons to roll another, use it, or stop. The editor owns
 // the section and its preview; this only draws the controls.
 
 export interface GeneratePanelState {
-  mode: 'section' | 'connect';
+  mode: 'section' | 'connect' | 'buildings';
   connections: Connections | null;
+  buildings: Buildings | null;
+  buildingOptions: BuildingOptions;
   openEnds: number;
   options: SectionOptions;
   section: Section | null;
@@ -27,6 +30,7 @@ export interface GeneratePanelState {
 export interface GeneratePanelActions {
   mode: (mode: GeneratePanelState['mode']) => void;
   change: (options: Partial<SectionOptions>) => void;
+  buildings: (options: Partial<BuildingOptions>) => void;
   another: () => void;
   /** Finish at an end tapped next, or anywhere. */
   finishAt: (end: boolean) => void;
@@ -143,6 +147,7 @@ function action(text: string, cls: string, onClick: () => void, disabled = false
 }
 
 export function renderGeneratePanel(panel: HTMLElement, state: GeneratePanelState | null, act: GeneratePanelActions): void {
+  const scroll = panel.querySelector('.generate-form')?.scrollTop ?? 0;
   if (!state) {
     panel.hidden = true;
     panel.replaceChildren();
@@ -155,8 +160,10 @@ export function renderGeneratePanel(panel: HTMLElement, state: GeneratePanelStat
   head.className = 'panel-head';
   const title = document.createElement('div');
   title.innerHTML = '<h2></h2><p class="panel-sub"></p>';
-  title.querySelector('h2')!.textContent = state.mode === 'connect' ? 'Connect all open ends' : 'Generate a section';
-  title.querySelector('p')!.textContent = state.mode === 'connect'
+  title.querySelector('h2')!.textContent = state.mode === 'buildings' ? 'Place job buildings' : state.mode === 'connect' ? 'Connect all open ends' : 'Generate a section';
+  title.querySelector('p')!.textContent = state.mode === 'buildings'
+    ? 'Spaces buildings along the track already down.'
+    : state.mode === 'connect'
     ? 'Adds paths between the open ends on your layout.'
     : o.loop
     ? 'A loop stands on its own.'
@@ -169,7 +176,82 @@ export function renderGeneratePanel(panel: HTMLElement, state: GeneratePanelStat
 
   const form = document.createElement('div');
   form.className = 'generate-form';
-  form.append(seg('Generate', [['A section', 'section'], ['Connect all open ends', 'connect']], state.mode, act.mode));
+  const modes = seg('Generate', [['A section', 'section'], ['Connect all open ends', 'connect'], ['Place job buildings', 'buildings']], state.mode, act.mode);
+  modes.classList.add('generate-modes');
+  form.append(modes);
+
+  if (state.mode === 'buildings') {
+    const options = state.buildingOptions;
+    const picks = document.createElement('fieldset');
+    picks.className = 'building-picks';
+    const legend = document.createElement('legend');
+    legend.textContent = 'Buildings to space along the track';
+    picks.append(legend);
+    const check = (text: string, checked: boolean, change: (on: boolean) => void) => {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = checked;
+      input.addEventListener('change', () => change(input.checked));
+      label.append(input, document.createTextNode(text));
+      return label;
+    };
+    const ids = [...Object.keys(BUILDING_INTERVALS), ...JOB_BUILDINGS.filter((id) => !(id in BUILDING_INTERVALS))]
+      .filter((id) => offered(getPiece(id)));
+    for (const id of ids) picks.append(check(getPiece(id).name, options.ids.includes(id), (on) =>
+      act.buildings({ ids: on ? [...options.ids, id] : options.ids.filter((p) => p !== id) })));
+    const hint = document.createElement('p');
+    hint.className = 'building-note';
+    hint.textContent = 'Recommended gaps use 40% of a full engine store: coal 4.8 m, water 6 m, charge 16 m. Checks track distance through every branch and loop, including the return from dead ends. Other buildings use 6 m.';
+    form.append(picks, seg('Spacing', [['Recommended', 1], ['Closer', 0.5], ['Frequent', 0.25]], options.spacing, (spacing) => act.buildings({ spacing })),
+      check('Include missing coal mines, pumps & worker stations', options.supplyChain, (supplyChain) => act.buildings({ supplyChain })), hint);
+    const result = document.createElement('div');
+    result.className = 'generate-result building-result';
+    result.setAttribute('role', 'status');
+    const plan = state.buildings;
+    const summary = document.createElement('p');
+    summary.textContent = state.busy ? `Finding places… ${plural(plan?.uids.length ?? 0, 'building')} previewed.`
+      : !options.ids.length ? 'Choose at least one building.'
+      : !plan?.layout.pieces.some((p) => getPiece(p.pieceId).paths.length) ? 'Add some track first.'
+      : plan.uids.length ? `${plural(plan.uids.length, 'building')} ready to place.` : 'No buildings to add.';
+    result.append(summary);
+    if (plan && !state.busy) {
+      for (const c of plan.coverage) {
+        const line = document.createElement('p');
+        const gap = (c.interval / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 });
+        line.textContent = `${getPiece(c.id).name}: ${c.added} new, ${c.existing} already on track · ${gap} m target.`;
+        if (c.uncovered.length) {
+          line.textContent += ' Some routes are not covered; add clear, level straight track near the red marks.';
+          line.dataset.state = 'problem';
+        } else if (plan.layout.pieces.some((p) => getPiece(p.pieceId).paths.length)) line.textContent += ' Covered.';
+        result.append(line);
+      }
+      const extra = new Map<string, number>();
+      for (const piece of plan.layout.pieces) if (plan.uids.includes(piece.uid) && !plan.coverage.some((c) => c.id === piece.pieceId)) {
+        extra.set(piece.pieceId, (extra.get(piece.pieceId) ?? 0) + 1);
+      }
+      if (extra.size) {
+        const line = document.createElement('p');
+        line.textContent = 'Supply buildings: ' + [...extra].map(([id, n]) => `${n} ${getPiece(id).name.toLowerCase()}${n === 1 ? '' : 's'}`).join(', ') + '.';
+        result.append(line);
+      }
+      for (const warning of plan.warnings) {
+        const line = document.createElement('p');
+        line.textContent = warning;
+        line.dataset.state = 'problem';
+        result.append(line);
+      }
+    }
+    const note = document.createElement('p');
+    note.className = 'building-note';
+    note.textContent = 'With goods & workers on, delivery and workers jobs keep coal and water flowing. Chargers use the mains unless a power station is present. Free-running trains need a route past the service stops. One Undo removes the batch.';
+    const actions = document.createElement('div');
+    actions.className = 'fill-actions';
+    actions.append(action('Place buildings', 'primary', act.use, state.busy || !plan?.uids.length), action('Cancel', '', act.cancel));
+    panel.replaceChildren(head, form, result, note, actions);
+    form.scrollTop = scroll;
+    return;
+  }
 
   if (state.mode === 'connect') {
     const hint = document.createElement('p');

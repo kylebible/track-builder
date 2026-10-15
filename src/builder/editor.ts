@@ -46,6 +46,7 @@ import { describeFill, searchFills, type Fill } from '../layout/fill';
 import { layoutTraps, newTrapEntries, type TrapEntry } from '../trains/traps';
 import { DEFAULT_SECTION, generateSection, type SectionOptions } from '../layout/generate';
 import { searchConnections } from '../layout/connect';
+import { DEFAULT_BUILDINGS, placeBuildings, type BuildingOptions } from '../layout/buildings';
 import { renderGeneratePanel, type GeneratePanelState } from './generatePanel';
 import { Palette } from './palette';
 import { attachEnd, flipFor, hasEndsChoice, offeredIds, turnFrom, isLoose, SHAPES, variantFor, type Shape } from './variants';
@@ -147,6 +148,16 @@ interface Generating extends GeneratePanelState {
 }
 
 const SECTION_KEY = 'track-builder:generate';
+const BUILDINGS_KEY = 'track-builder:buildings';
+
+function savedBuildingOptions(): BuildingOptions {
+  try {
+    const saved = JSON.parse(localStorage.getItem(BUILDINGS_KEY) ?? 'null');
+    return { ...DEFAULT_BUILDINGS, ...saved, ids: Array.isArray(saved?.ids) ? saved.ids : [...DEFAULT_BUILDINGS.ids] };
+  } catch {
+    return { ...DEFAULT_BUILDINGS, ids: [...DEFAULT_BUILDINGS.ids] };
+  }
+}
 
 function savedSectionOptions(): SectionOptions {
   try {
@@ -190,6 +201,8 @@ export interface EditorDom {
   generatePanel: HTMLElement;
   /** Pieces in trouble the layout check can't see, such as off the table or in the water. */
   blocked?: (layout: Layout) => Iterable<string>;
+  buildingAllowed?: (at: Vec2, z: number) => boolean;
+  waterNear?: (at: Vec2, reach: number) => boolean | null;
   /** Frame the whole layout in the view. */
   onFit: () => void;
   /** The layout to start with, such as the one saved last time. */
@@ -764,6 +777,8 @@ export class Editor {
     this.generating = {
       mode: this.generateMode,
       connections: null,
+      buildings: null,
+      buildingOptions: savedBuildingOptions(),
       openEnds: openEnds(this.layout).length,
       options: savedSectionOptions(),
       section: null,
@@ -790,6 +805,23 @@ export class Editor {
     // Let the panel say it's working before a long one starts; a newer ask supersedes it.
     window.setTimeout(() => {
       if (this.generating !== g || ask !== this.asks) return;
+      if (g.mode === 'buildings') {
+        const base = this.layout;
+        const search = placeBuildings(base, g.buildingOptions, { allowed: this.dom.buildingAllowed, waterNear: this.dom.waterNear });
+        const step = () => {
+          if (this.generating !== g || ask !== this.asks || this.layout !== base) return;
+          const until = performance.now() + 24;
+          let next = search.next();
+          while (!next.done && performance.now() < until) next = search.next();
+          g.buildings = next.value;
+          g.busy = !next.done;
+          this.renderGenerate();
+          this.refresh();
+          if (!next.done) window.setTimeout(step, 0);
+        };
+        step();
+        return;
+      }
       if (g.mode === 'connect') {
         const base = this.layout;
         const search = searchConnections(base, { seed: g.options.seed, blocked: this.dom.blocked });
@@ -821,7 +853,7 @@ export class Editor {
     const g = this.generating;
     if (!g || g.mode === mode) return;
     this.generateMode = mode;
-    Object.assign(g, { mode, section: null, connections: null, pickingEnd: false });
+    Object.assign(g, { mode, section: null, connections: null, buildings: null, pickingEnd: false });
     this.regenerate();
     this.refresh();
   }
@@ -837,6 +869,20 @@ export class Editor {
       // Private browsing: settings just aren't kept.
     }
     this.regenerate();
+  }
+
+  private changeBuildings(change: Partial<BuildingOptions>): void {
+    const g = this.generating;
+    if (!g) return;
+    g.buildingOptions = { ...g.buildingOptions, ...change };
+    g.buildings = null;
+    try {
+      localStorage.setItem(BUILDINGS_KEY, JSON.stringify(g.buildingOptions));
+    } catch {
+      // Private browsing: keep the settings for this panel only.
+    }
+    this.regenerate();
+    this.refresh();
   }
 
   /** Finish the section at the next open end tapped, or anywhere. */
@@ -861,6 +907,13 @@ export class Editor {
   /** Put the previewed section in. */
   applyGenerate(): void {
     const g = this.generating;
+    if (g?.mode === 'buildings') {
+      const plan = g.buildings;
+      if (g.busy || !plan?.uids.length) return;
+      this.commit(plan.layout, { kind: 'pieces', uids: new Set(plan.uids) });
+      this.flash(`Placed ${plural(plan.uids.length, 'building')}.${plan.uncovered.length ? ' Some routes still need more space for buildings.' : ''}`);
+      return;
+    }
     if (g?.mode === 'connect') {
       const plan = g.connections;
       if (g.busy || !plan?.uids.length) return;
@@ -895,6 +948,7 @@ export class Editor {
     renderGeneratePanel(this.dom.generatePanel, this.generating, {
       mode: (mode) => this.changeGenerateMode(mode),
       change: (c) => this.changeGenerate(c),
+      buildings: (c) => this.changeBuildings(c),
       another: () => this.anotherSection(),
       finishAt: (end) => this.finishAt(end),
       use: () => this.applyGenerate(),
@@ -1085,7 +1139,7 @@ export class Editor {
     if (this.generating) {
       // Tapping an open end builds the section on from there instead, or finishes it there when picking where.
       const g = this.generating;
-      if (g.mode === 'connect') return;
+      if (g.mode !== 'section') return;
       if ('end' in hit && !g.busy) {
         if (g.pickingEnd) {
           if (g.start && sameEnd(g.start, hit.end)) {
@@ -1324,7 +1378,8 @@ export class Editor {
     const drag = this.drag?.active ? this.drag : null;
     const drop = this.paletteDrag?.drop ?? null;
     const filling = this.filling;
-    const generated = this.generating?.mode === 'connect' ? this.generating.connections : this.generating?.section ?? null;
+    const generated = this.generating?.mode === 'connect' ? this.generating.connections
+      : this.generating?.mode === 'buildings' ? this.generating.buildings : this.generating?.section ?? null;
     const preview = filling?.options[filling.index] ?? generated;
     const layout = drop ? drop.layout : drag ? this.dragged(drag) : (preview?.layout ?? this.layout);
     const joints = findJoints(layout);
@@ -1352,7 +1407,12 @@ export class Editor {
             const c = worldEnd(layout, end).connector;
             return { at: c.pose, z: c.z, focused: false };
           })
-        : drag || drop || filling || this.generating ? [] : this.marks,
+        : this.generating?.mode === 'buildings' && !this.generating.busy
+          ? (this.generating.buildings?.uncovered ?? []).map((uid) => {
+              const piece = findPiece(layout, uid);
+              return { at: centerOf(layout, new Set([uid])), z: baseOf(piece), focused: false };
+            })
+          : drag || drop || filling || this.generating ? [] : this.marks,
     });
     if (this.layout !== this.notified) {
       this.notified = this.layout;
@@ -1422,6 +1482,7 @@ export class Editor {
     }
     if (this.generating?.pickingEnd) return ['Tap the open end the new section should finish at. Esc to go back.', counts];
     if (this.generating?.mode === 'connect') return [this.generating.busy ? 'Finding paths between open ends… Esc to cancel.' : 'Review the paths, then Use connections. Esc to cancel.', counts];
+    if (this.generating?.mode === 'buildings') return [this.generating.busy ? 'Finding places for job buildings… Esc to cancel.' : 'Review the buildings, then Place buildings. Esc to cancel.', counts];
     if (this.generating) return ['Pick settings for the new section, then Use this. Tap an open end to build on from it. Esc to stop.', counts];
     if (this.filling) {
       if (this.filling.searching && !this.filling.options.length) return ['Looking for a run of track to join those ends…', counts];

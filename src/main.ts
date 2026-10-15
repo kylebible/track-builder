@@ -124,6 +124,12 @@ const editor = new Editor(scene, camera, orbit, {
     const env = getEnvironment(environment);
     return [...(offArea(layout, env)?.uids ?? []), ...(inWater(layout, env)?.uids ?? [])];
   },
+  buildingAllowed: (at, z) => {
+    const env = getEnvironment(environment);
+    return (!env.area || (Math.abs(at.x) <= env.area.width / 2 && Math.abs(at.y) <= env.area.depth / 2))
+      && (z > 1 || !env.water?.contains(at));
+  },
+  waterNear: waterNearTrack,
   initial: restored ?? undefined,
   onChange: (layout) => {
     saved = autosave({ ...layout, environment });
@@ -216,14 +222,15 @@ let followed: THREE.Vector3 | null = null;
 let followedId: number | null = null;
 
 // A pump house in a scene with a river or lake has to be by the water.
-trains.sim.economy.waterNear = (at, reach) => {
+function waterNearTrack(at: { x: number; y: number }, reach: number): boolean | null {
   const water = getEnvironment(environment).water;
   if (!water) return null;
   for (let r = 0; r <= reach; r += 50) {
     for (let a = 0; a < 16; a++) if (water.contains({ x: at.x + r * Math.cos((a * Math.PI) / 8), y: at.y + r * Math.sin((a * Math.PI) / 8) })) return true;
   }
   return false;
-};
+}
+trains.sim.economy.waterNear = waterNearTrack;
 
 const hemisphere = new THREE.HemisphereLight(0xffffff, 0xcfc4b0, 1.5);
 scene.add(hemisphere);
