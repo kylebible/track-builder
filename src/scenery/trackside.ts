@@ -438,6 +438,29 @@ export function goodsShed(): THREE.Group {
   );
 }
 
+/** A tall brick warehouse with a wide door to the track, a hoist over it, and spare goods stacked on the dock. */
+export function depot(): THREE.Group {
+  const z = -(FACE + 56);
+  const stack = [[-80, 0, 'wood'], [-66, 0, 'wood'], [-73, 1, 'wood'], [60, 0, 'coal'], [76, 0, 'wood']] as [number, number, Color][];
+  return group(
+    'depot',
+    base(200, 112, 'stone'),
+    // A dock at wagon floor height, with goods waiting on it.
+    box('stone', [180, 18, 24], [0, 3, -(FACE + 12)]),
+    ...stack.map(([x, row, c]) => box(c, [13, 13, 13], [x, 21 + row * 13, -(FACE + 12)])),
+    ...[-40, -28].map((x) => cylinder('orange', 6, 14, [x, 21, -(FACE + 10)], 6, 12)),
+    box('brick', [150, 72, 64], [0, 3, z]),
+    gableRoof('slate', 76, 20, 160, [0, 75, z]),
+    // Two big doors on the track side and a row of small windows above.
+    ...[-36, 36].map((x) => box('darkWood', [40, 44, 1], [x, 21, z + 32.5])),
+    ...[-54, -18, 18, 54].map((x) => box('glass', [12, 10, 1], [x, 56, z + 32.5])),
+    // The hoist beam and its hook.
+    box('darkWood', [6, 6, 30], [0, 66, z + 44]),
+    cylinder('black', 0.8, 18, [0, 48, z + 56], 0.8, 6),
+    box('cream', [70, 10, 1], [0, 3 + 62, z + 32.6]),
+  );
+}
+
 // ---- signs -----------------------------------------------------------------------
 
 /** A board on a post at the track side. */
@@ -487,6 +510,7 @@ export const TRACKSIDE_MODELS: Record<string, () => THREE.Group> = {
   sawmill,
   'toy-factory': toyFactory,
   'goods-shed': goodsShed,
+  depot,
   'whistle-board': whistleBoard,
   'slow-board': slowBoard,
 };

@@ -9,7 +9,7 @@ import { baseOf } from '../layout/layout';
 import { attracts, CRATE_KG, getStock, supplyLevel, WHEEL_RADIUS, type CargoKind, type ConsistEntry, type StockDef, type Supply } from './stock';
 import { doWork, getPlace, planWork, workSeconds, workSpan, type PlaceDef, type Visit, type Work } from './stops';
 import { Economy, type Site } from './economy';
-import { freshAboard, JOB_POWER, JOB_TRAIN, jobConsist, nextStop, type JobId } from './jobs';
+import { carrying, freshAboard, getJob, JOB_POWER, JOB_TRAIN, jobConsist, nextStop, type JobId } from './jobs';
 import { Operator } from './operator';
 import { ACCESSORY, findAccessories, onRoute, type Accessory, type AccessoryKind, type Job } from './accessories';
 import { Dispatcher, type Arrival, type Destination, type DestinationPoint, type Dispatch, type RouteOptions } from './dispatch';
@@ -85,6 +85,8 @@ export const SUPPLIES = {
   topUpBelow: 0.7,
   /** Warn once a store falls below this. */
   low: 0.2,
+  /** A job train run dry crawls on at this share of its speed, to a place to fill up. */
+  limp: 0.3,
 };
 
 /** How trains stop at places beside the track. */
@@ -493,7 +495,11 @@ export class TrainSim {
       const coming = this.trains.filter((t) => t.job === 'workers').reduce((n, t) => n + freshAboard(t.consist), 0);
       wanted = Math.max(0, this.economy.openSlots() - coming);
     }
-    return { economy: this.economy, site, job: train.job, wanted };
+    // A store only works for a job train sent to it: to leave what it carries, or to fetch some.
+    let store: Visit['store'];
+    const going = train.dispatch?.dest.kind === 'place' ? train.dispatch.dest.uid : null;
+    if (site.place.store && train.job !== 'free' && going === uid) store = carrying(train.consist, getJob(train.job).goods).size ? 'drop' : 'fetch';
+    return { economy: this.economy, site, job: train.job, wanted, store };
   }
 
   /** Every place piece that sits on the track, and where. */
@@ -1117,13 +1123,16 @@ export class TrainSim {
         drag.brake = (massOf(v) * ACCESSORY.brakeMmS2) / 1000 + (Math.abs(v.v) < 1 ? 0.6 * weight : 0);
       }
       v.empty = this.useSupplies ? (v.def.supplies?.find((s) => supplyLevel(train.consist[i], s) <= 0) ?? null) : null;
+      // A job train run dry limps on at a crawl to fill up, rather than stand
+      // on the main line for ever with every other train queued behind it.
+      const limping = !!v.empty && this.limps(train);
       if (v.def.motor) {
-        if (train.throttle === 0 || braking || dwelling || v.empty) {
+        if (train.throttle === 0 || braking || dwelling || (v.empty && !limping)) {
           drag.rolling += P.gearDragN;
         } else {
           const way = train.throttle * v.facing;
           const m = v.def.motor;
-          const free = m.freeSpeedMm * (train.odometer < train.slowUntil ? STOPPING.slowFactor : 1);
+          const free = m.freeSpeedMm * (train.odometer < train.slowUntil ? STOPPING.slowFactor : 1) * (limping ? SUPPLIES.limp : 1);
           const stall = m.stallForceN * boost;
           let f = stall * (1 - (v.v * way) / free);
           f = Math.max(-stall, Math.min(stall, f));
@@ -1185,6 +1194,11 @@ export class TrainSim {
 
   // ---- jobs -----------------------------------------------------------------
 
+  /** Whether a train run dry crawls on to fill up: a job train out on autoroute does. */
+  private limps(train: Train): boolean {
+    return this.autoroute && train.job !== 'free';
+  }
+
   /** Pick where a job train goes next, and send it there by autoroute. */
   private runJob(train: Train): void {
     if (train.job === 'free' || train.wrecked || !train.vehicles.some((v) => v.def.motor)) return;
@@ -1204,7 +1218,9 @@ export class TrainSim {
       train.backingOff = false;
     }
     const going = train.dispatch && train.dispatch.state !== 'arrived' && train.dispatch.state !== 'no-route' && train.dispatch.dest.kind === 'place' ? train.dispatch.dest.uid : null;
-    const dest = nextStop(train.job, train.consist, this.economy, this.stations, (uid) => this.dispatcher.distanceTo(train, uid, { ahead: true }), train.lastStop);
+    const tender = train.consist.some((c) => getStock(c.stockId).supplies?.includes('coal') && !getStock(c.stockId).motor);
+    const range = (supply: Supply) => (supply === 'water' ? SUPPLIES.waterMm : supply === 'coal' ? (tender ? SUPPLIES.tenderCoalMm : SUPPLIES.coalMm) : SUPPLIES.chargeMm);
+    const dest = nextStop(train.job, train.consist, this.economy, this.stations, (uid) => this.dispatcher.distanceTo(train, uid, { ahead: true }), train.lastStop, range);
     train.destination = dest;
     if (!dest) {
       // Work it can only get to by backing up: it's shut in a loop it can't
@@ -1434,7 +1450,7 @@ export class TrainSim {
     const stuck = (stuck: StuckKind, message: string, at: Vec2): Stuck => ({ kind: 'stuck', stuck, message, at });
     const head = engines[0];
     const dry = engines.find((v) => v.empty);
-    if (dry?.empty) {
+    if (dry?.empty && !this.limps(train)) {
       const what = { water: ['no-water', 'has run out of water. Stop it by a water tower, or couple on a water tank car'], coal: ['no-coal', 'has run out of coal. Stop it by a coaling stage, or couple on a tender'], charge: ['flat-battery', 'has a flat battery. Stop it by a charging post'] } as const;
       const [kind, why] = what[dry.empty];
       return stuck(kind, `${name}'s ${dry.def.name.toLowerCase()} ${why}. Reset puts every train back with full stores.`, dry.geo.center);

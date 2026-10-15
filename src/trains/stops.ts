@@ -40,6 +40,12 @@ export interface PlaceDef {
   holds?: Partial<Record<CargoKind, number>>;
   /** How it works, a sentence or two for its info card. */
   explain?: string;
+  /**
+   * A store, not a maker or a user: it keeps goods nobody has room for yet
+   * and hands them back when somewhere runs short. Only a job train sent
+   * there works at it, leaving its load or fetching one.
+   */
+  store?: boolean;
 }
 
 export const PLACES: readonly PlaceDef[] = [
@@ -49,7 +55,7 @@ export const PLACES: readonly PlaceDef[] = [
   },
   {
     id: 'water-tower', name: 'Water tower', refills: ['water'], unloads: ['water'], staff: 1, holds: { water: 16 }, blurb: 'Fills steam engines’ boilers from its tank.',
-    explain: 'Fills steam engines’ boilers from its tank. A water train brings the water from a pump house.',
+    explain: 'Fills steam engines’ boilers from its tank; engine crews fill up even with nobody at work. A water train brings the water from a pump house, and its worker takes it in.',
   },
   {
     id: 'pump-house', name: 'Pump house', loads: ['water'], staff: 1, perMinute: { water: 8 }, holds: { water: 16 }, blurb: 'Pumps water from a river or lake into water tank cars.',
@@ -57,7 +63,7 @@ export const PLACES: readonly PlaceDef[] = [
   },
   {
     id: 'coaling-stage', name: 'Coaling stage', refills: ['coal'], unloads: ['coal'], staff: 1, holds: { coal: 12 }, blurb: 'Tops up steam engines and tenders with coal from its pile.',
-    explain: 'Tops up steam engines and tenders from its coal pile. A coal train brings coal from a coal mine.',
+    explain: 'Tops up steam engines and tenders from its coal pile; engine crews help themselves even with nobody at work. A coal train brings coal from a coal mine, and its worker takes it in.',
   },
   {
     id: 'charging-post', name: 'Charging post', refills: ['charge'], blurb: 'Charges battery engines.',
@@ -98,6 +104,11 @@ export const PLACES: readonly PlaceDef[] = [
   {
     id: 'goods-shed', name: 'Goods shed', unloads: ['crates', 'cars'], staff: 1, perMinute: { crates: 2, cars: 1.5 }, holds: { crates: 12, cars: 9 }, blurb: 'Unloads crates and toy cars.',
     explain: 'Sends crates and toy cars on to the shops. Goods trains keep it supplied.',
+  },
+  {
+    id: 'depot', name: 'Storage depot', store: true, loads: ['coal', 'water', 'milk', 'animals', 'logs', 'crates', 'cars'], unloads: ['coal', 'water', 'milk', 'animals', 'logs', 'crates', 'cars'], staff: 1,
+    holds: { coal: 16, water: 16, milk: 12, animals: 8, logs: 9, crates: 12, cars: 9 }, blurb: 'Stores goods nobody has room for yet.',
+    explain: 'When every place that takes a load is full, a job train leaves it here instead of standing about loaded. When somewhere runs short, a train fetches it back.',
   },
   { id: 'whistle-board', name: 'Whistle board', pass: 'whistle', blurb: 'Engines whistle as they pass.', explain: 'Engines whistle as they pass. No train needs to stop.' },
   { id: 'slow-board', name: 'Slow board', pass: 'slow', blurb: 'Trains slow down past it.', explain: 'Trains slow down past it. No train needs to stop.' },
@@ -150,6 +161,8 @@ export interface Visit {
   site: Site;
   /** The train's job: it only handles its own goods. */
   job: JobId;
+  /** At a store: the train was sent here to leave its load, or to fetch one. Otherwise it works nothing there. */
+  store?: 'drop' | 'fetch';
   /** At a station, how many fresh workers the places are still short of. */
   wanted?: number;
 }
@@ -157,6 +170,8 @@ export interface Visit {
 /** What a place would do for a train standing at it, or null if nothing. */
 export function planWork(place: PlaceDef, consist: readonly ConsistEntry[], rand: () => number = Math.random, visit?: Visit): Work | null {
   if (place.pass) return null;
+  // A store only works for a train sent to it, so goods don't vanish into it on the way past.
+  if (place.store && !visit?.store) return null;
   const site = visit?.site;
   const job = visit ? getJob(visit.job) : null;
   // Nobody at work: nothing gets loaded, unloaded or topped up.
@@ -182,8 +197,10 @@ export function planWork(place: PlaceDef, consist: readonly ConsistEntry[], rand
       if (!place.refills?.includes(supply) || supplyLevel(entry, supply) >= 0.97) continue;
       if (site) {
         const units = (1 - supplyLevel(entry, supply)) * ECONOMY.unitsPerStore;
+        // Engine crews fill their own engines from what's there, staff or no
+        // staff: a big town can't have its engines run dry for want of a worker.
         const left = supplyLeft.get(supply) ?? 0;
-        if (closed || left <= 0.05) continue;
+        if (left <= 0.05) continue;
         supplyLeft.set(supply, left - units);
       }
       queues[i].push({ action: 'refill', what: supply, amount: 1 });
@@ -238,7 +255,7 @@ export function planWork(place: PlaceDef, consist: readonly ConsistEntry[], rand
       }
       return;
     }
-    if (place.unloads?.includes(cargo.kind) && load > 0) {
+    if (place.unloads?.includes(cargo.kind) && load > 0 && (!place.store || visit?.store === 'drop')) {
       let off = load;
       if (site) {
         off = Math.min(off, room.get(cargo.kind) ?? 0);
@@ -250,7 +267,7 @@ export function planWork(place: PlaceDef, consist: readonly ConsistEntry[], rand
       }
     }
     // A sawmill takes logs off and puts crates on: one car does one or the other.
-    if (place.loads?.includes(cargo.kind) && load < cargo.capacity && !queues[i].length) {
+    if (place.loads?.includes(cargo.kind) && load < cargo.capacity && !queues[i].length && (!place.store || visit?.store === 'fetch')) {
       let on = cargo.capacity - load;
       if (site) {
         on = Math.min(on, stock.get(cargo.kind) ?? 0);

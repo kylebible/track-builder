@@ -130,6 +130,41 @@ describe('train jobs', () => {
     expect(nextStop('coal', loaded, economy, [], far, null)).toBe('stage');
   });
 
+  it('a loaded train with nowhere to take its load leaves it at a depot, and fetches it back when somewhere runs short', () => {
+    const economy = new Economy();
+    const at = { x: 0, y: 0 };
+    economy.sync([
+      { uid: 'mine', place: getPlace('coal-mine')!, at },
+      { uid: 'power', place: getPlace('power-station')!, at },
+      { uid: 'depot', place: getPlace('depot')!, at },
+    ]);
+    const depot = economy.site('depot')!;
+    expect(depot.stock.coal).toBe(0);
+    const loaded = jobConsist('coal').map((c) => (c.stockId === 'hopper' ? { ...c, units: 6 } : c));
+    const far = () => 500;
+    // The power station has room: straight there, not the depot.
+    economy.site('power')!.stock.coal = 2;
+    expect(nextStop('coal', loaded, economy, [], far, 'mine')).toBe('power');
+    // Full up: the depot takes it.
+    economy.site('power')!.stock.coal = 12;
+    expect(nextStop('coal', loaded, economy, [], far, 'mine')).toBe('depot');
+    // At the depot, a train sent there to drop off unloads; one going past does nothing.
+    const work = planWork(getPlace('depot')!, loaded, Math.random, { economy, site: depot, job: 'coal', store: 'drop' })!;
+    expect(work.queues.flat().every((j) => j.action === 'unload' && j.what === 'coal')).toBe(true);
+    expect(planWork(getPlace('depot')!, loaded, Math.random, { economy, site: depot, job: 'coal' })).toBeNull();
+    // Later the mine is empty and the power station runs low: the depot's coal goes back out.
+    depot.stock.coal = 10;
+    economy.site('mine')!.stock.coal = 0;
+    economy.site('power')!.stock.coal = 1;
+    expect(nextStop('coal', jobConsist('coal'), economy, [], far, null)).toBe('depot');
+    // Nobody short: it stays put.
+    economy.site('power')!.stock.coal = 10;
+    expect(nextStop('coal', jobConsist('coal'), economy, [], far, null)).toBeNull();
+    // And a depot never shows up as needing anything.
+    depot.stock.coal = 0;
+    expect(needs(economy, () => true, true).filter((n) => n.uid === 'depot' && n.what !== 'workers' && n.what !== 'tired')).toEqual([]);
+  });
+
   it('a coal train only handles coal, even at a station-like stop with other cars', () => {
     const work = planWork(getPlace('farm')!, [car('steam-engine'), car('milk-tank')], Math.random, { economy: new Economy(), site: undefined as never, job: 'coal' });
     // No site: just the job filter.
