@@ -46,9 +46,10 @@ export interface StockDef {
 
 export const WHEEL_RADIUS = 7.5;
 
-// Strong enough to climb an N ramp pulling one car, as the real ones do,
-// but not a long train.
-const BATTERY_MOTOR: Motor = { stallForceN: 0.95, freeSpeedMm: 180, grip: 0.65 };
+// Strong enough to climb an N ramp pulling a few cars, but not a long train.
+// Engines pull a bit harder than the real ones so ordinary hills are fun,
+// and more engines on a train add up.
+const BATTERY_MOTOR: Motor = { stallForceN: 1.2, freeSpeedMm: 180, grip: 0.8 };
 
 export const STOCK: readonly StockDef[] = [
   {
@@ -72,7 +73,7 @@ export const STOCK: readonly StockDef[] = [
     width: 36,
     height: 66,
     massKg: 0.24,
-    motor: { stallForceN: 0.9, freeSpeedMm: 160, grip: 0.5 },
+    motor: { stallForceN: 1.8, freeSpeedMm: 160, grip: 0.8 },
     color: 0x2b8a4b,
     look: 'steam',
     supplies: ['water', 'coal'],
