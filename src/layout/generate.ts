@@ -50,6 +50,8 @@ export interface SectionOptions {
   stops: number;
   /** How often it reaches past plain straights and curves for other kinds of track: bendy and bumpy track, half curves, bridges. */
   variety: Variety;
+  /** For each loop in turn, the job stop it goes out to; '' (or none given) for just a loop. */
+  loopTo: string[];
   seed: number;
 }
 
@@ -63,8 +65,12 @@ export const DEFAULT_SECTION: SectionOptions = {
   climb: 'none',
   stops: 1,
   variety: 'mixed',
+  loopTo: [],
   seed: 1,
 };
+
+/** Job stops a loop can go out to: any place trains do work at. */
+export const LOOP_STOPS: readonly string[] = PLACES.filter((p) => p.id !== 'pump-house').map((p) => p.id);
 
 export const MAX_SECTION_PIECES = 120;
 /** As many stops as there could be room for: one on every other piece of the longest section. */
@@ -102,6 +108,8 @@ export interface Section {
   trapped?: boolean;
   /** Switches that lead off to a loop back onto the line, each with the switch it rejoins by. */
   loops: number;
+  /** Job stops placed out along those loops. */
+  visits: number;
 }
 
 /** Things to stop at or look at along the line, and how each goes on. */
@@ -198,7 +206,7 @@ class Attempt {
   switches = 0;
   closed = false;
   /** Straights put down to seat things on, or stand things beside, once the line is down. */
-  readonly seats: { uid: string; stop: StopDef }[] = [];
+  readonly seats: { uid: string; stop: StopDef; visit?: boolean }[] = [];
   stops = 0;
   /** Laying the last pieces of a loop, which meet its first. */
   closing = false;
@@ -207,12 +215,14 @@ class Attempt {
   /** Pieces Fill gap is left to join a run to its goal end with. */
   aim = 0;
   /** Switches and stops the plan found places for. */
-  planned = { switches: 0, stops: 0 };
+  planned = { switches: 0, stops: 0, loops: 0, visits: 0 };
   /** Loops left open at the switch they leave by, waiting for the one they rejoin by. */
   leaving: Leaving[] = [];
   /** Loops with both switches down, to join up once the line is laid. */
-  readonly loopsToJoin: { from: EndRef; to: EndRef }[] = [];
+  readonly loopsToJoin: { pair: number; from: EndRef; to: EndRef }[] = [];
   loops = 0;
+  /** Job stops placed out along loops. */
+  visits = 0;
 
   constructor(
     base: Layout,
@@ -605,7 +615,7 @@ class Attempt {
       }
       if (leaving) {
         this.leaving = this.leaving.filter((l) => l !== leaving);
-        this.loopsToJoin.push({ from: leaving.end, to: { uid, connectorId: 'branch1' } });
+        this.loopsToJoin.push({ pair, from: leaving.end, to: { uid, connectorId: 'branch1' } });
       } else {
         this.leaving = [...this.leaving, { pair, end: { uid, connectorId: 'branch1' }, side, base }];
       }
@@ -632,11 +642,12 @@ class Attempt {
    * Fill gap; one that won't join gets sidings off both instead.
    */
   joinLoops(opts: SectionOptions, play: Play, budgetMs: number): void {
-    const ends = [...this.loopsToJoin.map((l) => [l.from, l.to] as const), ...this.leaving.map((l) => [l.end, null] as const)];
+    const ends = [...this.loopsToJoin.map((l) => [l.from, l.to, l.pair] as const), ...this.leaving.map((l) => [l.end, null, l.pair] as const)];
     this.loopsToJoin.length = 0;
     this.leaving = [];
-    for (const [from, to] of ends) {
-      if (to && this.joinLoop(from, to, play, budgetMs)) {
+    for (const [from, to, pair] of ends) {
+      const stop = STOPS.find((st) => st.id === opts.loopTo?.[pair] && LOOP_STOPS.includes(st.id) && offered(getPiece(st.id)));
+      if (to && this.joinLoop(from, to, play, budgetMs, stop)) {
         this.loops++;
         continue;
       }
@@ -648,11 +659,14 @@ class Attempt {
    * One loop: out from the line to somewhere well off it, then back by
    * Fill gap. Nearer in if that won't fit, and right beside the line last.
    */
-  private joinLoop(from: EndRef, to: EndRef, play: Play, budgetMs: number): boolean {
+  private joinLoop(from: EndRef, to: EndRef, play: Play, budgetMs: number, stop?: StopDef): boolean {
     const far = LOOP_REACH[0] + this.rand() * (LOOP_REACH[1] - LOOP_REACH[0]);
     for (const reach of [far, far * 0.6, 0]) {
       const was = this.snapshot();
-      const out = reach ? this.venture(from, to, reach) : from;
+      const seats = this.seats.length;
+      let out = reach ? this.venture(from, to, reach) : from;
+      // The job stop it goes out to, out at the far end.
+      if (out && stop) out = this.visit(out, stop);
       if (out) {
         const fills = findFills(this.layout, out, to, { wanted: 1, budgetMs, play, blocked: this.ctx.blocked });
         if (fills.length) {
@@ -662,9 +676,22 @@ class Attempt {
           return true;
         }
       }
+      this.seats.length = seats;
       this.restore(was);
     }
     return false;
+  }
+
+  /** Seat a job stop on a straight laid on from `from`, kept apart from the stops along the line. Where to carry on from, or null. */
+  private visit(from: EndRef, stop: StopDef): EndRef | null {
+    const end = this.end;
+    const laid = this.laid;
+    this.end = from;
+    const ok = this.stopSlot(stop, true);
+    const out = this.end;
+    this.end = end;
+    this.laid = laid;
+    return ok ? out : null;
   }
 
   /**
@@ -714,7 +741,7 @@ class Attempt {
   }
 
   /** A straight to seat something on or stand something beside, or a crossing or bridge that is itself track. */
-  private stopSlot(stop: StopDef): boolean {
+  private stopSlot(stop: StopDef, visit = false): boolean {
     const end = this.end!;
     if (stop.how === 'inline') {
       const placed = this.placed(end, stop.id, false);
@@ -731,7 +758,7 @@ class Attempt {
       trackMoves().filter((m) => m.kind === 'straight' && m.dz === 0 && m.length >= D.LONG_STRAIGHT - 1),
     );
     if (!laid) return false;
-    this.seats.push({ uid: laid.uid, stop });
+    this.seats.push({ uid: laid.uid, stop, visit });
     this.end = laid.out;
     this.laid++;
     return true;
@@ -739,7 +766,7 @@ class Attempt {
 
   /** Seat or stand the stops beside the straights kept for them. */
   placeStops(): void {
-    for (const { uid, stop } of this.seats) {
+    for (const { uid, stop, visit } of this.seats) {
       const piece = findPiece(this.layout, uid);
       const path = defOf(piece).paths[0];
       const mid = applyPose(piece.pose, poseAt(path, pathLength(path) / 2));
@@ -749,7 +776,8 @@ class Attempt {
         const holds = getPiece(stop.id).holdsTrackAt ?? 0;
         this.layout = addPiece(this.layout, stop.id, { ...mid, angle: normalizeAngle(mid.angle + turned) }, false, z - holds).layout;
         this.uids.push(this.layout.pieces[this.layout.pieces.length - 1].uid);
-        this.stops++;
+        if (visit) this.visits++;
+        else this.stops++;
         continue;
       }
       // Beside the track, on whichever side is clear.
@@ -806,9 +834,9 @@ interface Saved {
   laid: number;
   switches: number;
   stops: number;
-  seats: { uid: string; stop: StopDef }[];
+  seats: { uid: string; stop: StopDef; visit?: boolean }[];
   leaving: Leaving[];
-  loopsToJoin: { from: EndRef; to: EndRef }[];
+  loopsToJoin: { pair: number; from: EndRef; to: EndRef }[];
   turned: number;
   lastTurn: number;
 }
@@ -1053,9 +1081,12 @@ export function generateSection(base: Layout, options: Partial<SectionOptions>, 
   let trapped: Attempt | null = null;
   /** How many pieces over (or under) the last runs to a goal end came out: the next try's run is that much shorter. */
   let over = 0;
+  /** Loops, and job stops out along them, it's short of. */
+  const unlooped = (a: Attempt): number => Math.max(0, a.planned.loops - a.loops) + Math.max(0, a.planned.visits - a.visits);
   const better = (a: Attempt, b: Attempt | null): boolean => {
     if (!b) return true;
     if (a.closed !== b.closed) return a.closed;
+    if (unlooped(a) !== unlooped(b)) return unlooped(a) < unlooped(b);
     if (goal && missing(a) !== missing(b)) return missing(a) < missing(b);
     return goal ? Math.abs(a.laid - opts.pieces) < Math.abs(b.laid - opts.pieces) : a.laid > b.laid;
   };
@@ -1084,7 +1115,13 @@ export function generateSection(base: Layout, options: Partial<SectionOptions>, 
       attempt.aim = opts.pieces - walk;
     }
     const slots = planned ?? plan(opts.loop ? { ...opts, pieces: Math.max(4, Math.round(opts.pieces * LOOP_LAID)) } : { ...opts, pieces: walk }, stops, rand, !!goal);
-    attempt.planned = { switches: slots.filter((s) => s.kind === 'switch' || (s.kind === 'loop' && s.role === 'leave')).length, stops: slots.filter((s) => s.kind === 'stop').length };
+    const leaves = slots.filter((s): s is Extract<Slot, { kind: 'loop' }> => s.kind === 'loop' && s.role === 'leave');
+    attempt.planned = {
+      switches: slots.filter((s) => s.kind === 'switch').length + leaves.length,
+      stops: slots.filter((s) => s.kind === 'stop').length,
+      loops: leaves.length,
+      visits: leaves.filter((s) => LOOP_STOPS.includes(opts.loopTo?.[s.pair] ?? '')).length,
+    };
     // Lay each place in turn; at a dead end, back up a few places and try other pieces.
     const first = attempt.laid;
     const saved: Saved[] = [];
@@ -1141,7 +1178,7 @@ export function generateSection(base: Layout, options: Partial<SectionOptions>, 
       if (better(attempt, trapped)) trapped = attempt;
       continue;
     }
-    if (ok && (!goal || !missing(attempt))) return result(attempt);
+    if (ok && (!goal || !missing(attempt)) && !unlooped(attempt)) return result(attempt);
     if (better(attempt, best)) best = attempt;
   }
   // Nothing joined up: Fill gap straight there, without the extras, sooner than leave it short of the end.
@@ -1162,5 +1199,5 @@ export function generateSection(base: Layout, options: Partial<SectionOptions>, 
 }
 
 function result(a: Attempt): Section {
-  return { layout: a.layout, uids: [...a.uids], laid: a.laid, closed: a.closed, stops: a.stops, switches: a.switches, loops: a.loops };
+  return { layout: a.layout, uids: [...a.uids], laid: a.laid, closed: a.closed, stops: a.stops, switches: a.switches, loops: a.loops, visits: a.visits };
 }

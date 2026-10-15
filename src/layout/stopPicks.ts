@@ -29,6 +29,8 @@ export const NEAR_MM = 900;
 
 /** Goods each place sends out and takes in. Refilling engines takes in what it refills from. */
 function flows(place: PlaceDef): { makes: string[]; takes: string[] } {
+  // A depot only keeps what others make for those that need it: it balances nothing.
+  if (place.store) return { makes: [], takes: [] };
   const makes = [...(place.loads ?? []), ...(place.swaps ?? [])];
   const takes = [...(place.unloads ?? []), ...(place.swaps ?? [])];
   return { makes, takes };

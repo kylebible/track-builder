@@ -1,4 +1,7 @@
-import { MAX_SECTION_PIECES, MAX_SECTION_STOPS, type Climb, type Section, type SectionOptions, type Variety } from '../layout/generate';
+import { LOOP_STOPS, MAX_SECTION_PIECES, MAX_SECTION_STOPS, type Climb, type Section, type SectionOptions, type Variety } from '../layout/generate';
+import { offered } from '../pieces/basic';
+import { getPiece } from '../pieces/catalog';
+import { getPlace } from '../trains/stops';
 
 // The Generate panel: settings for a new section of track, a line on what
 // came out, and buttons to roll another, use it, or stop. The editor owns
@@ -91,6 +94,36 @@ function slider(name: string, min: number, max: number, value: number, onChange:
   return el;
 }
 
+/** Where one loop goes out to: just round, or by a job stop picked from the list. */
+function loopTo(index: number, value: string, onPick: (id: string) => void): HTMLElement {
+  const el = document.createElement('label');
+  el.className = 'setting setting-inline';
+  const name = document.createElement('span');
+  name.className = 'setting-label';
+  name.textContent = `Loop ${index + 1} goes out to`;
+  const select = document.createElement('select');
+  const option = (text: string, id: string) => {
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = text;
+    o.selected = id === value;
+    return o;
+  };
+  select.append(option('Just a loop', ''));
+  const stores = LOOP_STOPS.filter((id) => getPlace(id)?.store);
+  for (const [label, ids] of [['Job stops', LOOP_STOPS.filter((id) => !stores.includes(id))], ['Yards', stores]] as const) {
+    const shown = ids.filter((id) => offered(getPiece(id)));
+    if (!shown.length) continue;
+    const group = document.createElement('optgroup');
+    group.label = label;
+    group.append(...shown.map((id) => option(getPlace(id)!.name, id)));
+    select.append(group);
+  }
+  select.addEventListener('change', () => onPick(select.value));
+  el.append(name, select);
+  return el;
+}
+
 const counts = (n: number): [string, number][] => Array.from({ length: n + 1 }, (_, i) => [String(i), i]);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -131,6 +164,13 @@ export function renderGeneratePanel(panel: HTMLElement, state: GeneratePanelStat
     seg('Switches', counts(4), o.switches, (switches) => act.change({ switches, closed: Math.min(o.closed, switches) })),
     // A loop's switches can't lead off to loops of their own: it is planned to close by itself.
     seg('Looped back', counts(o.switches), Math.min(o.closed, o.switches), (closed) => act.change({ closed }), o.switches === 0 || o.loop),
+    ...Array.from({ length: o.loop ? 0 : Math.min(o.closed, o.switches) }, (_, i) =>
+      loopTo(i, o.loopTo?.[i] ?? '', (id) => {
+        const to = [...(o.loopTo ?? [])];
+        to[i] = id;
+        act.change({ loopTo: to });
+      }),
+    ),
     seg('Sidings end', [['Buffer stop', 'buffer'], ['Open', 'open']] as [string, SectionOptions['sidings']][], o.sidings, (sidings) => act.change({ sidings }), o.switches === 0 || (o.closed >= o.switches && !o.loop)),
     seg('Height', CLIMBS.map(([v, t]) => [t, v] as [string, Climb]), o.climb, (climb) => act.change({ climb })),
     stops,
@@ -147,7 +187,8 @@ export function renderGeneratePanel(panel: HTMLElement, state: GeneratePanelStat
   } else {
     const parts = [plural(s.uids.length, 'piece')];
     if (s.switches) parts.push(plural(s.switches, 'switch').replace('switchs', 'switches'));
-    if (s.loops) parts.push(plural(s.loops, 'loop'));
+    if (s.loops) parts.push(plural(s.loops, 'loop') + (s.visits ? ` out to ${plural(s.visits, 'job stop')}` : ''));
+    const toVisit = o.loop ? 0 : (o.loopTo ?? []).slice(0, Math.min(o.closed, o.switches)).filter((id) => id).length;
     if (s.stops) parts.push(plural(s.stops, 'stop'));
     let text = parts.join(' · ');
     const toEnd = state.toEnd && !o.loop;
@@ -162,6 +203,7 @@ export function renderGeneratePanel(panel: HTMLElement, state: GeneratePanelStat
     else if (o.loop && !s.closed) text += '. It couldn’t be closed here, so it’s left open.';
     else if (o.loop && s.uids.length < o.pieces * 0.85) text += `. A loop of ${o.pieces} doesn’t fit here; this is the biggest that did.`;
     else if (s.stops < o.stops && s.stops >= Math.floor(o.pieces / 3)) text += `. Room for ${s.stops} of ${o.stops} stops along ${o.pieces} pieces; more pieces make room for more.`;
+    else if (!o.loop && s.loops >= Math.min(o.closed, o.switches) && s.visits < toVisit) text += `. Only ${s.visits} of ${toVisit} job stops fit out along the loops.`;
     else if (!o.loop && s.loops < Math.min(o.closed, o.switches)) text += `. ${o.closed - s.loops === 1 ? 'A loop' : 'Some loops'} couldn’t be joined back up here, so ${o.closed - s.loops === 1 ? 'it ends' : 'they end'} in sidings.`;
     else if (lacking) text += '. Not everything asked for fit.';
     if (s.trapped) text += ' Every way that joins up makes a train trap: the layout check shows how to fix it.';

@@ -290,6 +290,7 @@ body.touring #empty { visibility: hidden; }
 .generate-form { display: grid; gap: 8px; }
 .generate-form .setting { display: grid; gap: 4px; }
 .generate-form .setting-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.generate-form select { width: 100%; padding: 6px 8px; border: 1px solid #e3d9c6; border-radius: 8px; background: #fff; font: inherit; font-size: 13px; color: var(--ink); }
 .generate-form output { color: var(--ink); font-variant-numeric: tabular-nums; }
 .generate-form input[type='range'] { width: 100%; accent-color: var(--accent); }
 .generate-form .seg button:disabled { opacity: 0.45; cursor: default; }

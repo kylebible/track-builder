@@ -221,6 +221,20 @@ describe('generating a section', () => {
     }
   });
 
+  it('takes loops out to the job stops picked for them, well off the line', () => {
+    for (const seed of [1, 2, 3]) {
+      const section = generateSection(EMPTY_LAYOUT, { ...plainRun, pieces: 24, switches: 2, closed: 2, loopTo: ['farm', 'depot'], seed })!;
+      expect(section.loops).toBe(2);
+      expect(section.visits).toBe(2);
+      const ids = added(section.layout, section.uids).map((p) => p.pieceId);
+      expect(ids).toContain('farm');
+      expect(ids).toContain('depot');
+      expect(section.layout.pieces.filter((p) => p.pieceId === 'farm' || p.pieceId === 'depot')).toHaveLength(2);
+      expect(openEnds(section.layout)).toHaveLength(2);
+      expectSound(section.layout);
+    }
+  });
+
   it('mixes in other kinds of track when asked, and only plain track when not', () => {
     const kinds = (variety: SectionOptions['variety']) =>
       new Set(
