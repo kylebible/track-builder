@@ -45,8 +45,8 @@ Live site: https://kylebible.github.io/track-builder/
 - Ends only join at the same height. Track a full level over other track is
   a bridge; the check flags track crossing lower than that, ends that line
   up at different heights, and supports that would stand on track below.
-- Trains feel the slope: a battery engine gets up a ramp pulling one car,
-  but a heavy train stalls partway and slides back down.
+- Trains feel the slope: one engine gets up a ramp pulling a few cars, and
+  more engines add up, but a heavy train stalls partway and slides back down.
 
 ## More track types
 
