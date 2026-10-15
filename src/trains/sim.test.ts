@@ -5,6 +5,8 @@ import { TrackNetwork } from './network';
 import { TrainSim, type Train } from './sim';
 import { attracts, type ConsistEntry } from './stock';
 import { jobConsist } from './jobs';
+import { getTemplate } from '../templates/templates';
+import { LEVEL_HEIGHT } from '../pieces/dimensions';
 
 /** Keep adding pieces from the open end the last one left. */
 function build(start: string, rest: string[]): Layout {
@@ -124,14 +126,14 @@ describe('running', () => {
     run(light.sim, light.train, 15);
     expect(light.train.status.kind).toBe('running');
 
-    const heavy = start(oval('curve-short'), [car('battery-engine'), car('timber'), car('timber'), car('timber'), car('timber'), car('timber')]);
+    const heavy = start(oval('curve-short'), [car('battery-engine'), ...Array.from({ length: 6 }, () => car('timber'))]);
     run(heavy.sim, heavy.train, 15);
     expect(heavy.train.status).toMatchObject({ kind: 'stuck', stuck: 'stalled' });
     if (heavy.train.status.kind === 'stuck') expect(heavy.train.status.message).toMatch(/short curve/);
   });
 
   it('the same load that stalls on short curves gets round large ones', () => {
-    const { sim, train } = start(oval('curve-large'), [car('battery-engine'), car('timber'), car('timber'), car('timber'), car('timber'), car('timber')]);
+    const { sim, train } = start(oval('curve-large'), [car('battery-engine'), ...Array.from({ length: 6 }, () => car('timber'))]);
     run(sim, train, 15);
     expect(train.status.kind).toBe('running');
   });
@@ -183,6 +185,40 @@ describe('running', () => {
     expect(sim.setLayout(transformPieces(layout, new Set([far]), { x: 0, y: 500, angle: 0 }))).toEqual([]);
     expect(sim.setLayout(transformPieces(layout, new Set(['p1']), { x: 0, y: 500, angle: 0 }))).toEqual([train.name]);
     expect(sim.trains).toHaveLength(0);
+  });
+});
+
+describe('climbing hills', () => {
+  /** Run a train round the Over the hill template, reporting whether its last car got to the top. */
+  function overTheHill(engine: string, engines: number, cars: number) {
+    const sim = new TrainSim(getTemplate('hill').build());
+    Object.assign(sim, { useSupplies: false, keepCoupled: true });
+    const consist = [...Array.from({ length: engines }, () => (engine === 'steam-engine' ? [car(engine), car('tender')] : [car(engine)])).flat(), ...Array.from({ length: cars }, () => car('hopper'))];
+    const train = sim.addTrain(consist, { edgeKey: sim.network.edges[0].key, s: 50, reversed: false });
+    if (typeof train === 'string') throw new Error(train);
+    sim.setThrottle(train.id, 1);
+    let tail = 0;
+    for (let i = 0; i < 60 * 40 && !train.wrecked && train.status.kind !== 'stuck'; i++) {
+      sim.advance(1 / 60);
+      tail = Math.max(tail, train.vehicles[train.vehicles.length - 1].geo.z);
+    }
+    return { train, over: tail > LEVEL_HEIGHT - 1 };
+  }
+
+  it('a big steam engine pulls its tender and a few cars up a ramp', { timeout: 30000 }, () => {
+    expect(overTheHill('steam-engine', 1, 0).over).toBe(true);
+    expect(overTheHill('steam-engine', 1, 4).over).toBe(true);
+  });
+
+  it('a battery engine pulls a few cars up a ramp', { timeout: 30000 }, () => {
+    expect(overTheHill('battery-engine', 1, 4).over).toBe(true);
+  });
+
+  it('engines add up: three get a train over that one stalls on', { timeout: 30000 }, () => {
+    const one = overTheHill('steam-engine', 1, 14);
+    expect(one.over).toBe(false);
+    expect(one.train.status).toMatchObject({ kind: 'stuck', stuck: 'stalled' });
+    expect(overTheHill('steam-engine', 3, 14).over).toBe(true);
   });
 });
 
@@ -241,19 +277,19 @@ describe('building trains on the track', () => {
     }
 
     it('pull harder with more cars, so a train that stalls on its own engine gets round', { timeout: 30000 }, () => {
-      const weak = jobTrain(16, false);
+      const weak = jobTrain(32, false);
       run(weak.sim, weak.train, 60);
       expect(weak.train.status).toMatchObject({ kind: 'stuck', stuck: 'stalled' });
       expect(weak.sim.notices.at(-1)?.stuck).toBe('stalled');
 
-      const strong = jobTrain(16, true);
+      const strong = jobTrain(32, true);
       expect(strong.sim.powerBoost(strong.train)).toBeGreaterThan(1);
       run(strong.sim, strong.train, 60);
       expect(strong.train.status.kind).toBe('running');
     });
 
     it('a stalled train gets going again with an engine added at the front', { timeout: 30000 }, () => {
-      const { sim, train } = jobTrain(20, true);
+      const { sim, train } = jobTrain(48, true);
       run(sim, train, 60);
       expect(train.status).toMatchObject({ kind: 'stuck', stuck: 'stalled' });
       expect(sim.addEngine(train.id)).toBeNull();
