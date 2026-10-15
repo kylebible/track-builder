@@ -286,6 +286,11 @@ export class Editor {
     return this.view.pickables[1];
   }
 
+  /** Open-connector buttons take priority over the train controls beneath them. */
+  get endMarkers(): THREE.Object3D {
+    return this.view.pickables[0];
+  }
+
   /** Replace the whole layout, as one step that undo can take back. */
   load(layout: Layout): void {
     this.commit(layout, NONE);

@@ -31,6 +31,8 @@ export interface TrainsHost {
   readonly layout: Layout;
   /** The placed pieces' objects, to find where a drop lands on the track. */
   readonly pieceObjects: THREE.Object3D;
+  /** The editor's open-connector buttons, which keep clicks for building track. */
+  readonly endMarkers: THREE.Object3D;
 }
 
 /** The orbit controls, handed over while riding along. */
@@ -851,6 +853,10 @@ export class Trains {
   private hit(e: PointerEvent): { lever: string } | { accessory: string; at: Vec2 } | { trainId: number; index: number } | null {
     this.raycaster.setFromCamera(this.ndc(e), this.camera);
     this.root.updateMatrixWorld();
+    this.host.endMarkers.updateWorldMatrix(true, true);
+    // The turntable's invisible tap area overlaps its connector buttons.
+    // Let the editor handle those before this capture handler claims the press.
+    if (this.raycaster.intersectObject(this.host.endMarkers, true).some((i) => i.object.userData.end)) return null;
     if (this.leversRoot.visible) {
       const accessory = this.accessories.hit(this.raycaster);
       // A vehicle standing on a turntable is nearer than the pit under it.
