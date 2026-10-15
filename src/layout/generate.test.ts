@@ -57,7 +57,8 @@ describe('generating a section', () => {
     const pieces = added(section.layout, section.uids);
     expect(section.switches).toBe(2);
     expect(pieces.filter((p) => getPiece(p.pieceId).category === 'switch')).toHaveLength(2);
-    expect(pieces.filter((p) => getPiece(p.pieceId).category === 'buffer')).toHaveLength(2);
+    // One siding each, or two off a three-way switch.
+    expect(pieces.filter((p) => getPiece(p.pieceId).category === 'buffer').length).toBeGreaterThanOrEqual(2);
     // Two ends of the main line; the sidings are closed off.
     expect(openEnds(section.layout)).toHaveLength(2);
     expectSound(section.layout);
@@ -204,6 +205,42 @@ describe('generating a section', () => {
       }
       expectSound(layout);
     }
+  });
+
+  it('loops switches back onto the line when asked', () => {
+    for (const seed of [1, 2, 3]) {
+      const section = generateSection(EMPTY_LAYOUT, { ...plainRun, pieces: 24, switches: 2, closed: 2, seed })!;
+      expect(section.switches).toBe(2);
+      expect(section.loops).toBe(2);
+      const pieces = added(section.layout, section.uids);
+      // Each loop leaves by one switch and rejoins by another: four in all, and no sidings.
+      expect(pieces.filter((p) => getPiece(p.pieceId).category === 'switch')).toHaveLength(4);
+      expect(pieces.filter((p) => getPiece(p.pieceId).category === 'buffer')).toHaveLength(0);
+      expect(openEnds(section.layout)).toHaveLength(2);
+      expectSound(section.layout);
+    }
+  });
+
+  it('mixes in other kinds of track when asked, and only plain track when not', () => {
+    const kinds = (variety: SectionOptions['variety']) =>
+      new Set(
+        [1, 2, 3, 4].flatMap((seed) => {
+          const s = generateSection(EMPTY_LAYOUT, { ...plainRun, pieces: 30, climb: 'over', variety, seed })!;
+          expectSound(s.layout);
+          return added(s.layout, s.uids).map((p) => p.pieceId.replace(/-(pp|hh|peg)$/, ''));
+        }),
+      );
+    const plain = kinds('plain');
+    const lots = kinds('lots');
+    const others = ['bumpy', 'arch-bridge', 'curve-large-half', 'curve-short-half', 'bendy-b2', 'bendy-b3', 'bendy-b4', 'bendy-b6', 'bridge-truss', 'bridge-covered', 'bridge-viaduct', 'bridge-suspension', 'ramp-curve'];
+    expect(others.filter((id) => plain.has(id))).toEqual([]);
+    expect(others.filter((id) => lots.has(id)).length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('takes as many stops as there is room for', () => {
+    const section = generateSection(EMPTY_LAYOUT, { ...plainRun, pieces: 60, stops: 40, seed: 3 })!;
+    expect(section.stops).toBeGreaterThan(15);
+    expectSound(section.layout);
   });
 
   it('lays long sections quickly', () => {

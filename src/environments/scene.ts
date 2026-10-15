@@ -579,6 +579,7 @@ const BUILDERS: Record<EnvironmentId, () => THREE.Group> = {
 export class EnvironmentScene {
   private readonly built = new Map<EnvironmentId, THREE.Group>();
   private shown: THREE.Group | null = null;
+  private look: EnvironmentLook | null = null;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -598,12 +599,24 @@ export class EnvironmentScene {
     this.shown = group;
 
     const look = LOOKS[id];
+    this.look = look;
     this.scene.background = new THREE.Color(look.background);
     this.scene.fog = new THREE.Fog(look.background, look.fog[0], look.fog[1]);
     this.hemisphere.color.set(look.hemisphere[0]);
     this.hemisphere.groundColor.set(look.hemisphere[1]);
     this.hemisphere.intensity = look.hemisphere[2];
     this.sun.intensity = look.sun;
+  }
+
+  /**
+   * Push the fog back when the camera is far from what it looks at, so a
+   * big layout framed whole doesn't fade away; call once a frame.
+   */
+  reach(distance: number): void {
+    const fog = this.scene.fog;
+    if (!(fog instanceof THREE.Fog) || !this.look) return;
+    fog.near = Math.max(this.look.fog[0], distance * 0.9);
+    fog.far = Math.max(this.look.fog[1], distance + 3000);
   }
 
   /** Let the water drift; call once a frame with the time in ms. */

@@ -290,6 +290,7 @@ renderer.setAnimationLoop((time) => {
   editor.tick(time);
   trains.tick(time);
   environmentScene.tick(time);
+  environmentScene.reach(camera.position.distanceTo(orbit.target));
   renderer.render(scene, camera);
 });
 
