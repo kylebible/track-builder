@@ -606,8 +606,19 @@ export class EnvironmentScene {
     this.sun.intensity = look.sun;
   }
 
-  /** Let the water drift; call once a frame with the time in ms. */
-  tick(time: number): void {
+  /**
+   * Let the water drift; call once a frame with the time in ms. With how far
+   * the camera stands from what it looks at, the fog pulls back as it climbs,
+   * so a big layout seen whole isn't lost in it.
+   */
+  tick(time: number, viewDistance = 0): void {
+    const fog = this.scene.fog;
+    if (fog instanceof THREE.Fog && this.shown) {
+      const look = LOOKS[this.shown.name.replace('environment:', '') as EnvironmentId];
+      const back = Math.max(0, viewDistance - 3000);
+      fog.near = look.fog[0] + back;
+      fog.far = look.fog[1] + back * 1.4;
+    }
     if (!water?.map) return;
     water.map.offset.set(Math.sin(time / 9000) * 0.02, time / 400000);
   }

@@ -242,12 +242,16 @@ function hill(): Layout {
 }
 
 /**
- * A whole town: a loop round the edge of a big table with a passing loop
- * and a station on each long side, a goods yard with the crane, loader and
- * engine shed, a hill over a viaduct, a level crossing, a lifting bridge and
- * a tunnel, and every place a train can work at along the way, from the coal
- * mine to the post office. Too big for the play table: it comes with the
- * town streets.
+ * A whole town, laid out across a hall floor: one long loop with two lines
+ * cutting across it, so trains can run round any of three loops, and a
+ * passing loop at three spots on each side, four with a station. Every
+ * kind of place stands along the way, most of them more than once, with a
+ * storage depot on each side for goods nobody has room for yet. Off one end
+ * is an engine terminal round a turntable, with the engine shed and a hill
+ * up onto a viaduct; off the other, a goods yard round a second turntable
+ * with the crane and the loader. One cut-across line crosses a road and the
+ * other lifts for boats; the far end runs through a tunnel. It comes with
+ * the town streets.
  */
 function fullTown(): Layout {
   const b = new Builder();
@@ -258,99 +262,200 @@ function fullTown(): Layout {
     end = b.run(end, [token])!;
     return end.uid;
   };
-  const near = { main: [] as string[], loop: [] as string[] };
-  const far = { main: [] as string[], loop: [] as string[] };
-
-  // The near side, left to right: a level crossing, then the first station's passing loop.
-  const n1 = lay('D');
-  lay('level-crossing');
-  const n2 = lay('D');
-  end = passingLoop(b, end, ['D', 'D'], near);
-  const n3 = lay('D');
-  // Round the right-hand end. It stays level: a job train's engine can't haul three loaded cars up a ramp.
-  const e = ['L', 'L', 'D', 'D', 'D', 'D', 'A', 'L', 'L'].map(lay);
-  // The far side, right to left: the goods yard, the lifting bridge, the second station's passing loop.
-  const f1 = lay('D');
-  const outward = (from: EndRef) => (layout: Layout, uid: string) => {
+  /** How far to the left of the way out of `from` a new piece's end lies: positive is left, which is into the loop. */
+  const leftOf = (from: EndRef, connectorId = 'branch1') => (layout: Layout, uid: string) => {
     const at = worldEnd(layout, from).connector.pose;
-    const branch = worldEnd(layout, { uid, connectorId: 'branch1' }).connector.pose;
-    return -(Math.cos(at.angle) * (branch.y - at.y) - Math.sin(at.angle) * (branch.x - at.x));
+    const p = worldEnd(layout, { uid, connectorId }).connector.pose;
+    return Math.cos(at.angle) * (p.y - at.y) - Math.sin(at.angle) * (p.x - at.x);
   };
-  const yard = b.add(end, 'switch-curved', { via: 'trunk', prefer: outward(end) });
-  const yardOut = b.run({ uid: yard, connectorId: 'branch1' }, ['L'])!;
-  const split = b.add(yardOut, 'switch-curved', { via: 'trunk', prefer: outward(yardOut) });
-  let siding = b.run({ uid: split, connectorId: 'branch0' }, ['D'])!;
-  const sidingA = siding.uid;
-  siding = b.run(siding, ['D'])!;
-  const sidingB = siding.uid;
-  b.run(siding, ['buffer']);
-  // The last siding climbs a ramp onto a viaduct, a lookout for a light train.
-  siding = b.run({ uid: split, connectorId: 'branch1' }, ['L'])!;
-  const sidingC = siding.uid;
-  b.run(siding, ['N:up', 'bridge-viaduct', 'A:pp', 'buffer']);
-  end = { uid: yard, connectorId: 'branch0' };
-  const f2 = lay('D');
-  lay('lift-bridge');
-  end = passingLoop(b, end, ['D', 'D'], far);
-  // A straight before the bend, so long cars leave the loop's S-bend before they turn.
-  const f3 = lay('D');
-  // Down the left-hand end, through the tunnel, and round to the start.
-  lay('L');
-  lay('L');
-  const w = ['D', 'D', 'A', 'D', 'D'].map(lay);
-  b.run(end, ['L', 'L']);
+  const rightOf = (from: EndRef) => {
+    const left = leftOf(from);
+    return (layout: Layout, uid: string) => -left(layout, uid);
+  };
+  /** A curved switch, with a hole or a peg at its trunk, whichever fits. */
+  const curvedSwitch = (at: EndRef, opts: Parameters<Builder['add']>[2]) => {
+    try {
+      return b.add(at, 'switch-curved', opts);
+    } catch {
+      return b.add(at, 'switch-curved-peg', opts);
+    }
+  };
+  /** A curved switch off `end`, its branch to one side; carries on along the straight. */
+  const branchOff = (side: 'in' | 'out'): string => {
+    const uid = curvedSwitch(end, { via: 'trunk', prefer: side === 'in' ? leftOf(end) : rightOf(end) });
+    end = { uid, connectorId: 'branch0' };
+    return uid;
+  };
+  /** A curved switch the other way round, where a line from inside the loop joins. */
+  const joinFromIn = (): string => {
+    const uid = curvedSwitch(end, { via: 'branch0', prefer: leftOf(end) });
+    end = { uid, connectorId: 'trunk' };
+    return uid;
+  };
+  /** A buffer stop, whichever kind fits. */
+  const cap = (at: EndRef) => {
+    try {
+      b.add(at, 'buffer');
+    } catch {
+      b.add(at, 'buffer-peg');
+    }
+  };
 
-  // What stands along the track, beside the piece it belongs to. Places
-  // stand inside the loop; `out` turns one round to stand outside it.
-  const by = (uid: string, id: string, opts: { out?: boolean; side?: number; along?: number } = {}) => {
-    const piece = b.layout.pieces.find((p) => p.uid === uid)!;
-    const { x, y, angle } = piece.pose;
-    const d = opts.along ?? 108;
-    const side = opts.side ?? 0;
-    const heading = angle + (opts.out ? Math.PI : 0);
-    b.place(id, { x: x + d * Math.cos(angle) - side * Math.sin(heading), y: y + d * Math.sin(angle) + side * Math.cos(heading), angle: heading });
+  // Each long side, in the way trains run along it: three passing loops, the
+  // middle one longest, a switch to each cut-across line between them, and
+  // the way into a yard in the middle of the town. Both sides use the same
+  // plan, and it reads the same both ways in length, so the cut-across lines
+  // meet each side square on.
+  interface Side {
+    d: string[];
+    loops: { main: string[]; loop: string[] }[];
+    join: string;
+    leave: string;
+    yard: string;
+  }
+  const side = (start: string[]): Side => {
+    const s: Side = { d: [...start], loops: [], join: '', leave: '', yard: '' };
+    const plan = ['D', 'D', 'loop2', 'D', 'join', 'D', 'yard', 'loop3', 'AA', 'D', 'leave', 'D', 'loop2', 'D', 'D'].slice(start.length);
+    for (const slot of plan) {
+      if (slot === 'D') s.d.push(lay('D'));
+      else if (slot === 'AA') s.d.push(lay('A'), lay('A'));
+      else if (slot === 'join') s.join = joinFromIn();
+      else if (slot === 'leave') s.leave = branchOff('in');
+      else if (slot === 'yard') {
+        s.yard = branchOff('in');
+        lay('A');
+      } else {
+        const laid = { main: [] as string[], loop: [] as string[] };
+        end = passingLoop(b, end, times(slot === 'loop3' ? 3 : 2, 'D'), laid);
+        s.loops.push(laid);
+      }
+    }
+    return s;
   };
-  // Near side: coal and water, the signs before the level crossing, the first station.
-  by(first, 'coal-mine');
-  by(first, 'whistle-board', { out: true });
-  by(n1, 'coaling-stage');
-  by(n1, 'slow-board', { out: true });
-  by(n2, 'water-tower');
-  by(n2, 'charging-post', { out: true });
-  by(near.main[0], 'station');
-  by(near.main[1], 'power-station');
-  by(near.loop[0], 'pump-house', { out: true });
-  by(near.loop[1], 'post-office', { out: true });
-  by(n3, 'farm');
-  by(n3, 'signal', { side: 60, along: 20, out: true });
-  // The right-hand end: a second water tower and coaling stage, so a busy town's engines needn't queue at one.
-  by(e[2], 'water-tower');
-  by(e[4], 'coaling-stage');
-  // Far side: the yard, the market, the second station and the timber trade.
-  by(f1, 'market');
-  by(sidingA, 'cargo-loader');
-  by(sidingB, 'engine-shed', { along: 140 });
-  by(sidingC, 'crane', { side: 100, out: true });
-  by(f2, 'goods-shed');
-  by(f3, 'toy-factory');
-  by(far.main[0], 'sawmill');
-  by(far.main[1], 'station');
-  by(far.loop[0], 'post-office', { out: true });
-  by(far.loop[1], 'lumber-camp', { out: true });
-  by(far.main[1], 'signal', { side: 60, along: 200 });
-  // The left-hand end: a tunnel, and houses beyond it.
-  by(w[1], 'tunnel');
-  by(w[4], 'cottage', { out: true, side: 140 });
-  by(w[3], 'cottage', { out: true, side: 140 });
-  // Houses and trees in the middle, and round the edge.
-  const middle = b.layout.pieces.find((p) => p.uid === near.main[0])!.pose;
+  const near = side([first]);
+  const e = ['L', 'L', 'D', 'D', 'A', 'D', 'D', 'D', 'L', 'L'].map(lay);
+  const far = side([]);
+  // Round the left-hand end, through the tunnel, and back to the start.
+  const w = ['L', 'L', 'D', 'D', 'D', 'A', 'D', 'D', 'L'].map(lay);
+  b.run(end, ['L']);
+
+  // The cut-across lines: from the near side over the level crossing to the far
+  // side, and from the far side over the lifting bridge back to the near side.
+  b.run({ uid: near.leave, connectorId: 'branch1' }, ['L', 'D', 'level-crossing', 'D', 'D', 'D', 'D', 'L']);
+  b.run({ uid: far.leave, connectorId: 'branch1' }, ['L', 'D', 'D', 'lift-bridge', 'A', 'D', 'D', 'L']);
+
+  /**
+   * A turntable at the end of `lead`, with roads off it straight on and
+   * fanning out to the left, each ending at a buffer stop. The ends it
+   * doesn't use get a buffer stop of their own.
+   */
+  const turntableRoads = (lead: EndRef, roads: Token[][]): { table: string; roads: string[] } => {
+    const from = worldEnd(b.layout, lead).connector.pose;
+    const table = b.add(lead, 'turntable');
+    const ends = openEnds(b.layout)
+      .filter((o) => o.uid === table)
+      .map((o) => ({ end: { uid: table, connectorId: o.connectorId } as EndRef, turn: normalizeAngle(o.connector.pose.angle - from.angle) }))
+      // Straight on first, then out to the left a little, then square to the left.
+      .sort((x, y) => (x.turn > -0.01 ? x.turn : 10 - x.turn) - (y.turn > -0.01 ? y.turn : 10 - y.turn));
+    const out: string[] = [];
+    ends.forEach((o, i) => {
+      if (!roads[i]) return cap(o.end);
+      const at = b.run(o.end, roads[i])!;
+      out.push(at.uid);
+      cap(at);
+    });
+    return { table, roads: out };
+  };
+  // In the middle of the town, a yard off each side round a turntable. The
+  // engine yard's roads: one for the shed, one up a hill onto a viaduct.
+  const engines = turntableRoads(b.run({ uid: near.yard, connectorId: 'branch1' }, ['D', 'R'])!, [['D'], ['D'], ['N:up', 'bridge-viaduct', 'A:pp']]);
+  // The goods yard's: the loader, the crane, and a road for spare cars.
+  const yard = turntableRoads(b.run({ uid: far.yard, connectorId: 'branch1' }, ['D', 'R'])!, [['D'], ['D'], ['A']]);
+
+  // What stands along the track. `in` puts a place on the side toward the
+  // middle of the town, `out` on the side away from it.
+  const pieceOf = (uid: string) => b.layout.pieces.find((p) => p.uid === uid)!;
+  const middle = (() => {
+    const a = pieceOf(near.loops[1].main[1]).pose;
+    const z = pieceOf(far.loops[1].main[1]).pose;
+    return { x: (a.x + z.x) / 2, y: (a.y + z.y) / 2 };
+  })();
+  const by = (uid: string, id: string, where: 'in' | 'out' = 'in', opts: { side?: number; along?: number } = {}) => {
+    const { x, y, angle } = pieceOf(uid).pose;
+    const d = opts.along ?? 108;
+    const cx = x + d * Math.cos(angle);
+    const cy = y + d * Math.sin(angle);
+    // A place stands to the left of the way it faces.
+    const leftIsIn = -Math.sin(angle) * (middle.x - cx) + Math.cos(angle) * (middle.y - cy) > 0;
+    const heading = angle + (leftIsIn === (where === 'in') ? 0 : Math.PI);
+    const side = opts.side ?? 0;
+    b.place(id, { x: cx - side * Math.sin(heading), y: cy + side * Math.cos(heading), angle: heading });
+  };
+  const [nw, nm, ne] = near.loops;
+  const [fe, fm, fw] = far.loops;
+  // The near side, left to right. Places by the cut-across lines stand outside, clear of their curves.
+  by(near.d[0], 'coal-mine');
+  by(near.d[1], 'coaling-stage');
+  by(near.d[1], 'whistle-board', 'out');
+  by(nw.main[0], 'station');
+  by(nw.main[1], 'post-office');
+  by(nw.loop[1], 'pump-house', 'out');
+  by(near.d[2], 'water-tower', 'out');
+  by(near.d[3], 'power-station');
+  by(nm.main[0], 'station');
+  by(nm.main[1], 'sawmill');
+  by(nm.main[2], 'depot');
+  by(nm.loop[0], 'lumber-camp', 'out');
+  by(nm.loop[2], 'farm', 'out');
+  by(near.d[4], 'charging-post', 'in', { along: 72 });
+  by(near.d[4], 'slow-board', 'out', { along: 72 });
+  by(near.d[5], 'goods-shed', 'in', { along: 72 });
+  by(near.d[6], 'toy-factory');
+  by(near.d[7], 'market', 'out');
+  by(ne.main[0], 'market');
+  by(ne.main[1], 'station');
+  by(ne.loop[1], 'post-office', 'out');
+  by(ne.main[1], 'signal', 'out', { side: 60, along: 200 });
+  by(near.d[8], 'water-tower');
+  by(near.d[9], 'coaling-stage');
+  // The far side, right to left.
+  by(far.d[0], 'lumber-camp');
+  by(far.d[1], 'coal-mine');
+  by(fe.main[0], 'sawmill');
+  by(fe.main[1], 'post-office');
+  by(fe.loop[1], 'pump-house', 'out');
+  by(far.d[2], 'toy-factory', 'out');
+  by(far.d[3], 'charging-post');
+  by(fm.main[0], 'station');
+  by(fm.main[1], 'farm');
+  by(fm.main[2], 'depot');
+  by(fm.loop[1], 'lumber-camp', 'out');
+  by(fm.main[1], 'signal', 'out', { side: 60, along: 200 });
+  by(far.d[4], 'market', 'in', { along: 144 });
+  by(far.d[6], 'goods-shed');
+  by(far.d[7], 'water-tower', 'out');
+  by(fw.main[0], 'power-station');
+  by(fw.main[1], 'post-office');
+  by(far.d[8], 'water-tower');
+  by(far.d[9], 'coaling-stage');
+  // The ends: a tunnel at the left, with cottages by it, and a signal at the right.
+  by(w[4], 'tunnel');
+  by(w[5], 'cottage', 'in', { side: 140, along: 72 });
+  by(w[6], 'cottage', 'in', { side: 140 });
+  by(e[5], 'signal', 'in', { side: 60, along: 20 });
+  // The yards in the middle.
+  by(engines.roads[1], 'engine-shed');
+  by(yard.roads[0], 'cargo-loader');
+  by(yard.roads[1], 'crane', 'out', { side: 90 });
+
+  // A few houses and trees in the middle, beside the yards. The town's own
+  // parks fill the spaces either side.
+  const up = Math.sign(middle.y - pieceOf(first).pose.y) || 1;
   const scatter: [string, number, number, number][] = [
-    ['cottage', 120, 420, 0.2], ['cottage', 420, 380, -0.3], ['cottage', 760, 440, 0.1], ['cottage', 300, 700, Math.PI],
-    ['leafy-tree', -120, 560, 0], ['leafy-tree', 560, 620, 0], ['pine-tree', 900, 640, 0], ['leafy-tree', 1100, 400, 0],
-    ['pine-tree', -300, 380, 0], ['leafy-tree', -500, 640, 0], ['pine-tree', 1150, -260, 0], ['leafy-tree', -700, -230, 0],
-    ['pine-tree', -400, -260, 0], ['leafy-tree', 1400, 1100, 0], ['pine-tree', -900, 300, 0],
+    ['cottage', 620, -150, 0.3], ['cottage', 740, 110, -0.2], ['cottage', 600, 300, Math.PI],
+    ['leafy-tree', -650, 150, 0], ['pine-tree', -720, -120, 0], ['leafy-tree', -560, 380, 0], ['pine-tree', 820, -330, 0],
   ];
-  for (const [id, x, y, angle] of scatter) b.place(id, { x: middle.x + x, y: middle.y + y, angle });
+  for (const [id, x, y, angle] of scatter) b.place(id, { x: middle.x + x, y: middle.y + up * y, angle });
   return b.done();
 }
 

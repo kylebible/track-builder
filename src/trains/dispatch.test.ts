@@ -191,3 +191,22 @@ describe('sending a train somewhere', () => {
     expect(train.status).toMatchObject({ kind: 'waiting', message: 'Stopped before the end of the track' });
   });
 });
+
+describe('switches a waiting train can foul', () => {
+  it('a curved switch counts, a parallel one does not', () => {
+    const yard = new TrainSim(getTemplate('goods-yard').build());
+    const curved = yard.network.layout.pieces.filter((p) => p.pieceId.startsWith('switch-curved')).map((p) => p.uid);
+    expect(curved.length).toBeGreaterThan(0);
+    expect([...new RouteGraph(yard.network).foulUids].sort()).toEqual(curved.sort());
+    const loops = new TrainSim(getTemplate('passing-loops').build());
+    expect(new RouteGraph(loops.network).foulUids.size).toBe(0);
+  });
+
+  it('a busy full town runs a train for every job without trains touching', () => {
+    const sim = new TrainSim(getTemplate('full-town').build());
+    sim.useEconomy = true;
+    for (const job of ['coal', 'water', 'farm', 'timber', 'goods', 'mail', 'workers', 'coal', 'water', 'farm'] as const) sim.addJobTrain(job);
+    for (let i = 0; i < 90 * 10; i++) sim.advance(0.1);
+    expect(sim.trains.filter((t) => t.wrecked).map((t) => t.name)).toEqual([]);
+  }, 120000);
+});

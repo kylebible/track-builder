@@ -91,6 +91,8 @@ export interface Candidate {
 
 /** How low an engine's stores have to be before a job train goes for more. */
 const REFUEL_BELOW = 0.5;
+/** What a job train keeps in hand for queues and detours on the way to fill up, mm of running. */
+const RESERVE_MM = 4000;
 
 /**
  * Where a train on a job should head next, given the places it could
@@ -103,6 +105,8 @@ export function nextStop(
   stations: readonly Site[],
   far: (uid: string) => number | null,
   last: string | null,
+  /** How far a full store of each lasts this train, mm; it goes for more sooner when the nearest is a long way off. */
+  range?: (supply: 'water' | 'coal' | 'charge') => number,
 ): string | null {
   if (job === 'free') return null;
   const reach = (site: Site) => far(site.uid);
@@ -112,7 +116,7 @@ export function nextStop(
   const sites = [...economy.sites.values()];
 
   // Its own engine first: no point running dry halfway.
-  const fuel = refuelStop(consist, economy, reach, scoreOf);
+  const fuel = refuelStop(consist, economy, reach, scoreOf, range);
   if (fuel) return fuel;
 
   if (job === 'workers') return workersStop(consist, economy, stations, reach, scoreOf);
@@ -132,24 +136,38 @@ export function nextStop(
     return best(cands);
   }
   if (loaded.size) {
-    // Deliver to where it's needed most.
-    const cands: Candidate[] = [];
-    for (const s of sites) {
-      if (!s.crew.length && staffOf(s)) continue;
-      for (const kind of loaded.keys()) {
-        if (!s.place.unloads?.includes(kind) || roomFor(s, kind) < 1 || s.uid === last) continue;
-        const d = reach(s);
-        if (d === null) continue;
-        cands.push({ uid: s.uid, score: scoreOf((s.stock[kind] ?? 0) / (s.place.holds?.[kind] ?? 1), d) });
+    // Deliver to where it's needed most; failing that, leave it at a store until somewhere has room.
+    for (const store of [false, true]) {
+      const cands: Candidate[] = [];
+      for (const s of sites) {
+        if (!s.crew.length && staffOf(s)) continue;
+        if (!!s.place.store !== store) continue;
+        for (const kind of loaded.keys()) {
+          if (!s.place.unloads?.includes(kind) || roomFor(s, kind) < 1 || s.uid === last) continue;
+          const d = reach(s);
+          if (d === null) continue;
+          cands.push({ uid: s.uid, score: scoreOf((s.stock[kind] ?? 0) / (s.place.holds?.[kind] ?? 1), d) });
+        }
       }
+      const to = best(cands);
+      if (to) return to;
     }
-    const to = best(cands);
-    if (to) return to;
   }
   const room = space(consist, goods);
+  // Somewhere is running short of it: worth fetching from a store.
+  const short = (kind: CargoKind) =>
+    sites.some((s) => !s.place.store && s.place.unloads?.includes(kind) && (s.crew.length || !staffOf(s)) && roomFor(s, kind) >= 1 && (s.stock[kind] ?? 0) <= (s.place.holds?.[kind] ?? 0) * ECONOMY.low);
   const cands: Candidate[] = [];
   for (const s of sites) {
     if (!s.crew.length && staffOf(s)) continue;
+    if (s.place.store) {
+      for (const kind of goods) {
+        if (!(room.get(kind) ?? 0) || unitsOf(s, kind) < 1 || s.uid === last || !short(kind)) continue;
+        const d = reach(s);
+        if (d !== null) cands.push({ uid: s.uid, score: scoreOf(0.4, d) });
+      }
+      continue;
+    }
     for (const kind of goods) {
       // Not straight back where it has just been: whatever was there to load, it took.
       if (!s.place.loads?.includes(kind) || !(room.get(kind) ?? 0) || unitsOf(s, kind) < 1 || s.uid === last) continue;
@@ -161,21 +179,34 @@ export function nextStop(
   return best(cands);
 }
 
-function refuelStop(consist: readonly ConsistEntry[], economy: Economy, reach: (s: Site) => number | null, scoreOf: (n: number, d: number) => number): string | null {
-  const wants: [string, 'water' | 'coal' | 'charge'][] = [];
+function refuelStop(
+  consist: readonly ConsistEntry[],
+  economy: Economy,
+  reach: (s: Site) => number | null,
+  scoreOf: (n: number, d: number) => number,
+  range?: (supply: 'water' | 'coal' | 'charge') => number,
+): string | null {
   const level = (supply: 'water' | 'coal' | 'charge') =>
     Math.max(-1, ...consist.filter((c) => getStock(c.stockId).supplies?.includes(supply)).map((c) => supplyLevel(c, supply)));
-  if (level('water') >= 0 && level('water') < REFUEL_BELOW) wants.push(['water-tower', 'water']);
-  if (level('coal') >= 0 && level('coal') < REFUEL_BELOW) wants.push(['coaling-stage', 'coal']);
-  if (level('charge') >= 0 && level('charge') < REFUEL_BELOW) wants.push(['charging-post', 'charge']);
+  const kinds: [string, 'water' | 'coal' | 'charge'][] = [['water-tower', 'water'], ['coaling-stage', 'coal'], ['charging-post', 'charge']];
   const cands: Candidate[] = [];
-  for (const [placeId, supply] of wants) {
+  for (const [placeId, supply] of kinds) {
+    const have = level(supply);
+    if (have < 0 || have >= 0.97) continue;
+    const open: { uid: string; d: number }[] = [];
     for (const s of economy.all(placeId)) {
-      if (s.blocked || (staffOf(s) && !s.crew.length)) continue;
+      if (s.blocked) continue;
       if (supply !== 'charge' && (s.stock[supply] ?? 0) < 1 / ECONOMY.unitsPerStore) continue;
       const d = reach(s);
-      if (d !== null) cands.push({ uid: s.uid, score: scoreOf(level(supply), d) });
+      if (d !== null) open.push({ uid: s.uid, d });
     }
+    if (!open.length) continue;
+    // Low, or the nearest is far enough on that it had better go now: on a big
+    // layout, half a boiler may not last round to the next water tower.
+    const nearest = Math.min(...open.map((o) => o.d));
+    const left = range ? have * range(supply) : Infinity;
+    if (have >= REFUEL_BELOW && left > nearest * 1.5 + RESERVE_MM) continue;
+    for (const o of open) cands.push({ uid: o.uid, score: scoreOf(have, o.d) });
   }
   return cands.length ? cands.reduce((a, b) => (b.score < a.score ? b : a)).uid : null;
 }
@@ -242,6 +273,8 @@ export function needs(economy: Economy, haveJob: (job: JobId) => boolean, hasSta
       out.push({ uid: s.uid, what: 'workers', job, message: `${name} needs ${short} worker${short > 1 ? 's' : ''}${s.crew.length ? '' : ': it has stopped'}.${why}`, urgent: !haveJob(job) });
     }
     if (s.tired) out.push({ uid: s.uid, what: 'tired', job: 'workers', message: `${s.tired} tired worker${s.tired > 1 ? 's' : ''} at the ${name.toLowerCase()} want${s.tired > 1 ? '' : 's'} a ride home.`, urgent: !haveJob('workers') });
+    // A store is never short of anything, nor stuck for being full: it only holds what's spare.
+    if (s.place.store) continue;
     for (const kind of s.place.unloads ?? []) {
       if (s.place.from && kind === s.place.from.kind && s.place.loads?.some((k) => (s.stock[k] ?? 0) >= (s.place.holds?.[k] ?? 0))) continue;
       const hold = s.place.holds?.[kind] ?? 0;

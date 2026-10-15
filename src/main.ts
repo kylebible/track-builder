@@ -36,7 +36,7 @@ const orbit = new OrbitControls(camera, renderer.domElement);
 orbit.enableDamping = true;
 orbit.maxPolarAngle = Math.PI / 2 - 0.12;
 orbit.minDistance = 150;
-orbit.maxDistance = 8000;
+orbit.maxDistance = 14000;
 
 /** Camera moves in progress: where to, and when it started. */
 let flight: { fromTarget: THREE.Vector3; toTarget: THREE.Vector3; fromCamera: THREE.Vector3; toCamera: THREE.Vector3; start: number } | null = null;
@@ -50,7 +50,12 @@ function fitView(): void {
   const radius = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, 250);
   const vFov = THREE.MathUtils.degToRad(camera.fov) / 2;
   const hFov = Math.atan(Math.tan(vFov) * camera.aspect);
-  const distance = (radius / Math.sin(Math.min(vFov, hFov))) * 1.05;
+  // Far enough back for the whole bounding ball, but no further than a long,
+  // narrow layout needs: its width across the view, its depth foreshortened.
+  const size = box.getSize(new THREE.Vector3());
+  const across = Math.max(size.x, size.z) / 2 / Math.tan(hFov);
+  const deep = Math.min(size.x, size.z) / 2 / Math.tan(vFov);
+  const distance = Math.min((radius / Math.sin(Math.min(vFov, hFov))) * 1.05, Math.max(across, deep, 250) * 1.2);
   const direction = camera.position.clone().sub(orbit.target).normalize();
   flight = {
     fromTarget: orbit.target.clone(),
@@ -282,7 +287,7 @@ renderer.setAnimationLoop((time) => {
   if (!trains.riding) orbit.update();
   editor.tick(time);
   trains.tick(time);
-  environmentScene.tick(time);
+  environmentScene.tick(time, camera.position.distanceTo(orbit.target));
   renderer.render(scene, camera);
 });
 

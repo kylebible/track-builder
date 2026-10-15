@@ -1,4 +1,5 @@
 import type { Vec2 } from '../geometry/pose';
+import { defOf } from '../layout/layout';
 import type { Edge, TrackNetwork } from './network';
 import type { Train, TrainSim } from './sim';
 
@@ -24,6 +25,12 @@ export const DISPATCH = {
   marginMm: 120,
   /** Stops this far short of a piece another train holds, or the end of the track. */
   gapMm: 14,
+  /**
+   * Stops this far short of a curved switch another train holds: where two tracks
+   * come together they run close for a while, and a long car swinging round
+   * the curve beside them would catch a train standing at the very end.
+   */
+  foulMm: 130,
   /** A way through a piece another train holds counts as this much longer, mm. */
   busyCost: 2000,
   /** Reserves no further than this through to the next switch, mm. */
@@ -102,10 +109,22 @@ export class RouteGraph {
   readonly live: Set<string>;
   /** Pieces with a switch point: where lines split or join. */
   readonly switchUids: Set<string>;
+  /** Switches whose branch curves away: a train standing near one fouls the other line. */
+  readonly foulUids: Set<string>;
 
   constructor(readonly network: TrackNetwork) {
     this.live = this.findLive();
     this.switchUids = new Set(network.switches().map((sw) => sw.uid));
+    this.foulUids = new Set(
+      network.layout.pieces
+        .filter((p) => {
+          if (!this.switchUids.has(p.uid)) return false;
+          const ends = defOf(p).connectors.map((c) => c.pose.angle);
+          // Every end square with the first (a parallel switch's) or not.
+          return ends.some((a) => Math.abs(Math.sin(a - ends[0])) > 0.1);
+        })
+        .map((p) => p.uid),
+    );
   }
 
   /** The ways on from the end of a heading, or how the track ends there. */
@@ -456,7 +475,9 @@ export class Dispatcher {
     const under = new Map<number, Set<string>>();
     for (const t of trains) {
       const { front, back } = span(t);
-      const uids = new Set(t.route.segments.filter((s) => s.u0 + s.edge.length > back - 2 && s.u0 < front + 2).map((s) => s.edge.uid));
+      // And a switch it stands close enough to foul: nothing else may cross it there.
+      const near = (uid: string) => (this.graph.foulUids.has(uid) ? DISPATCH.foulMm - 10 : 2);
+      const uids = new Set(t.route.segments.filter((s) => s.u0 + s.edge.length > back - near(s.edge.uid) && s.u0 < front + near(s.edge.uid)).map((s) => s.edge.uid));
       under.set(t.id, uids);
       for (const uid of uids) this.holds.set(uid, t.id);
     }
@@ -530,7 +551,9 @@ export class Dispatcher {
     // from one passing loop to the next. A train never waits halfway along
     // single track, where one coming the other way could meet it head on.
     const speed = Math.max(...train.vehicles.map((v) => Math.abs(v.v)));
-    const need = Math.min((speed * speed) / (2 * DISPATCH.brake) + speed * 0.1 + DISPATCH.marginMm, travel + 20);
+    // Short of the destination is far enough, but lining up the cars that work
+    // there can take the front on by up to a train's length: hold that too.
+    const need = Math.min((speed * speed) / (2 * DISPATCH.brake) + speed * 0.1 + DISPATCH.marginMm, travel + 20 + (front - back));
     const sticky = new Map<string, number>();
     let h: Heading = start;
     let d = remaining;
@@ -557,7 +580,7 @@ export class Dispatcher {
       if (reserved.has(pick.edge.uid) && d >= need) break;
       const holder = this.holds.get(pick.edge.uid);
       if (holder !== undefined && holder !== train.id) {
-        this.stopAt(control, f, dir, d - DISPATCH.gapMm);
+        this.stopAt(control, f, dir, d - (this.graph.foulUids.has(pick.edge.uid) ? DISPATCH.foulMm : DISPATCH.gapMm));
         train.waitReason = `Waiting for ${this.sim.train(holder)?.name ?? 'another train'}`;
         break;
       }

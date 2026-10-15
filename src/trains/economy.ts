@@ -83,7 +83,8 @@ export class Economy {
 
   private fresh(uid: string, place: PlaceDef, at: Vec2): Site {
     const stock: Partial<Record<CargoKind, number>> = {};
-    for (const [kind, n] of Object.entries(place.holds ?? {}) as [CargoKind, number][]) stock[kind] = Math.floor(n * ECONOMY.startFull);
+    // A store starts empty: there's no surplus yet.
+    for (const [kind, n] of Object.entries(place.holds ?? {}) as [CargoKind, number][]) stock[kind] = place.store ? 0 : Math.floor(n * ECONOMY.startFull);
     // Staggered, so the first ones get tired after a while and not all together.
     const crew = Array.from({ length: place.staff ?? 0 }, () => 0.45 + 0.55 * this.rand());
     return { uid, place, at, stock, crew, tired: 0, blocked: null };

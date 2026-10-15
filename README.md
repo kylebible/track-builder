@@ -262,6 +262,9 @@ need it, waits while the work is done, and carries on:
 - **Lumber camp** fells logs; the **sawmill** saws each into two crates of
   planks; the **toy factory** makes toy cars from planks; the **goods shed**
   takes crates and toy cars.
+- **Storage depot** keeps goods nobody has room for yet. A job train goes
+  there only when every place that takes its load is full, and fetches it
+  back once somewhere runs short; trains going past leave it alone.
 - **Whistle board**: engines whistle as they pass. **Slow board**: trains
   slow down past it.
 
@@ -286,6 +289,12 @@ forwards. New job trains are put on facing the same way round as the others,
 so they follow each other and never meet head on; with nothing to do, one
 runs on to the next station and looks again. Goods trains run through stations; workers trains
 take tired people from places to the station and bring fresh people back.
+Engine crews fill up at water towers and coaling stages even when nobody
+works there, and a job train goes to fill up early when the next one is a
+long way on. One that runs dry anyway limps on at a crawl (`SUPPLIES.limp`)
+to fill up, rather than block the line. Waiting trains stop well short of a
+curved switch another train is using (`DISPATCH.foulMm`), so a long car
+swinging round the curve can't catch them.
 **Free** trains behave as before. The Jobs buttons add a standard train
 (engine, tender and `JOB_TRAIN.cars` cars, 3 by default) on free track.
 
