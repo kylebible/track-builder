@@ -80,6 +80,7 @@ export class EconomyView {
           el('li', { innerHTML: 'Each place keeps a store. Mines, farms, camps and the pump house <b>make</b> goods; towers, stages, markets and sheds <b>take</b> them in. Tap a place’s badge for what it does.' }),
           el('li', { innerHTML: 'Places need <b>workers</b>. They tire after a few minutes and wait to go home; a <b>workers train</b> takes them to the station and brings fresh ones.' }),
           el('li', { innerHTML: 'Steam engines refill at a <b>water tower</b> and <b>coaling stage</b>, which can run dry. Charging posts need a <b>power station</b> with coal.' }),
+          el('li', { innerHTML: '<b>Car sidings</b> mark a buffered dead-end road. With jobs running by themselves, idle freight wagons park there with their cargo aboard. An engine from the shed fetches them when they are needed again. Tap the badge to see the wagons and cargo waiting.' }),
           el('li', { innerHTML: 'Badges: <span class="ec-key ok"></span> fine, <span class="ec-key low"></span> low with a train on it, <span class="ec-key need"></span> needs a train you haven’t got. <span class="ec-dot"></span> worker at work, <span class="ec-dot empty"></span> empty place, 😴 tired and waiting.' }),
         ),
       ),
@@ -150,7 +151,8 @@ export class EconomyView {
   private badgeKey(site: Site, mine: Need[]): string {
     const goods = Object.entries(site.stock).map(([k, n]) => `${k}${Math.round((n ?? 0) * 4)}`).join();
     const crew = site.crew.map((e) => Math.ceil(e * 3)).join('');
-    return `${goods}|${crew}|${site.tired}|${site.blocked}|${mine.map((n) => `${n.what}${n.urgent}`).join()}`;
+    const yard = site.place.spares ? JSON.stringify(this.sim.yard.inventory(site.uid)) : '';
+    return `${goods}|${crew}|${site.tired}|${site.blocked}|${yard}|${mine.map((n) => `${n.what}${n.urgent}`).join()}`;
   }
 
   private fillBadge(badge: HTMLElement, site: Site, mine: Need[]): void {
@@ -158,6 +160,7 @@ export class EconomyView {
     badge.className = `ec-badge ${urgent ? 'need' : mine.length ? 'low' : 'ok'}`;
     badge.title = `${site.place.name}${mine.length ? `: ${mine.map((n) => n.message).join(' ')}` : ''}. Tap for more.`;
     const parts: Node[] = [];
+    if (site.place.spares) parts.push(el('span', { textContent: `🚃 ${this.sim.yard.inventory(site.uid).cars}` }));
     for (const [kind, hold] of Object.entries(site.place.holds ?? {}) as [CargoKind, number][]) {
       const have = site.stock[kind] ?? 0;
       const share = Math.min(1, have / hold);
@@ -242,6 +245,12 @@ export class EconomyView {
     const place = site.place;
     const rows: Node[] = [el('div', { class: 'ec-info-head' }, el('b', { textContent: place.name }), el('button', { type: 'button', class: 'tr-close', textContent: '×', title: 'Close', onclick: () => this.closeInfo() }))];
     rows.push(el('p', { textContent: place.explain ?? place.blurb }));
+    if (place.spares) {
+      const yard = this.sim.yard.inventory(site.uid);
+      const cargo = (Object.entries(yard.cargo) as [CargoKind, number][]).map(([kind, n]) => `${n} ${WORDS[kind]}`).join(', ');
+      rows.push(el('p', {}, el('b', { textContent: 'Parked: ' }), `${yard.cars} wagon${yard.cars === 1 ? '' : 's'}`));
+      rows.push(el('p', {}, el('b', { textContent: 'Cargo aboard: ' }), cargo || 'None'));
+    }
     const stock = (Object.entries(place.holds ?? {}) as [CargoKind, number][]).map(([kind, hold]) => `${Math.floor(site.stock[kind] ?? 0)} of ${hold} ${WORDS[kind]}`);
     if (stock.length) rows.push(el('p', {}, el('b', { textContent: 'Has: ' }), stock.join(', ')));
     const staff = staffOf(site);

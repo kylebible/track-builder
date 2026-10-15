@@ -301,7 +301,7 @@ export interface Train {
   waitReason: string | null;
   /** A job train backing away from a climb it couldn't make or a train it was stuck behind. */
   backingOff: boolean;
-  /** An engine on its way to fetch spare cars (see yard.ts): the yard, not its job, says where it goes. */
+  /** Fetching or putting away cars (see yard.ts): the yard, not its job, says where it goes. */
   errand: boolean;
   /** Parked cars, by train id, it is backing onto to couple up: it may run right up to them. */
   coupleTo: number | null;
@@ -756,6 +756,41 @@ export class TrainSim {
 
   // ---- coupling and uncoupling by hand ------------------------------------
 
+  /** The yard unhooks the cars at `index`, keeping both parts exactly where they stand. */
+  uncouple(id: number, index: number): Train | string {
+    const train = this.train(id);
+    if (!train) return 'That train has gone.';
+    if (index < 1 || index >= train.vehicles.length) return 'Choose a coupling between vehicles.';
+    if (train.wrecked || train.vehicles.some((v) => Math.abs(v.v) >= 1)) return 'Stop the train before uncoupling it.';
+    const vehicles = train.vehicles.slice(index);
+    const { front, back } = span({ vehicles });
+    const tail: Train = {
+      ...train,
+      id: this.nextId++,
+      name: `${train.name} cars`,
+      route: train.route.clone(),
+      consist: train.consist.slice(index),
+      vehicles,
+      couplings: train.couplings.slice(index),
+      placement: placementAt(train.route, (front + back) / 2),
+      job: 'free', throttle: 0, status: { kind: 'stopped' }, stillFor: 0,
+      destination: null, dispatch: null, waitReason: null, hold: null, stop: null,
+      served: new Set(), ignore: new Map(), backingOff: false, errand: false, coupleTo: null,
+    };
+    train.consist = train.consist.slice(0, index);
+    train.vehicles = train.vehicles.slice(0, index);
+    train.couplings = train.couplings.slice(0, index - 1);
+    const head = span(train);
+    train.placement = placementAt(train.route, (head.front + head.back) / 2);
+    train.destination = null;
+    train.dispatch = null;
+    train.stop = null;
+    train.hold = null;
+    this.dropJobs(id);
+    this.trains.push(tail);
+    return tail;
+  }
+
   /** Where a vehicle added to one end of a train would sit, for a preview. */
   attachPreview(id: number, end: 'front' | 'back', stockId: string): VehicleGeometry | null {
     const train = this.train(id);
@@ -834,6 +869,9 @@ export class TrainSim {
     for (const a of this.trains) {
       for (const b of this.trains) {
         if (a === b || a.wrecked || b.wrecked) continue;
+        // Yard engines only couple to the cars they are fetching. An engine
+        // pulling away after uncoupling must leave its parked cars behind.
+        if ((a.errand || b.errand) && a.coupleTo !== b.id && b.coupleTo !== a.id) continue;
         // Two job trains that bump stay two trains, each with its own job.
         if (a.job !== 'free' && b.job !== 'free') continue;
         for (const endA of ['front', 'back'] as const) {
@@ -1245,10 +1283,13 @@ export class TrainSim {
       // on. Back out to it, rather than go round and round for ever.
       const back = nextStop(train.job, train.consist, this.economy, this.stations, (uid) => this.dispatcher.distanceTo(train, uid), train.lastStop);
       if (back && (back === going || !this.routeTo(train.id, { kind: 'place', uid: back }, { keepRunning: true }))) {
+        this.yard.working(train.id);
         train.destination = back;
         return;
       }
     }
+    if (dest) this.yard.working(train.id);
+    else if (this.operator.on && this.yard.idle(train)) return;
     if (dest === going) return;
     if (!dest) {
       // Nothing to do: on round to the next station, keeping to the main line rather than
