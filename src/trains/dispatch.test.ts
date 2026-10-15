@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { IDENTITY } from '../geometry/pose';
 import { addPiece, EMPTY_LAYOUT, extendFrom, type EndRef, type Extension, type Layout } from '../layout/layout';
 import { getTemplate } from '../templates/templates';
-import { RouteGraph, headingKey } from './dispatch';
+import { DISPATCH, RouteGraph, headingKey } from './dispatch';
 import { TrainSim, type Train } from './sim';
 import type { ConsistEntry } from './stock';
 
@@ -189,5 +189,68 @@ describe('sending a train somewhere', () => {
     run(sim, 10);
     expect(train.wrecked).toBe(false);
     expect(train.status).toMatchObject({ kind: 'waiting', message: 'Stopped before the end of the track' });
+  });
+});
+
+describe('keeping clear where lines come close', () => {
+  const extend = (layout: Layout, from: EndRef, ids: string[]): Layout => {
+    let end: EndRef | null = from;
+    for (const id of ids) {
+      const ext: Extension = extendFrom(layout, end!, id)!;
+      layout = ext.layout;
+      end = ext.next;
+    }
+    return layout;
+  };
+  const points = (t: Train) => t.vehicles.flatMap((v) => [v.geo.center, v.geo.aheadFace, v.geo.behindFace]);
+  const closest = (a: Train, b: Train) => Math.min(...points(a).flatMap((p) => points(b).map((q) => Math.hypot(p.x - q.x, p.y - q.y))));
+
+  function sideBySide(gap: number): Layout {
+    const first = addPiece(EMPTY_LAYOUT, 'straight-long', IDENTITY);
+    let layout = extend(first.layout, { uid: first.uid, connectorId: 'b' }, ['straight-long', 'straight-long', 'straight-long']);
+    const second = addPiece(layout, 'straight-long', { x: 0, y: gap, angle: 0 });
+    return extend(second.layout, { uid: second.uid, connectorId: 'b' }, ['straight-long', 'straight-long', 'straight-long']);
+  }
+
+  it('counts lines too close to pass as one, but not double track', () => {
+    expect(new RouteGraph(new TrainSim(sideBySide(30)).network).conflicts.get('p1')?.has('p5')).toBe(true);
+    expect(new RouteGraph(new TrainSim(sideBySide(46)).network).conflicts.size).toBe(0);
+  });
+
+  it('trains meeting on lines too close to pass wait instead of brushing past', () => {
+    const sim = new TrainSim(sideBySide(30));
+    sim.setAutoroute(true);
+    const a = put(sim, engine(), 'p1:0', 100);
+    const b = put(sim, engine(), 'p8:0', 100, true);
+    sim.setThrottle(a.id, 1);
+    sim.setThrottle(b.id, 1);
+    run(sim, 20, () => crashed(sim));
+    expect(crashed(sim)).toBe(false);
+    expect(closest(a, b)).toBeGreaterThan(60);
+    for (const t of [a, b]) expect(t.waitReason).toMatch(/Waiting for Train/);
+  });
+
+  it('a train coming off one side of a switch keeps clear of a train standing just past it on the other', () => {
+    const sw = addPiece(EMPTY_LAYOUT, 'switch-short-curved', IDENTITY);
+    let layout = extend(sw.layout, { uid: sw.uid, connectorId: 'trunk' }, ['straight-long', 'straight-long']);
+    layout = extend(layout, { uid: sw.uid, connectorId: 'branch0' }, ['straight-long', 'straight-long']);
+    layout = extend(layout, { uid: sw.uid, connectorId: 'branch1' }, ['curve-short', 'straight-long', 'straight-long']);
+    const sim = new TrainSim(layout);
+    sim.setAutoroute(true);
+    const a = put(sim, [car('steam-engine'), car('tender')], 'p2:0', 60);
+    const b = put(sim, [car('battery-engine'), car('hopper'), car('hopper')], 'p5:0', 150, true);
+    // A runs through onto the curved side and stops with its tail by the switch.
+    expect(sim.routeTo(a.id, { kind: 'track', edgeKey: 'p7:0', s: 60 }, { align: 'front' })).toBeNull();
+    run(sim, 15, () => a.dispatch?.state === 'arrived');
+    expect(a.dispatch?.state).toBe('arrived');
+    // B comes in off the straight side, past A's tail.
+    expect(sim.routeTo(b.id, { kind: 'track', edgeKey: 'p2:0', s: 100 })).toBeNull();
+    let nearest = Infinity;
+    for (let i = 0; i < 20 * 30 && !crashed(sim); i++) {
+      sim.advance(1 / 30);
+      nearest = Math.min(nearest, closest(a, b));
+    }
+    expect(crashed(sim)).toBe(false);
+    expect(nearest).toBeGreaterThan(DISPATCH.clearMm + 1);
   });
 });
