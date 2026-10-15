@@ -636,18 +636,65 @@ class Attempt {
     this.loopsToJoin.length = 0;
     this.leaving = [];
     for (const [from, to] of ends) {
-      if (to) {
-        const fills = findFills(this.layout, from, to, { wanted: 1, budgetMs, play, blocked: this.ctx.blocked });
+      if (to && this.joinLoop(from, to, play, budgetMs)) {
+        this.loops++;
+        continue;
+      }
+      for (const end of to ? [from, to] : [from]) this.siding(end, opts);
+    }
+  }
+
+  /**
+   * One loop: out from the line to somewhere well off it, then back by
+   * Fill gap. Nearer in if that won't fit, and right beside the line last.
+   */
+  private joinLoop(from: EndRef, to: EndRef, play: Play, budgetMs: number): boolean {
+    const far = LOOP_REACH[0] + this.rand() * (LOOP_REACH[1] - LOOP_REACH[0]);
+    for (const reach of [far, far * 0.6, 0]) {
+      const was = this.snapshot();
+      const out = reach ? this.venture(from, to, reach) : from;
+      if (out) {
+        const fills = findFills(this.layout, out, to, { wanted: 1, budgetMs, play, blocked: this.ctx.blocked });
         if (fills.length) {
           this.layout = fills[0].layout;
           for (const uid of fills[0].uids) this.occupied.add(findPiece(this.layout, uid));
           this.uids.push(...fills[0].uids);
-          this.loops++;
-          continue;
+          return true;
         }
       }
-      for (const end of to ? [from, to] : [from]) this.siding(end, opts);
+      this.restore(was);
     }
+    return false;
+  }
+
+  /**
+   * Lay track from where a loop leaves the line out towards a point `reach`
+   * mm off it, beside the middle of the loop; null if it can't get there.
+   */
+  private venture(from: EndRef, to: EndRef, reach: number): EndRef | null {
+    const a = worldEnd(this.layout, from).connector;
+    const b = worldEnd(this.layout, to).connector.pose;
+    const ux = b.x - a.pose.x;
+    const uy = b.y - a.pose.y;
+    const len = Math.hypot(ux, uy) || 1;
+    // Off the line on the side the loop leaves by: where its branch ends, from where the switch starts.
+    const t = worldEnd(this.layout, { uid: from.uid, connectorId: 'trunk' }).connector.pose;
+    const side = Math.sign(ux * (a.pose.y - t.y) - uy * (a.pose.x - t.x)) || 1;
+    const target = { x: (a.pose.x + b.x) / 2 - (side * uy * reach) / len, y: (a.pose.y + b.y) / 2 + (side * ux * reach) / len };
+    const moves = trackMoves().filter((m) => m.dz === 0 && m.kind !== 'ramp' && m.length >= 100);
+    // How far from the target a pose leaves it, looking a little ahead of where it points.
+    const miss = (p: Pose) => Math.hypot(p.x + Math.cos(p.angle) * 150 - target.x, p.y + Math.sin(p.angle) * 150 - target.y);
+    let end = from;
+    for (let i = 0; i < LOOP_VENTURE_PIECES; i++) {
+      const at = worldEnd(this.layout, end).connector;
+      if (Math.hypot(at.pose.x - target.x, at.pose.y - target.y) < 200) return end;
+      const order = shuffle(moves, this.rand).sort((m, n) => miss(applyPose(at.pose, m.step)) - miss(applyPose(at.pose, n.step)));
+      const laid = this.plain(end, this.roomy(end, order.slice(0, 4)));
+      if (!laid) return null;
+      end = laid.out;
+    }
+    const at = worldEnd(this.layout, end).connector.pose;
+    return Math.hypot(at.x - target.x, at.y - target.y) < 350 ? end : null;
   }
 
   /** One to three pieces off a switch's branch, ending in a buffer stop if asked. */
@@ -781,6 +828,10 @@ const GOAL_BACK_UP = 3;
 const LOOP_JOIN_MS = 400;
 /** Places between the switches a loop leaves and rejoins the line by. */
 const LOOP_SPAN = [3, 5];
+/** How far off the line a loop goes out to, mm. */
+const LOOP_REACH = [450, 1000];
+/** Most pieces a loop lays heading out, before Fill gap brings it back. */
+const LOOP_VENTURE_PIECES = 10;
 
 /** Tries at a loop laid to plan before falling back to closing one with Fill gap. */
 const LOOP_PLANS = 60;
@@ -928,16 +979,23 @@ function plan(opts: SectionOptions, stops: readonly StopDef[], rand: () => numbe
   const last = more ? n : n - 1;
   const free = (i: number) => i > 0 && i < last && !taken.has(i) && !taken.has(i - 1) && !taken.has(i + 1);
   // Loops first, as they need the most room: the line runs straight on between the switches, for the loop to run beside it.
-  const loops = Math.min(opts.closed, opts.switches);
-  for (let k = 0; k < loops; k++) {
-    const span = LOOP_SPAN[0] + Math.floor(rand() * (LOOP_SPAN[1] - LOOP_SPAN[0] + 1));
-    const aim = Math.round(((k + 0.5) * last) / loops - span / 2);
-    const i = [0, 1, -1, 2, -2, 3, -3, 4, -4].map((d) => aim + d).find((i) => free(i) && free(i + span) && Array.from({ length: span - 1 }, (_, j) => i + 1 + j).every((j) => !taken.has(j)));
-    if (i === undefined) continue;
-    put(i, { kind: 'loop', pair: k, role: 'leave' });
-    for (let j = i + 1; j < i + span; j++) put(j, { kind: 'straight' });
-    put(i + span, { kind: 'loop', pair: k, role: 'rejoin' });
+  const asked = Math.min(opts.closed, opts.switches);
+  let loops = 0;
+  for (let k = 0; k < asked; k++) {
+    const longest = LOOP_SPAN[0] + Math.floor(rand() * (LOOP_SPAN[1] - LOOP_SPAN[0] + 1));
+    // Shorter between the switches if that's all there's room for along the line.
+    for (let span = longest; span >= 2; span--) {
+      const aim = Math.round(((k + 0.5) * last) / asked - span / 2);
+      const i = [0, 1, -1, 2, -2, 3, -3, 4, -4].map((d) => aim + d).find((i) => free(i) && free(i + span) && Array.from({ length: span - 1 }, (_, j) => i + 1 + j).every((j) => !taken.has(j)));
+      if (i === undefined) continue;
+      put(i, { kind: 'loop', pair: k, role: 'leave' });
+      for (let j = i + 1; j < i + span; j++) put(j, { kind: 'straight' });
+      put(i + span, { kind: 'loop', pair: k, role: 'rejoin' });
+      loops++;
+      break;
+    }
   }
+  // Any loop with no room along the line is a switch to a siding instead.
   const open = opts.switches - loops;
   for (let k = 0; k < open; k++) {
     // Spread out along the line, nudged to a free place.
