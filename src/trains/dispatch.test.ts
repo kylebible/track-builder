@@ -132,6 +132,19 @@ describe('autoroute keeps trains apart', () => {
   });
 });
 
+describe('single lines', () => {
+  it('a train takes on a single line whole, however long, never stopping its claim partway along', () => {
+    // 40 long straights, 8.6 m: longer than a usual stretch of reservation.
+    const sim = new TrainSim(build('straight-long', Array(39).fill('straight-long')));
+    sim.setAutoroute(true);
+    const t = put(sim, engine(), 'p1:0', 100);
+    sim.setThrottle(t.id, 1);
+    run(sim, 0.2);
+    const held = [...sim.dispatcher.holds].filter(([, id]) => id === t.id).map(([uid]) => uid);
+    expect(held).toHaveLength(40);
+  });
+});
+
 describe('sending a train somewhere', () => {
   it('finds a way into a siding, sets the switches, and stops with its middle on the spot', () => {
     const layout = getTemplate('goods-yard').build();

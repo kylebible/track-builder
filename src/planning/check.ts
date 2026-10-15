@@ -6,6 +6,7 @@ import { isBrio } from '../pieces/basic';
 import { getPiece } from '../pieces/catalog';
 import { baseOf, defOf, findJoints, nearbyPairs, openEnds, worldEnd, type EndRef, type Layout, type PlacedPiece, type WorldEnd } from '../layout/layout';
 import { supportsOf, type Support } from '../layout/supports';
+import { layoutTraps, type Trap } from '../trains/traps';
 
 // The layout check: what would go wrong when building this on the floor.
 //
@@ -21,10 +22,12 @@ import { supportsOf, type Support } from '../layout/supports';
 // - Off the area is track past the edge of a table or rug, and in water is
 //   track on the ground in a river or lake (both added by the panel, which
 //   knows what the layout is built on).
+// - A train trap is a way at a switch that shuts a train in a loop it can
+//   never get back out of (see trains/traps.ts).
 // - Not Brio is a piece Brio doesn't sell, in Basic mode (also added by the
 //   panel, which knows the mode).
 
-export type IssueKind = 'near-miss' | 'same-gender' | 'height' | 'overlap' | 'support' | 'open-end' | 'off-area' | 'in-water' | 'not-brio';
+export type IssueKind = 'near-miss' | 'same-gender' | 'height' | 'overlap' | 'support' | 'open-end' | 'off-area' | 'in-water' | 'not-brio' | 'trap';
 
 export interface Issue {
   kind: IssueKind;
@@ -36,6 +39,8 @@ export interface Issue {
   uids: string[];
   /** The open end, for open-end issues. */
   end?: EndRef;
+  /** The trap, for train traps: what a fix works from. */
+  trap?: Trap;
   message: string;
 }
 
@@ -65,6 +70,8 @@ const SAMPLE_STEP = 8;
 export interface CheckOptions {
   play?: Play;
   near?: NearRange;
+  /** Look for train traps too (the default). */
+  traps?: boolean;
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -126,6 +133,7 @@ export function checkLayout(layout: Layout, options: CheckOptions = {}): Issue[]
   // Ends already flagged as meeting at the wrong height explain their own support.
   const flagged = new Set(issues.filter((i) => i.kind === 'height').map((i) => i.uids.slice().sort().join('|')));
   issues.push(...blockedSupports(layout, supportsOf(layout)).filter((i) => !flagged.has(i.uids.slice().sort().join('|'))));
+  if (options.traps !== false) issues.push(...trapIssues(layout));
 
   for (const e of open) {
     if (paired.has(e)) continue;
@@ -285,6 +293,25 @@ function blockedSupports(layout: Layout, supports: Support[]): Issue[] {
       message: `The support under this raised end would stand on the ${pieceName(layout, uid).toLowerCase()} below, and there's no room for an arch over it. Move the joint along so it lands clear, or raise this track another level.`,
     })),
   );
+}
+
+/** Ways at switches that lead into a loop a train can never get back out of. */
+export function trapIssues(layout: Layout): Issue[] {
+  return layoutTraps(layout).traps.map((trap) => {
+    const entry = trap.entries[0];
+    const way = entry.ways !== 2 ? 'go one of its ways' : entry.index === 0 ? 'go straight on' : 'take the branch';
+    const more = trap.entries.length > 1 ? ` (and at ${trap.entries.length === 2 ? 'one other switch' : `${trap.entries.length - 1} other switches`})` : '';
+    return {
+      kind: 'trap' as const,
+      at: entry.at,
+      z: baseOf(layout.pieces.find((p) => p.uid === entry.uid)!),
+      uids: [...new Set([...trap.entries.map((e) => e.uid), ...trap.loopUids])],
+      trap,
+      message:
+        `Train trap: trains that ${way} at this switch${more} end up going round a loop they can never leave. ` +
+        'Fix it with a turn-back siding or a turntable on that loop, a switch that leads back out of it, or by turning its switch round.',
+    };
+  });
 }
 
 const midpoint = (a: Vec2, b: Vec2): Vec2 => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });

@@ -95,6 +95,10 @@ const editor = new Editor(scene, camera, orbit, {
   buttons: {
     undo: button('undo'),
     redo: button('redo'),
+    select: button('select-mode'),
+    copy: button('copy'),
+    paste: button('paste'),
+    duplicate: button('duplicate'),
     rotateLeft: button('rotate-left'),
     rotateRight: button('rotate-right'),
     flip: button('flip'),
@@ -203,6 +207,8 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   if (e.buttons) trains.following = null;
 });
 let followed: THREE.Vector3 | null = null;
+/** Which train `followed` was, so going to another one doesn't carry over the gap between them. */
+let followedId: number | null = null;
 
 // A pump house in a scene with a river or lake has to be by the water.
 trains.sim.economy.waterNear = (at, reach) => {
@@ -257,7 +263,7 @@ renderer.setAnimationLoop((time) => {
   if (trains.riding) flight = null;
   // Keep a followed train in the middle, flying there or not.
   const follow = trains.followPoint();
-  if (follow && followed) {
+  if (follow && followed && trains.following === followedId) {
     const delta = follow.clone().sub(followed);
     if (flight) {
       flight.toTarget.add(delta);
@@ -268,6 +274,7 @@ renderer.setAnimationLoop((time) => {
     }
   }
   followed = follow;
+  followedId = trains.following;
   const count = String(trains.sim.trains.length || '');
   if (tabCount.textContent !== count) {
     tabCount.textContent = count;

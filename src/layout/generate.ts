@@ -8,6 +8,7 @@ import type { Gender } from '../pieces/types';
 import { checkLayout } from '../planning/check';
 import { CRANE } from '../scenery/models';
 import { PLACES } from '../trains/stops';
+import { layoutTraps, newTrapEntries } from '../trains/traps';
 import { estimate, findFills, trackMoves, type Fill, type TrackMove, type Way } from './fill';
 import { addPiece, baseOf, defOf, findPiece, sameEnd, worldEnd, type EndRef, type Layout } from './layout';
 import { Occupancy } from './occupancy';
@@ -84,6 +85,8 @@ export interface Section {
   /** Things to stop at that it placed. */
   stops: number;
   switches: number;
+  /** It makes a train trap: the only ways found shut trains in a loop. */
+  trapped?: boolean;
 }
 
 /** Things to stop at or look at along the line, and how each goes on. */
@@ -802,7 +805,13 @@ export function generateSection(base: Layout, options: Partial<SectionOptions>, 
     return Math.max(0, opts.switches - a.switches) + Math.max(0, opts.stops - a.stops) + (raised ? 0 : 1);
   };
 
+  // A section never shuts trains in a loop they can't get back out of.
+  const trapsBefore = layoutTraps(base);
+  const traps = (layout: Layout) => newTrapEntries(trapsBefore, layoutTraps(layout)).length > 0;
+
   let best: Attempt | null = null;
+  /** The best of those that would make a train trap, for when every way does. */
+  let trapped: Attempt | null = null;
   /** How many pieces over (or under) the last runs to a goal end came out: the next try's run is that much shorter. */
   let over = 0;
   const better = (a: Attempt, b: Attempt | null): boolean => {
@@ -885,8 +894,12 @@ export function generateSection(base: Layout, options: Partial<SectionOptions>, 
     }
     if (!goal) attempt.placeStops();
     const added = new Set(attempt.uids);
-    const trouble = checkLayout(attempt.layout, { play }).some((i) => i.kind !== 'open-end' && i.uids.some((u) => added.has(u)));
+    const trouble = checkLayout(attempt.layout, { play, traps: false }).some((i) => i.kind !== 'open-end' && i.uids.some((u) => added.has(u)));
     if (trouble || !attempt.uids.length) continue;
+    if (traps(attempt.layout)) {
+      if (better(attempt, trapped)) trapped = attempt;
+      continue;
+    }
     if (ok && (!goal || !missing(attempt))) return result(attempt);
     if (better(attempt, best)) best = attempt;
   }
@@ -896,9 +909,14 @@ export function generateSection(base: Layout, options: Partial<SectionOptions>, 
     plain.end = start;
     if (plain.close(play, Math.max(GOAL_FILL_MS * 4, budget - (performance.now() - started)), opts.pieces)) {
       const added = new Set(plain.uids);
-      if (!checkLayout(plain.layout, { play }).some((i) => i.kind !== 'open-end' && i.uids.some((u) => added.has(u)))) return result(plain);
+      if (!checkLayout(plain.layout, { play, traps: false }).some((i) => i.kind !== 'open-end' && i.uids.some((u) => added.has(u)))) {
+        if (!traps(plain.layout)) return result(plain);
+        if (!trapped?.closed) trapped = plain;
+      }
     }
   }
+  // Joined up but making a trap beats not joined up: the check says how to fix it.
+  if (trapped && (!best || (trapped.closed && !best.closed))) return { ...result(trapped), trapped: true };
   return best && result(best);
 }
 

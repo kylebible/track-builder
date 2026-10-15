@@ -9,7 +9,8 @@ import { baseOf } from '../layout/layout';
 import { attracts, CRATE_KG, getStock, supplyLevel, WHEEL_RADIUS, type CargoKind, type ConsistEntry, type StockDef, type Supply } from './stock';
 import { doWork, getPlace, planWork, workSeconds, workSpan, type PlaceDef, type Visit, type Work } from './stops';
 import { Economy, type Site } from './economy';
-import { freshAboard, jobConsist, nextStop, type JobId } from './jobs';
+import { freshAboard, JOB_POWER, JOB_TRAIN, jobConsist, nextStop, type JobId } from './jobs';
+import { Operator } from './operator';
 import { ACCESSORY, findAccessories, onRoute, type Accessory, type AccessoryKind, type Job } from './accessories';
 import { Dispatcher, type Arrival, type Destination, type DestinationPoint, type Dispatch, type RouteOptions } from './dispatch';
 import { findTurntables, headingToward, lineAt, lineToward, turn, turnPoint, TURNTABLE, type Turntable, type TurntableState } from './turntable';
@@ -254,6 +255,8 @@ export interface Notice {
   message: string;
   at: Vec2;
   time: number;
+  /** Set when the notice is a train getting stuck, and how. */
+  stuck?: StuckKind;
 }
 
 export interface Train {
@@ -293,6 +296,8 @@ export interface Train {
   dispatch: Dispatch | null;
   /** What autoroute is holding it back for, if anything: "Waiting for Train 2". */
   waitReason: string | null;
+  /** A job train backing away from a climb it couldn't make or a train it was stuck behind. */
+  backingOff: boolean;
 }
 
 const ZERO_DRAG = (): Drag => ({ rolling: 0, curve: 0, joint: 0, jointAt: null, buffer: 0, slope: 0, brake: 0 });
@@ -376,14 +381,39 @@ export class TrainSim {
   realMagnets = true;
   /** Coupled vehicles never come apart on their own, so long and job trains stay whole. */
   keepCoupled = false;
+  /** Job trains' engines pull harder the more cars they have (off in Basic mode, where engines are as strong as real ones). */
+  jobPower = false;
   /** Counts lever changes, so the view knows to redraw them. */
   leverVersion = 0;
   readonly dispatcher: Dispatcher;
+  /** Runs the jobs by itself when switched on: adds trains where they're needed and gets stuck ones going. */
+  readonly operator: Operator;
+  /**
+   * Climbs job trains have stalled on, by heading (`edgeKey>end`), with how
+   * much pull per newton of weight the train that stalled had. Trains no
+   * stronger than that go round another way.
+   */
+  readonly steep = new Map<string, number>();
 
   constructor(layout: Layout) {
     this.network = new TrackNetwork(layout);
     this.findAccessories();
     this.dispatcher = new Dispatcher(this);
+    this.operator = new Operator(this);
+  }
+
+  /** Most pull a train's engines can give, per newton of its weight. */
+  climbRatio(train: Train): number {
+    const weight = train.vehicles.reduce((s, v) => s + massOf(v) * PHYSICS.gravity, 0);
+    const pull = train.vehicles.reduce((s, v) => s + (v.def.motor ? Math.min(v.def.motor.stallForceN, v.def.motor.grip * massOf(v) * PHYSICS.gravity) : 0), 0);
+    return weight ? pull / weight : 0;
+  }
+
+  /** Whether a job train should keep off a heading because a train like it stalled climbing there. */
+  tooSteep(train: Train, heading: string): boolean {
+    if (train.job === 'free') return false;
+    const ratio = this.steep.get(heading);
+    return ratio !== undefined && this.climbRatio(train) <= ratio * 1.02;
   }
 
   // ---- autoroute ------------------------------------------------------------
@@ -514,8 +544,8 @@ export class TrainSim {
    * A standard train for a job (engine, tender and cars) put on free track,
    * by a place it works at if there's room, and set going. Returns an error message if there's nowhere.
    */
-  addJobTrain(job: JobId, cars?: number): Train | string {
-    const consist = jobConsist(job, cars);
+  addJobTrain(job: JobId, cars?: number, engines?: number): Train | string {
+    const consist = jobConsist(job, cars, engines);
     const name = `${job[0].toUpperCase()}${job.slice(1)} train ${this.nextId}`;
     // Track by the places first, then anywhere, longest pieces first.
     const near = [...this.places.map((p) => p.edgeKey), ...this.accessories.filter((a) => a.kind === 'station').map((a) => a.edgeKey)];
@@ -578,6 +608,7 @@ export class TrainSim {
       lastStop: null,
       dispatch: null,
       waitReason: null,
+      backingOff: false,
     };
     options.speeds?.forEach((v, i) => (train.vehicles[i].v = v));
     this.trains.push(train);
@@ -786,6 +817,8 @@ export class TrainSim {
     for (const a of this.trains) {
       for (const b of this.trains) {
         if (a === b || a.wrecked || b.wrecked) continue;
+        // Two job trains that bump stay two trains, each with its own job.
+        if (a.job !== 'free' && b.job !== 'free') continue;
         for (const endA of ['front', 'back'] as const) {
           for (const endB of ['front', 'back'] as const) {
             const va = endA === 'front' ? a.vehicles[0] : a.vehicles[a.vehicles.length - 1];
@@ -884,6 +917,8 @@ export class TrainSim {
     }
     this.findAccessories();
     this.dispatcher.rebuild();
+    this.steep.clear();
+    this.operator.rebuild();
     return removed;
   }
 
@@ -901,6 +936,7 @@ export class TrainSim {
     if (this.autoroute) this.dispatcher.update();
     const steps = Math.round(Math.min(seconds, 0.1) / PHYSICS.dt);
     if (this.useEconomy) this.economy.tick(steps * PHYSICS.dt);
+    if (this.useEconomy) this.operator.tick(steps * PHYSICS.dt);
     this.jobClock -= steps * PHYSICS.dt;
     if (this.jobClock <= 0) {
       this.jobClock = JOB_SECONDS;
@@ -993,6 +1029,7 @@ export class TrainSim {
 
     const force = vehicles.map(() => 0);
     const lateral = vehicles.map(() => 0);
+    const boost = this.powerBoost(train);
 
     // Magnets and buffers between neighbours.
     const hold = P.magnetHoldN * (this.realMagnets ? 1 : EASY_MAGNETS.hold);
@@ -1087,9 +1124,10 @@ export class TrainSim {
           const way = train.throttle * v.facing;
           const m = v.def.motor;
           const free = m.freeSpeedMm * (train.odometer < train.slowUntil ? STOPPING.slowFactor : 1);
-          let f = m.stallForceN * (1 - (v.v * way) / free);
-          f = Math.max(-m.stallForceN, Math.min(m.stallForceN, f));
-          const grip = m.grip * weight;
+          const stall = m.stallForceN * boost;
+          let f = stall * (1 - (v.v * way) / free);
+          f = Math.max(-stall, Math.min(stall, f));
+          const grip = m.grip * weight * boost;
           if (Math.abs(f) > grip) {
             f = Math.sign(f) * grip;
             v.slipping = true;
@@ -1160,9 +1198,24 @@ export class TrainSim {
       return;
     }
     if (!this.useEconomy || train.stop || train.hold?.until != null || train.dispatch?.working) return;
-    const going = train.dispatch && train.dispatch.state !== 'arrived' && train.dispatch.dest.kind === 'place' ? train.dispatch.dest.uid : null;
+    // Backing away from trouble: let it get clear before choosing again.
+    if (train.backingOff) {
+      if (train.dispatch && (train.dispatch.state === 'travelling' || train.dispatch.state === 'waiting')) return;
+      train.backingOff = false;
+    }
+    const going = train.dispatch && train.dispatch.state !== 'arrived' && train.dispatch.state !== 'no-route' && train.dispatch.dest.kind === 'place' ? train.dispatch.dest.uid : null;
     const dest = nextStop(train.job, train.consist, this.economy, this.stations, (uid) => this.dispatcher.distanceTo(train, uid, { ahead: true }), train.lastStop);
     train.destination = dest;
+    if (!dest) {
+      // Work it can only get to by backing up: it's shut in a loop it can't
+      // leave going this way round (a train trap), or up a line with no way
+      // on. Back out to it, rather than go round and round for ever.
+      const back = nextStop(train.job, train.consist, this.economy, this.stations, (uid) => this.dispatcher.distanceTo(train, uid), train.lastStop);
+      if (back && (back === going || !this.routeTo(train.id, { kind: 'place', uid: back }, { keepRunning: true }))) {
+        train.destination = back;
+        return;
+      }
+    }
     if (dest === going) return;
     if (!dest) {
       // Nothing to do: on round to the next station, keeping to the main line rather than
@@ -1348,8 +1401,29 @@ export class TrainSim {
     if (train.stillFor >= PHYSICS.stallSeconds && train.status.kind !== 'stuck') {
       const stuck = this.diagnose(train);
       train.status = stuck;
-      this.notice(train, stuck.message, stuck.at);
+      this.notice(train, stuck.message, stuck.at, stuck.stuck);
     }
+  }
+
+  /** How many times its usual pull each of a train's engines gives: job trains get more with more cars, up to a limit. */
+  powerBoost(train: Train): number {
+    if (!this.jobPower || train.job === 'free') return 1;
+    const cars = train.vehicles.filter((v) => !v.def.motor && v.def.look !== 'tender').length;
+    const engines = train.vehicles.filter((v) => v.def.motor).length || 1;
+    return Math.min(JOB_POWER.most, Math.max(1, cars / engines / JOB_POWER.carsPerEngine));
+  }
+
+  /**
+   * Couple another engine on a stalled train, like the one it has, at the
+   * end its engine is (the front if neither), with full stores. Returns an error message if it won't fit.
+   */
+  addEngine(id: number): string | null {
+    const train = this.train(id);
+    if (!train) return 'That train has gone.';
+    const engine = train.consist.find((c) => getStock(c.stockId).motor)?.stockId ?? JOB_TRAIN.engine;
+    const atBack = !getStock(train.consist[0].stockId).motor && !!getStock(train.consist[train.consist.length - 1].stockId).motor;
+    const end = atBack ? 'back' : 'front';
+    return this.attach(id, end, engine);
   }
 
   /** Why a train with its motor on isn't moving. */
@@ -1674,8 +1748,8 @@ export class TrainSim {
     this.notice(train, message, at);
   }
 
-  private notice(train: Train, message: string, at: Vec2): void {
-    this.notices.push({ trainId: train.id, message, at, time: this.time });
+  notice(train: Train, message: string, at: Vec2, stuck?: StuckKind): void {
+    this.notices.push({ trainId: train.id, message, at, time: this.time, stuck });
     if (this.notices.length > 20) this.notices.shift();
   }
 

@@ -29,6 +29,8 @@ const REFRESH_MS = 400;
 export interface EconomyHost {
   /** Put a standard train for a job on the track. */
   addJobTrain(job: JobId): void;
+  /** Switch hands-off running on or off. */
+  runByItself(on: boolean): void;
 }
 
 export class EconomyView {
@@ -50,6 +52,7 @@ export class EconomyView {
     private readonly host: EconomyHost,
   ) {
     const on = el('input', { type: 'checkbox', checked: sim.useEconomy, onchange: () => (sim.useEconomy = on.checked) });
+    const auto = el('input', { type: 'checkbox', checked: sim.operator.on, onchange: () => host.runByItself(auto.checked) });
     this.carsInput = el('input', {
       type: 'number', min: '1', max: '8', value: String(JOB_TRAIN.cars), class: 'ec-cars',
       onchange: () => (JOB_TRAIN.cars = Math.max(1, Math.min(8, Math.round(Number(this.carsInput.value)) || 3))),
@@ -65,6 +68,10 @@ export class EconomyView {
       el('div', { class: 'ec-jobs' }, ...JOBS.filter((j) => j.id !== 'free').map(add)),
       el('label', { class: 'ec-row' }, 'Engine, tender and ', this.carsInput, ' cars'),
       el('label', { class: 'tr-check', title: 'Places make goods only while staffed, and keep what trains bring. Off, every place has everything and needs nobody.' }, on, ' Places need goods and workers'),
+      el('label', {
+        class: 'tr-check',
+        title: 'Puts on job trains for whatever places need, as many as the track has room for. Couples on another engine when one stalls, lifts off trains that come off the rails or jam, and tops up any that run dry. Workers stay longer on big layouts.',
+      }, auto, ' Run the jobs by themselves'),
       el('h3', { textContent: 'Needs' }),
       this.needList,
       el('details', { class: 'ec-how' },
