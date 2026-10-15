@@ -59,6 +59,7 @@ body.carrying-train, body.carrying-train * { cursor: grabbing !important; }
 .tr-hint { margin: 12px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .tr-toast { position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%); max-width: min(520px, calc(100% - 32px)); padding: 8px 14px; background: #fff4e5; border: 1px solid #f2c894; border-radius: 12px; box-shadow: var(--shadow); font-size: 13px; font-weight: 600; text-align: center; pointer-events: none; z-index: 3; }
 .tr-toast[hidden] { display: none; }
+.tr-toast button { pointer-events: auto; margin-left: 6px; padding: 3px 10px; font: inherit; color: #fff; background: var(--accent, #1f9d55); border: 0; border-radius: 8px; cursor: pointer; }
 #trains-button[aria-pressed='true'] { background: var(--accent-soft, #e3f3ea); }
 
 @media (max-width: 700px) {
