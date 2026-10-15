@@ -176,6 +176,36 @@ describe('generating a section', () => {
     });
   });
 
+  it('reaches a picked end on a play table without getting in its own way', { timeout: 30000 }, () => {
+    const table = getEnvironment('table');
+    const blocked = (layout: Layout) => offArea(layout, table)?.uids ?? [];
+    let layout = addPiece(EMPTY_LAYOUT, 'straight-long', { x: -400, y: 150, angle: 0 }).layout;
+    layout = addPiece(layout, 'straight-long', { x: 300, y: -200, angle: Math.PI / 2 }).layout;
+    const [p, q] = layout.pieces;
+    const start = worldEnds(p).find((e) => e.connectorId === 'b')!;
+    const goal = worldEnds(q).find((e) => e.connectorId === 'b')!;
+    for (const seed of [1, 2, 3, 4]) {
+      const section = generateSection(layout, { pieces: 14, seed }, { start, goal, blocked, budgetMs: 3000 })!;
+      expect(section.closed).toBe(true);
+      expect(blocked(section.layout)).toEqual([]);
+      expectSound(section.layout);
+    }
+  });
+
+  it("leaves an open run's end with room to build on from", { timeout: 30000 }, () => {
+    // Section after section on from the last one's end: none may stop facing track or the edge, with nowhere to go next.
+    for (const seed of [1, 2]) {
+      let layout = EMPTY_LAYOUT;
+      for (let step = 0; step < 4; step++) {
+        const ends = openEnds(layout);
+        const section = generateSection(layout, { pieces: 14, seed: seed * 10 + step }, { start: ends[ends.length - 1], at: { x: 0, y: 0 }, budgetMs: 4000 });
+        expect(section?.laid).toBe(14);
+        layout = section!.layout;
+      }
+      expectSound(layout);
+    }
+  });
+
   it('lays long sections quickly', () => {
     const t = performance.now();
     const section = generateSection(EMPTY_LAYOUT, { pieces: 80, switches: 3, stops: 3, climb: 'over', seed: 12 })!;
