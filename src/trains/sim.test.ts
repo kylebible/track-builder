@@ -4,6 +4,7 @@ import { addPiece, EMPTY_LAYOUT, extendFrom, transformPieces, type EndRef, type 
 import { TrackNetwork } from './network';
 import { TrainSim, type Train } from './sim';
 import { attracts, type ConsistEntry } from './stock';
+import { jobConsist } from './jobs';
 
 /** Keep adding pieces from the open end the last one left. */
 function build(start: string, rest: string[]): Layout {
@@ -226,5 +227,47 @@ describe('building trains on the track', () => {
     sim.turnVehicle(train.id, 1);
     expect(train.consist[1].reversed).toBe(true);
     expect(train.couplings[0].attract).toBe(false);
+  });
+
+  describe('job trains outside Basic mode', () => {
+    const loop = () => build('straight-long', [...curves('straight-long', 12), ...curves('curve-short', 4), ...curves('straight-long', 13), ...curves('curve-short', 4)]);
+    function jobTrain(cars: number, jobPower: boolean) {
+      const sim = new TrainSim(loop());
+      Object.assign(sim, { realMagnets: false, keepCoupled: true, useSupplies: false, jobPower });
+      const train = sim.addTrain(jobConsist('coal', cars), { edgeKey: 'p1:0', s: 100, reversed: false }, 'Coal train', 'coal');
+      if (typeof train === 'string') throw new Error(train);
+      sim.setThrottle(train.id, 1);
+      return { sim, train };
+    }
+
+    it('pull harder with more cars, so a train that stalls on its own engine gets round', { timeout: 30000 }, () => {
+      const weak = jobTrain(16, false);
+      run(weak.sim, weak.train, 60);
+      expect(weak.train.status).toMatchObject({ kind: 'stuck', stuck: 'stalled' });
+      expect(weak.sim.notices.at(-1)?.stuck).toBe('stalled');
+
+      const strong = jobTrain(16, true);
+      expect(strong.sim.powerBoost(strong.train)).toBeGreaterThan(1);
+      run(strong.sim, strong.train, 60);
+      expect(strong.train.status.kind).toBe('running');
+    });
+
+    it('a stalled train gets going again with an engine added at the front', { timeout: 30000 }, () => {
+      const { sim, train } = jobTrain(20, true);
+      run(sim, train, 60);
+      expect(train.status).toMatchObject({ kind: 'stuck', stuck: 'stalled' });
+      expect(sim.addEngine(train.id)).toBeNull();
+      expect(train.consist.slice(0, 2).map((c) => c.stockId)).toEqual(['steam-engine', 'steam-engine']);
+      expect(attracts(train.consist[0], train.consist[1])).toBe(true);
+      run(sim, train, 20);
+      expect(train.status.kind).toBe('running');
+      expect(train.couplings[0].coupled).toBe(true);
+    });
+
+    it('free trains keep their usual pull', () => {
+      const { sim, train } = jobTrain(20, true);
+      sim.setJob(train.id, 'free');
+      expect(sim.powerBoost(train)).toBe(1);
+    });
   });
 });
