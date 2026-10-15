@@ -1,5 +1,7 @@
-import type { Vec2 } from '../geometry/pose';
-import type { Edge, TrackNetwork } from './network';
+import { poseAt } from '../geometry/path';
+import { distance, type Vec2 } from '../geometry/pose';
+import * as D from '../pieces/dimensions';
+import { edgeHeight, type Edge, type TrackNetwork } from './network';
 import type { Train, TrainSim } from './sim';
 import { findTraps, wayKey, type TrapReport } from './traps';
 
@@ -31,6 +33,13 @@ export const DISPATCH = {
   sectionMm: 6000,
   /** How far down the other way at a switch to look for trains before taking it. */
   clearLookMm: 300,
+  /**
+   * Closest two track centrelines can come with trains on both: a 34 mm
+   * wide car each side and a little room. Double track (46 mm apart) and
+   * passing loops (50) are clear; the two ways out of a switch only part
+   * this far some way along it.
+   */
+  clearMm: 42,
   /** Within this of the spot counts as arrived. */
   arriveMm: 1.5,
 };
@@ -94,6 +103,19 @@ interface Way extends Heading {
   index: number;
 }
 
+/** Path ends this close count as meeting (joined, or a gap the wheels bridge). */
+const GAP_JOIN_MM = 13;
+/** Half the longest car: how far along the track a car's body reaches from a point under it. */
+const REACH_MM = 70;
+
+/** A point on a track's centreline, with the lowest and highest a car over it can stand (on a ramp, one end is lower). */
+type Sample = Vec2 & { z: number; lo: number; hi: number };
+
+/** Whether cars over two points can be at heights too close for one to pass over the other. */
+const sameLevel = (a: Sample, b: Sample) => a.lo < b.hi + D.HEADROOM && b.lo < a.hi + D.HEADROOM;
+/** The same, for a car standing at height `z`. */
+const atLevel = (z: number, q: Sample) => q.lo - D.HEADROOM < z && z < q.hi + D.HEADROOM;
+
 export const headingKey = (h: Heading) => `${h.edge.key}>${h.leave}`;
 /** Distance from `s` along an edge's path to the end a heading leaves through. */
 const toLeave = (h: Heading, s: number) => (h.leave === 1 ? h.edge.length - s : s);
@@ -107,9 +129,69 @@ export class RouteGraph {
   readonly switchUids: Set<string>;
   private trapReport: TrapReport | null = null;
 
+  /**
+   * Pieces too close together for trains on both to pass, by uid: lines
+   * that run side by side or meet without a joint between them. (Pieces
+   * joined end to end are left out: where they meet, `standOff` keeps a
+   * waiting train back from the frog.)
+   */
+  readonly conflicts = new Map<string, Set<string>>();
+
   constructor(readonly network: TrackNetwork) {
     this.live = this.findLive();
+    this.findConflicts();
     this.switchUids = new Set(network.switches().map((sw) => sw.uid));
+  }
+
+  private findConflicts(): void {
+    const C = DISPATCH.clearMm;
+    const edges = this.network.edges.map((edge) => {
+      const pts = this.samples(edge);
+      const xs = pts.map((p) => p.x);
+      const ys = pts.map((p) => p.y);
+      return { edge, pts, box: [Math.min(...xs) - C, Math.min(...ys) - C, Math.max(...xs) + C, Math.max(...ys) + C], ends: [pts[0], pts[pts.length - 1]] };
+    });
+    const joined = (a: (typeof edges)[number], b: (typeof edges)[number]) => a.ends.some((p) => b.ends.some((q) => distance(p, q) < GAP_JOIN_MM));
+    // Pieces touching end to end, through any of their paths.
+    const neighbours = new Set<string>();
+    for (const a of edges) for (const b of edges) if (a.edge.uid < b.edge.uid && joined(a, b)) neighbours.add(`${a.edge.uid}|${b.edge.uid}`);
+    for (let i = 0; i < edges.length; i++) {
+      for (let j = i + 1; j < edges.length; j++) {
+        const a = edges[i];
+        const b = edges[j];
+        if (a.edge.uid === b.edge.uid) continue;
+        const [u, v] = a.edge.uid < b.edge.uid ? [a.edge.uid, b.edge.uid] : [b.edge.uid, a.edge.uid];
+        if (neighbours.has(`${u}|${v}`) || this.conflicts.get(u)?.has(v)) continue;
+        if (a.box[0] > b.box[2] - C || b.box[0] > a.box[2] - C || a.box[1] > b.box[3] - C || b.box[1] > a.box[3] - C) continue;
+        const close = a.pts.some((p) => b.pts.some((q) => sameLevel(p, q) && distance(p, q) < C));
+        if (!close) continue;
+        for (const [x, y] of [[u, v], [v, u]]) {
+          if (!this.conflicts.has(x)) this.conflicts.set(x, new Set());
+          this.conflicts.get(x)!.add(y);
+        }
+      }
+    }
+  }
+
+  private readonly sampled = new Map<string, Sample[]>();
+
+  /** Points along an edge's centreline every few mm, start to end, with the track height and the height range of a car over each. */
+  samples(edge: Edge): Sample[] {
+    let points = this.sampled.get(edge.key);
+    if (!points) {
+      const n = Math.max(1, Math.ceil(edge.length / 6));
+      const step = edge.length / n;
+      const zs: number[] = [];
+      for (let i = 0; i <= n; i++) zs.push(edgeHeight(edge, step * i));
+      const reach = Math.round(REACH_MM / Math.max(step, 1e-6));
+      points = zs.map((z, i) => {
+        const p = poseAt(edge.path, step * i);
+        const near = zs.slice(Math.max(0, i - reach), i + reach + 1);
+        return { x: p.x, y: p.y, z, lo: Math.min(...near), hi: Math.max(...near) };
+      });
+      this.sampled.set(edge.key, points);
+    }
+    return points;
   }
 
   /** Loops a train can be shut in, and the ways into them (see traps.ts), worked out when first asked. */
@@ -552,7 +634,9 @@ export class Dispatcher {
     // from one passing loop to the next. A train never waits halfway along
     // single track, where one coming the other way could meet it head on.
     const speed = Math.max(...train.vehicles.map((v) => Math.abs(v.v)));
-    const need = Math.min((speed * speed) / (2 * DISPATCH.brake) + speed * 0.1 + DISPATCH.marginMm, travel + 20);
+    const stopping = (speed * speed) / (2 * DISPATCH.brake) + speed * 0.1;
+    // Never less than it takes to stop: lining up for work at its destination can carry it past the spot.
+    const need = Math.max(stopping + DISPATCH.gapMm, Math.min(stopping + DISPATCH.marginMm, travel + 20));
     const sticky = new Map<string, number>();
     let h: Heading = start;
     let d = remaining;
@@ -588,8 +672,15 @@ export class Dispatcher {
         // nose to nose with it halfway along, so it can come off the line there and pass.
         const back = gate && this.coming(holder, pick) && gate.d - DISPATCH.gapMm >= (speed * speed) / (2 * DISPATCH.brake) ? gate : null;
         if (back) for (const uid of order.splice(back.from)) reserved.delete(uid);
-        this.stopAt(control, f, dir, (back ? back.d : d) - DISPATCH.gapMm);
+        this.stopAt(control, f, dir, back ? back.d - DISPATCH.gapMm : d - this.standOff(train, h, pick));
         train.waitReason = `Waiting for ${this.sim.train(holder)?.name ?? 'another train'}`;
+        break;
+      }
+      // Track newly taken on must also be clear of trains standing beside it, hanging over it where lines meet.
+      const blocker = holder === undefined ? (this.besideHeld(train, pick.edge.uid) ?? this.fouledBy(train, pick.edge)) : null;
+      if (blocker !== null) {
+        this.stopAt(control, f, dir, d - this.standOff(train, h, pick));
+        train.waitReason = `Waiting for ${this.sim.train(blocker)?.name ?? 'another train'}`;
         break;
       }
       if (this.graph.switchUids.has(pick.edge.uid) && pick.edge.uid !== h.edge.uid) gate = { d, from: order.length };
@@ -654,6 +745,61 @@ export class Dispatcher {
       }
     }
     return best;
+  }
+
+  /** Another train holding a piece too close beside `uid` to pass, or null. */
+  private besideHeld(train: Train, uid: string): number | null {
+    for (const near of this.graph.conflicts.get(uid) ?? []) {
+      const holder = this.holds.get(near);
+      if (holder !== undefined && holder !== train.id) return holder;
+    }
+    return null;
+  }
+
+  /**
+   * Another train with a car close enough to `edge` to be hit by a train
+   * running along it, or null. Trains a level apart pass clear.
+   */
+  private fouledBy(train: Train, edge: Edge): number | null {
+    const points = this.graph.samples(edge);
+    for (const other of this.sim.trains) {
+      if (other === train) continue;
+      for (const v of other.vehicles) {
+        for (const p of [v.geo.center, v.geo.aheadFace, v.geo.behindFace]) {
+          if (distance(p, points[0]) > edge.length + DISPATCH.clearMm) continue;
+          for (const q of points) {
+            if (distance(p, q) < DISPATCH.clearMm && atLevel(v.geo.z, q)) return other.id;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * How far short of the end of `h` to stop, waiting to run on into `next`:
+   * the usual gap, or further back where the end of `h` is too close to
+   * the other ways through the piece ahead (the frog of a switch two lines
+   * run into) or to another train's cars.
+   */
+  private standOff(train: Train, h: Heading, next: Way): number {
+    const own = this.graph.samples(h.edge);
+    const end = own[h.leave === 1 ? own.length - 1 : 0];
+    const others = this.sim.network.edges.filter(
+      (e) => e.uid === next.edge.uid && e !== next.edge && ([0, 1] as const).every((k) => distance(poseAt(e.path, k ? e.length : 0), end) > 1),
+    );
+    const obstacles: Sample[] = others.flatMap((e) => this.graph.samples(e));
+    for (const other of this.sim.trains) {
+      if (other === train) continue;
+      for (const v of other.vehicles) for (const p of [v.geo.center, v.geo.aheadFace, v.geo.behindFace]) obstacles.push({ x: p.x, y: p.y, z: v.geo.z, lo: v.geo.z, hi: v.geo.z });
+    }
+    const near = obstacles.filter((q) => distance(q, end) < DISPATCH.clearMm + 300 && sameLevel(q, end));
+    const most = Math.min(h.edge.length, 300);
+    for (let x = DISPATCH.gapMm; x < most; x += 3) {
+      const p = poseAt(h.edge.path, h.leave === 1 ? h.edge.length - x : x);
+      if (near.every((q) => distance(p, q) >= DISPATCH.clearMm)) return x;
+    }
+    return most;
   }
 
   /**
