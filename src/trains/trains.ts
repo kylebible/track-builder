@@ -8,7 +8,7 @@ import { toWorld } from '../render/pieceMesh';
 import { cabPose, travelWay } from './cab';
 import { cargoCount, getStock, STOCK, supplyLevel, type CargoKind, type StockDef } from './stock';
 import { edgeGrade, edgeHeight } from './network';
-import { TrainSim, type StuckKind, type Train, type VehicleGeometry } from './sim';
+import { TrainSim, type Notice, type StuckKind, type Train, type VehicleGeometry } from './sim';
 import { AXLE_HEIGHT, buildVehicle, showLoad } from './trainMesh';
 import { AccessoryView } from './accessoryView';
 import { EconomyView } from './economyView';
@@ -41,6 +41,7 @@ export interface ViewControls {
 
 const SPEEDS = [1, 2, 4] as const;
 const KEEP_COUPLED_KEY = 'track-builder:keep-coupled';
+const HANDS_OFF_KEY = 'track-builder:jobs-run-themselves';
 
 function loadFlag(key: string): boolean {
   try {
@@ -267,7 +268,11 @@ export class Trains {
     this.sim = new TrainSim(this.layout);
     // Basic mode has real magnets; otherwise they're forgiving.
     this.sim.realMagnets = MODE.basic;
-    onBasicMode((basic) => (this.sim.realMagnets = basic));
+    this.sim.jobPower = !MODE.basic;
+    onBasicMode((basic) => {
+      this.sim.realMagnets = basic;
+      this.sim.jobPower = !basic;
+    });
     this.sim.keepCoupled = loadFlag(KEEP_COUPLED_KEY);
     this.accessories = new AccessoryView(this.sim, host.pieceObjects);
     this.root.add(this.vehiclesRoot, this.leversRoot, this.markersRoot, this.haloRoot, this.accessories.root);
@@ -332,7 +337,15 @@ export class Trains {
       checked: this.sim.keepCoupled,
       onchange: () => saveFlag(KEEP_COUPLED_KEY, (this.sim.keepCoupled = keepCoupled.checked)),
     });
-    this.economyView = new EconomyView(this.sim, this.hud, camera, container, { addJobTrain: (job) => this.addJobTrain(job) });
+    this.sim.operator.setOn(loadFlag(HANDS_OFF_KEY));
+    this.economyView = new EconomyView(this.sim, this.hud, camera, container, {
+      addJobTrain: (job) => this.addJobTrain(job),
+      runByItself: (on) => {
+        this.sim.operator.setOn(on);
+        saveFlag(HANDS_OFF_KEY, on);
+        if (on) this.setPaused(false);
+      },
+    });
     this.autorouteBox = el('input', { type: 'checkbox', checked: this.sim.autoroute, onchange: () => this.sim.setAutoroute(this.autorouteBox.checked) });
     this.panel = el(
       'section',
@@ -436,10 +449,33 @@ export class Trains {
     this.say(`${train.name} is on its way. ${getJob(job).blurb}`);
   }
 
-  private say(message: string): void {
-    this.toast.textContent = message;
+  /** Show a message for a few seconds, with a button to act on it if `action` is given. */
+  private say(message: string, action?: { label: string; run: () => void }): void {
+    this.toast.replaceChildren(message);
+    if (action) {
+      const button = el('button', { type: 'button', textContent: action.label, onclick: () => {
+        this.toast.hidden = true;
+        action.run();
+      } });
+      this.toast.append(' ', button);
+    }
     this.toast.hidden = false;
-    this.toastUntil = performance.now() + 4500;
+    this.toastUntil = performance.now() + (action ? 9000 : 4500);
+  }
+
+  /** A stalled train's notice, offering another engine to help it along. */
+  private sayStalled(notice: Notice): void {
+    const train = this.sim.train(notice.trainId);
+    if (!train?.vehicles.some((v) => v.def.motor)) return this.say(notice.message);
+    this.say(notice.message, {
+      label: 'Add an engine',
+      run: () => {
+        const error = this.sim.addEngine(train.id);
+        if (error) return this.say(error);
+        const engines = train.vehicles.filter((v) => v.def.motor).length;
+        this.say(`${train.name} has ${engines} engines now.`);
+      },
+    });
   }
 
   private updateLeverVisibility(): void {
@@ -1088,8 +1124,10 @@ export class Trains {
     this.economyView.update(time, !this.ride && (this.open || this.sim.trains.length > 0));
     const notices = this.sim.notices;
     if (notices.length && notices[notices.length - 1].time !== this.noticesSeen) {
-      this.noticesSeen = notices[notices.length - 1].time;
-      this.say(notices[notices.length - 1].message);
+      const notice = notices[notices.length - 1];
+      this.noticesSeen = notice.time;
+      if (notice.stuck === 'stalled' || notice.stuck === 'slipping') this.sayStalled(notice);
+      else this.say(notice.message);
     }
     if (!this.toast.hidden && performance.now() > this.toastUntil) this.toast.hidden = true;
   }

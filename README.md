@@ -111,6 +111,14 @@ types" apart from the Brio letters' lengths and angles from the guide.
   two pegs or two holes meeting, track running into other track, and open
   ends. Tap an item to fly to it; problems show as red rings while the
   check is open. Thresholds live in `src/planning/check.ts`.
+  It also finds **train traps** (`src/trains/traps.ts`): a way at a switch
+  that shuts a train in a loop it can never leave, like a loop joined on by
+  a switch whose trunk faces into it. A train backs out at a buffer stop
+  and can be turned on a turntable, so those count as ways out. **Add a
+  turn-back siding** swaps a straight on the trapped loop for a switch with
+  a short siding and buffer stop (`src/planning/trapFix.ts`). Generate
+  never makes a new trap when another way joins up, and Fill gap warns when
+  joining two ends would make one.
 - **Save & share**: the layout saves in the browser as you build. Download
   a layout file, open one, start afresh (undo brings the old layout back),
   or copy a share link. The link carries the whole layout in its `#layout=`
@@ -194,7 +202,9 @@ taken track, a train takes the other way if that one is free and leads on
 (not into a siding), so trains pass each other on passing loops, going
 the same way or opposite ways. With nothing set, it follows the levers;
 levers no train has reserved still change with a tap. It also stops a
-train before it runs off an open end.
+train before it runs off an open end, and never takes a way into a train
+trap when another way leads on. A job train with work it can only reach
+backing up (shut in a trap, say) backs out to it.
 
 **Go to** in a train's controls sends it to a station, the cargo loader, a
 crane or a trackside place by the shortest way, setting switches as it

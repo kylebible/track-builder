@@ -1,7 +1,10 @@
-import type { Vec2 } from '../geometry/pose';
+import { poseAt } from '../geometry/path';
+import { distance, type Vec2 } from '../geometry/pose';
+import * as D from '../pieces/dimensions';
 import { defOf } from '../layout/layout';
-import type { Edge, TrackNetwork } from './network';
+import { edgeHeight, type Edge, type TrackNetwork } from './network';
 import type { Train, TrainSim } from './sim';
+import { findTraps, wayKey, type TrapReport } from './traps';
 
 // Autorouting: trains that set the switches ahead of themselves and wait for
 // each other instead of colliding. Each piece of track is a block. Every
@@ -37,6 +40,13 @@ export const DISPATCH = {
   sectionMm: 6000,
   /** How far down the other way at a switch to look for trains before taking it. */
   clearLookMm: 300,
+  /**
+   * Closest two track centrelines can come with trains on both: a 34 mm
+   * wide car each side and a little room. Double track (46 mm apart) and
+   * passing loops (50) are clear; the two ways out of a switch only part
+   * this far some way along it.
+   */
+  clearMm: 42,
   /** Within this of the spot counts as arrived. */
   arriveMm: 1.5,
 };
@@ -66,6 +76,8 @@ export interface RouteOptions {
   keepRunning?: boolean;
   /** Only go the way its engines face, never backing up. */
   ahead?: boolean;
+  /** Only back up, the opposite way to the way its engines face. */
+  back?: boolean;
 }
 
 /** A train that got where it was sent. */
@@ -98,6 +110,19 @@ interface Way extends Heading {
   index: number;
 }
 
+/** Path ends this close count as meeting (joined, or a gap the wheels bridge). */
+const GAP_JOIN_MM = 13;
+/** Half the longest car: how far along the track a car's body reaches from a point under it. */
+const REACH_MM = 70;
+
+/** A point on a track's centreline, with the lowest and highest a car over it can stand (on a ramp, one end is lower). */
+type Sample = Vec2 & { z: number; lo: number; hi: number };
+
+/** Whether cars over two points can be at heights too close for one to pass over the other. */
+const sameLevel = (a: Sample, b: Sample) => a.lo < b.hi + D.HEADROOM && b.lo < a.hi + D.HEADROOM;
+/** The same, for a car standing at height `z`. */
+const atLevel = (z: number, q: Sample) => q.lo - D.HEADROOM < z && z < q.hi + D.HEADROOM;
+
 export const headingKey = (h: Heading) => `${h.edge.key}>${h.leave}`;
 /** Distance from `s` along an edge's path to the end a heading leaves through. */
 const toLeave = (h: Heading, s: number) => (h.leave === 1 ? h.edge.length - s : s);
@@ -112,8 +137,19 @@ export class RouteGraph {
   /** Switches whose branch curves away: a train standing near one fouls the other line. */
   readonly foulUids: Set<string>;
 
+  private trapReport: TrapReport | null = null;
+
+  /**
+   * Pieces too close together for trains on both to pass, by uid: lines
+   * that run side by side or meet without a joint between them. (Pieces
+   * joined end to end are left out: where they meet, `standOff` keeps a
+   * waiting train back from the frog.)
+   */
+  readonly conflicts = new Map<string, Set<string>>();
+
   constructor(readonly network: TrackNetwork) {
     this.live = this.findLive();
+    this.findConflicts();
     this.switchUids = new Set(network.switches().map((sw) => sw.uid));
     this.foulUids = new Set(
       network.layout.pieces
@@ -125,6 +161,67 @@ export class RouteGraph {
         })
         .map((p) => p.uid),
     );
+  }
+
+  private findConflicts(): void {
+    const C = DISPATCH.clearMm;
+    const edges = this.network.edges.map((edge) => {
+      const pts = this.samples(edge);
+      const xs = pts.map((p) => p.x);
+      const ys = pts.map((p) => p.y);
+      return { edge, pts, box: [Math.min(...xs) - C, Math.min(...ys) - C, Math.max(...xs) + C, Math.max(...ys) + C], ends: [pts[0], pts[pts.length - 1]] };
+    });
+    const joined = (a: (typeof edges)[number], b: (typeof edges)[number]) => a.ends.some((p) => b.ends.some((q) => distance(p, q) < GAP_JOIN_MM));
+    // Pieces touching end to end, through any of their paths.
+    const neighbours = new Set<string>();
+    for (const a of edges) for (const b of edges) if (a.edge.uid < b.edge.uid && joined(a, b)) neighbours.add(`${a.edge.uid}|${b.edge.uid}`);
+    for (let i = 0; i < edges.length; i++) {
+      for (let j = i + 1; j < edges.length; j++) {
+        const a = edges[i];
+        const b = edges[j];
+        if (a.edge.uid === b.edge.uid) continue;
+        const [u, v] = a.edge.uid < b.edge.uid ? [a.edge.uid, b.edge.uid] : [b.edge.uid, a.edge.uid];
+        if (neighbours.has(`${u}|${v}`) || this.conflicts.get(u)?.has(v)) continue;
+        if (a.box[0] > b.box[2] - C || b.box[0] > a.box[2] - C || a.box[1] > b.box[3] - C || b.box[1] > a.box[3] - C) continue;
+        const close = a.pts.some((p) => b.pts.some((q) => sameLevel(p, q) && distance(p, q) < C));
+        if (!close) continue;
+        for (const [x, y] of [[u, v], [v, u]]) {
+          if (!this.conflicts.has(x)) this.conflicts.set(x, new Set());
+          this.conflicts.get(x)!.add(y);
+        }
+      }
+    }
+  }
+
+  private readonly sampled = new Map<string, Sample[]>();
+
+  /** Points along an edge's centreline every few mm, start to end, with the track height and the height range of a car over each. */
+  samples(edge: Edge): Sample[] {
+    let points = this.sampled.get(edge.key);
+    if (!points) {
+      const n = Math.max(1, Math.ceil(edge.length / 6));
+      const step = edge.length / n;
+      const zs: number[] = [];
+      for (let i = 0; i <= n; i++) zs.push(edgeHeight(edge, step * i));
+      const reach = Math.round(REACH_MM / Math.max(step, 1e-6));
+      points = zs.map((z, i) => {
+        const p = poseAt(edge.path, step * i);
+        const near = zs.slice(Math.max(0, i - reach), i + reach + 1);
+        return { x: p.x, y: p.y, z, lo: Math.min(...near), hi: Math.max(...near) };
+      });
+      this.sampled.set(edge.key, points);
+    }
+    return points;
+  }
+
+  /** Loops a train can be shut in, and the ways into them (see traps.ts), worked out when first asked. */
+  get traps(): TrapReport {
+    return (this.trapReport ??= findTraps(this));
+  }
+
+  /** Whether going on from `from` to `to` runs into a train trap. */
+  intoTrap(from: Heading, to: Heading): boolean {
+    return this.traps.entering.has(wayKey(headingKey(from), headingKey(to)));
   }
 
   /** The ways on from the end of a heading, or how the track ends there. */
@@ -179,7 +276,7 @@ export class RouteGraph {
     start: Heading,
     remaining: number,
     target: { edgeKey: string; s: number },
-    opts: { cost?: (edge: Edge) => number; fixed?: Map<string, number>; behind?: number } = {},
+    opts: { cost?: (edge: Edge, way: Heading) => number; fixed?: Map<string, number>; behind?: number } = {},
   ): { path: Heading[]; distance: number } | null {
     const cost = opts.cost ?? (() => 0);
     if (start.edge.key === target.edgeKey) {
@@ -203,7 +300,8 @@ export class RouteGraph {
       if (node.cost > (best.get(headingKey(node.h)) ?? Infinity)) continue;
       for (const w of this.ways(node.h).next) {
         if (w.switchKey && opts.fixed?.has(w.switchKey) && opts.fixed.get(w.switchKey) !== w.index) continue;
-        const extra = cost(w.edge);
+        const extra = cost(w.edge, w);
+        if (extra === Infinity) continue;
         if (w.edge.key === target.edgeKey) {
           const into = w.edge.length - toLeave(w, target.s);
           const c = node.cost + extra + into;
@@ -291,6 +389,8 @@ export class Dispatcher {
   graph: RouteGraph;
   /** Which train holds each piece, by piece uid. */
   readonly holds = new Map<string, number>();
+  /** Which way along each piece the train holding it is going, by piece uid. */
+  private readonly holdWays = new Map<string, { trainId: number; heading: string }>();
   /** Trains that got where they were sent, newest last. */
   readonly arrivals: Arrival[] = [];
   private readonly controls = new Map<number, Control>();
@@ -303,12 +403,14 @@ export class Dispatcher {
   rebuild(): void {
     this.graph = new RouteGraph(this.sim.network);
     this.holds.clear();
+    this.holdWays.clear();
     for (const c of this.controls.values()) c.sticky.clear();
   }
 
   /** Let go of everything: autoroute is off. */
   clear(): void {
     this.holds.clear();
+    this.holdWays.clear();
     this.controls.clear();
   }
 
@@ -359,7 +461,7 @@ export class Dispatcher {
     const align = opts.align ?? 'middle';
     // Whichever way round is shorter: on ahead, or backing up.
     let best: { dir: 1 | -1; distance: number } | null = null;
-    for (const dir of opts.ahead ? [facing as 1 | -1] : ([1, -1] as const)) {
+    for (const dir of opts.ahead ? [facing as 1 | -1] : opts.back ? [-facing as 1 | -1] : ([1, -1] as const)) {
       const way = this.wayTo(train, dir, target, align, null);
       if (way && (!best || Math.abs(way.distance) < Math.abs(best.distance))) best = { dir, distance: way.distance };
     }
@@ -373,12 +475,12 @@ export class Dispatcher {
   }
 
   /** How far a train has to go to a place or accessory (by uid), the shorter way (or only ahead), or null if it can't get there. */
-  distanceTo(train: Train, uid: string, opts: { ahead?: boolean } = {}): number | null {
+  distanceTo(train: Train, uid: string, opts: { ahead?: boolean; back?: boolean } = {}): number | null {
     const target = this.target({ kind: 'place', uid });
     if (!target) return null;
     const facing = Math.sign(train.vehicles.reduce((s, v) => s + (v.def.motor ? v.facing : 0), 0)) as 1 | -1 | 0;
     let best: number | null = null;
-    for (const dir of opts.ahead ? (facing ? [facing] : []) : ([1, -1] as const)) {
+    for (const dir of opts.ahead ? (facing ? [facing] : []) : opts.back ? (facing ? [-facing as 1 | -1] : []) : ([1, -1] as const)) {
       const way = this.wayTo(train, dir, target, 'middle', null);
       if (way && (best === null || Math.abs(way.distance) < best)) best = Math.abs(way.distance);
     }
@@ -437,7 +539,7 @@ export class Dispatcher {
     }
     const { start, remaining } = this.startOf(train, dir);
     const plan = this.graph.plan(start, remaining, target, {
-      cost: (e) => (this.heldByOther(e.uid, train.id) || this.turnedAway(e) ? DISPATCH.busyCost : 0),
+      cost: (e, w) => (this.sim.tooSteep(train, headingKey(w)) ? Infinity : this.heldByOther(e.uid, train.id) || this.turnedAway(e) ? DISPATCH.busyCost : 0),
       fixed: control?.sticky,
       behind: align === 'front' ? DISPATCH.arriveMm * 2 : 0,
     });
@@ -477,9 +579,12 @@ export class Dispatcher {
       const { front, back } = span(t);
       // And a switch it stands close enough to foul: nothing else may cross it there.
       const near = (uid: string) => (this.graph.foulUids.has(uid) ? DISPATCH.foulMm - 10 : 2);
-      const uids = new Set(t.route.segments.filter((s) => s.u0 + s.edge.length > back - near(s.edge.uid) && s.u0 < front + near(s.edge.uid)).map((s) => s.edge.uid));
+      const on = t.route.segments.filter((s) => s.u0 + s.edge.length > back - near(s.edge.uid) && s.u0 < front + near(s.edge.uid));
+      const uids = new Set(on.map((s) => s.edge.uid));
       under.set(t.id, uids);
       for (const uid of uids) this.holds.set(uid, t.id);
+      const dir = driveDir(t);
+      if (dir) for (const s of on) this.holdWays.set(s.edge.uid, { trainId: t.id, heading: headingKey({ edge: s.edge, leave: (dir > 0) !== s.reversed ? 1 : 0 }) });
     }
     for (const t of trains) this.lookAhead(t, under);
   }
@@ -551,17 +656,23 @@ export class Dispatcher {
     // from one passing loop to the next. A train never waits halfway along
     // single track, where one coming the other way could meet it head on.
     const speed = Math.max(...train.vehicles.map((v) => Math.abs(v.v)));
-    // Short of the destination is far enough, but lining up the cars that work
-    // there can take the front on by up to a train's length: hold that too.
-    const need = Math.min((speed * speed) / (2 * DISPATCH.brake) + speed * 0.1 + DISPATCH.marginMm, travel + 20 + (front - back));
+    const stopping = (speed * speed) / (2 * DISPATCH.brake) + speed * 0.1;
+    // Never less than it takes to stop: lining up for work at its destination can carry it past the spot,
+    // and the cars that work there can take the front on by up to a train's length: hold that too.
+    const need = Math.max(stopping + DISPATCH.gapMm, Math.min(stopping + DISPATCH.marginMm, travel + 20 + (front - back)));
     const sticky = new Map<string, number>();
     let h: Heading = start;
     let d = remaining;
     let k = 0;
     let split = false;
+    // Where the last switch piece taken on this time starts, and how many pieces had been taken on before it.
+    let gate: { d: number; from: number } | null = null;
+    const order: string[] = [];
     for (;;) {
-      if (d >= need && (d >= DISPATCH.sectionMm || d >= travel + 20)) break;
       const { next, end } = this.graph.ways(h);
+      // Far enough, but never stopping partway along a single line, where a train coming the other way could meet it.
+      const boundary = next.length !== 1 || this.graph.switchUids.has(next[0].edge.uid) || d >= DISPATCH.sectionMm * 4;
+      if (d >= need && (d >= DISPATCH.sectionMm || d >= travel + 20) && boundary) break;
       if (!next.length) {
         if (end === 'open') {
           this.stopAt(control, f, dir, d - DISPATCH.gapMm);
@@ -574,18 +685,32 @@ export class Dispatcher {
       if (next.length > 1) {
         const key = next[0].switchKey!;
         const planned = path && path[k] && headingKey(path[k]) === headingKey(h) && path[k + 1] ? next.find((w) => headingKey(w) === headingKey(path![k + 1])) : undefined;
-        pick = planned ?? next[control.sticky.get(key) ?? this.chooseClear(train, next, key)] ?? next[0];
+        pick = planned ?? next[control.sticky.get(key) ?? this.chooseClear(train, h, next, key)] ?? next[0];
       }
       // Round a loop to its own track.
       if (reserved.has(pick.edge.uid) && d >= need) break;
       const holder = this.holds.get(pick.edge.uid);
       if (holder !== undefined && holder !== train.id) {
-        this.stopAt(control, f, dir, d - (this.graph.foulUids.has(pick.edge.uid) ? DISPATCH.foulMm : DISPATCH.gapMm));
+        // A train coming the other way: wait before the switch that leads onto this line, not
+        // nose to nose with it halfway along, so it can come off the line there and pass.
+        const back = gate && this.coming(holder, pick) && gate.d - DISPATCH.gapMm >= (speed * speed) / (2 * DISPATCH.brake) ? gate : null;
+        if (back) for (const uid of order.splice(back.from)) reserved.delete(uid);
+        this.stopAt(control, f, dir, back ? back.d - DISPATCH.gapMm : d - Math.max(this.standOff(train, h, pick), this.graph.foulUids.has(pick.edge.uid) ? DISPATCH.foulMm : DISPATCH.gapMm));
         train.waitReason = `Waiting for ${this.sim.train(holder)?.name ?? 'another train'}`;
         break;
       }
+      // Track newly taken on must also be clear of trains standing beside it, hanging over it where lines meet.
+      const blocker = holder === undefined ? (this.besideHeld(train, pick.edge.uid) ?? this.fouledBy(train, pick.edge)) : null;
+      if (blocker !== null) {
+        this.stopAt(control, f, dir, d - this.standOff(train, h, pick));
+        train.waitReason = `Waiting for ${this.sim.train(blocker)?.name ?? 'another train'}`;
+        break;
+      }
+      if (this.graph.switchUids.has(pick.edge.uid) && pick.edge.uid !== h.edge.uid) gate = { d, from: order.length };
       this.holds.set(pick.edge.uid, train.id);
+      this.holdWays.set(pick.edge.uid, { trainId: train.id, heading: headingKey(pick) });
       reserved.add(pick.edge.uid);
+      order.push(pick.edge.uid);
       if (pick.switchKey) {
         sticky.set(pick.switchKey, pick.index);
         this.sim.setLever(pick.switchKey, pick.index, next.length);
@@ -616,6 +741,13 @@ export class Dispatcher {
     release();
   }
 
+  /** Whether the train holding a piece is running along it the opposite way to `way`. */
+  private coming(holder: number, way: Heading): boolean {
+    const held = this.holdWays.get(way.edge.uid);
+    if (!held || held.trainId !== holder) return false;
+    return held.heading.startsWith(`${way.edge.key}>`) && held.heading !== headingKey(way);
+  }
+
   private stopAt(control: Control, f: number, dir: 1 | -1, d: number): void {
     const u = f + d * dir;
     if (control.stopFront === null || (u - control.stopFront) * dir < 0) control.stopFront = u;
@@ -638,12 +770,76 @@ export class Dispatcher {
     return best;
   }
 
-  /** At a facing switch with no plan: the lever's way if it's clear, or another way that's clear and leads on. */
-  private chooseClear(train: Train, next: Way[], key: string): number {
+  /** Another train holding a piece too close beside `uid` to pass, or null. */
+  private besideHeld(train: Train, uid: string): number | null {
+    for (const near of this.graph.conflicts.get(uid) ?? []) {
+      const holder = this.holds.get(near);
+      if (holder !== undefined && holder !== train.id) return holder;
+    }
+    return null;
+  }
+
+  /**
+   * Another train with a car close enough to `edge` to be hit by a train
+   * running along it, or null. Trains a level apart pass clear.
+   */
+  private fouledBy(train: Train, edge: Edge): number | null {
+    const points = this.graph.samples(edge);
+    for (const other of this.sim.trains) {
+      if (other === train) continue;
+      for (const v of other.vehicles) {
+        for (const p of [v.geo.center, v.geo.aheadFace, v.geo.behindFace]) {
+          if (distance(p, points[0]) > edge.length + DISPATCH.clearMm) continue;
+          for (const q of points) {
+            if (distance(p, q) < DISPATCH.clearMm && atLevel(v.geo.z, q)) return other.id;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * How far short of the end of `h` to stop, waiting to run on into `next`:
+   * the usual gap, or further back where the end of `h` is too close to
+   * the other ways through the piece ahead (the frog of a switch two lines
+   * run into) or to another train's cars.
+   */
+  private standOff(train: Train, h: Heading, next: Way): number {
+    const own = this.graph.samples(h.edge);
+    const end = own[h.leave === 1 ? own.length - 1 : 0];
+    const others = this.sim.network.edges.filter(
+      (e) => e.uid === next.edge.uid && e !== next.edge && ([0, 1] as const).every((k) => distance(poseAt(e.path, k ? e.length : 0), end) > 1),
+    );
+    const obstacles: Sample[] = others.flatMap((e) => this.graph.samples(e));
+    for (const other of this.sim.trains) {
+      if (other === train) continue;
+      for (const v of other.vehicles) for (const p of [v.geo.center, v.geo.aheadFace, v.geo.behindFace]) obstacles.push({ x: p.x, y: p.y, z: v.geo.z, lo: v.geo.z, hi: v.geo.z });
+    }
+    const near = obstacles.filter((q) => distance(q, end) < DISPATCH.clearMm + 300 && sameLevel(q, end));
+    const most = Math.min(h.edge.length, 300);
+    for (let x = DISPATCH.gapMm; x < most; x += 3) {
+      const p = poseAt(h.edge.path, h.leave === 1 ? h.edge.length - x : x);
+      if (near.every((q) => distance(p, q) >= DISPATCH.clearMm)) return x;
+    }
+    return most;
+  }
+
+  /**
+   * At a facing switch with no plan: the lever's way if it's clear, or
+   * another way that's clear and leads on. Never into a train trap when
+   * there's another way that isn't one.
+   */
+  private chooseClear(train: Train, from: Heading, next: Way[], key: string): number {
     const lever = (this.sim.levers.get(key) ?? 0) % next.length;
-    if (this.isClear(train, next[lever])) return lever;
-    const other = next.findIndex((w, i) => i !== lever && this.graph.live.has(headingKey(w)) && this.isClear(train, w));
-    return other >= 0 ? other : lever;
+    const trap = (w: Way) => this.graph.intoTrap(from, w);
+    const free = (w: Way) => !trap(w) && this.graph.live.has(headingKey(w));
+    if (!trap(next[lever]) && this.isClear(train, next[lever])) return lever;
+    const other = next.findIndex((w, i) => i !== lever && free(w) && this.isClear(train, w));
+    if (other >= 0) return other;
+    // The lever's way is a trap and every other way is busy: wait for one of those instead.
+    const waitFor = trap(next[lever]) ? next.findIndex(free) : -1;
+    return waitFor >= 0 ? waitFor : lever;
   }
 
   /** Whether the way on from `h`, following the levers, is free of other trains for a little way. */

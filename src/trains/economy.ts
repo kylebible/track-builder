@@ -55,6 +55,8 @@ export class Economy {
   readonly sites = new Map<string, Site>();
   /** Whether a pump house at a spot can reach water: null where the scene has no water at all. */
   waterNear: ((at: Vec2, reach: number) => boolean | null) | null = null;
+  /** Shifts last this many times ECONOMY.shiftSeconds: longer on big layouts, so trains can get round in time. */
+  shiftScale = 1;
   /** A seed for staggering shifts, so everyone doesn't leave at once. */
   private seed = 7;
 
@@ -124,7 +126,7 @@ export class Economy {
       const place = site.place;
       // Workers tire whether or not there's work, and stop when they're spent.
       for (let i = site.crew.length - 1; i >= 0; i--) {
-        site.crew[i] -= dt / ECONOMY.shiftSeconds;
+        site.crew[i] -= dt / (ECONOMY.shiftSeconds * this.shiftScale);
         if (site.crew[i] <= 0) {
           site.crew.splice(i, 1);
           site.tired++;

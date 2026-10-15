@@ -551,7 +551,7 @@ function build(layout: Layout, from: EndRef, to: EndRef, run: number[], play: Pl
   if (worst > FILL_SHARE + 0.05) return null;
 
   const added = new Set(uids);
-  const trouble = checkLayout(next, { play }).some((i) => i.kind !== 'open-end' && i.uids.some((u) => added.has(u)));
+  const trouble = checkLayout(next, { play, traps: false }).some((i) => i.kind !== 'open-end' && i.uids.some((u) => added.has(u)));
   if (trouble) return null;
   if (options.blocked && [...options.blocked(next)].some((u) => added.has(u))) return null;
 

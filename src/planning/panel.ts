@@ -8,6 +8,7 @@ import type { Layout } from '../layout/layout';
 import { getEnvironment, inWater, offArea, type EnvironmentId } from '../environments/environments';
 import { MODE } from '../pieces/basic';
 import { checkLayout, notBrio, summarize, type Issue } from './check';
+import { turnBackFixes } from './trapFix';
 import { layoutFromJson, layoutToJson, LayoutFileError, shareUrl, type LayoutFile } from './file';
 import { partsList, partsText } from './parts';
 import { LEVEL_HEIGHT } from '../pieces/dimensions';
@@ -242,9 +243,28 @@ export class PlanningPanel {
       b.append(el('span', '', issue.message));
       b.addEventListener('click', () => this.focus(issue, b));
       item.append(b);
+      if (issue.trap) item.append(this.trapFixButton(issue));
       list.append(item);
     }
     this.checkBody.replaceChildren(...(this.issues.length ? [list] : []));
+  }
+
+  /** A button that frees the trains in a trap with a turn-back siding on its loop. */
+  private trapFixButton(issue: Issue): HTMLButtonElement {
+    const fix = el('button', 'action compact issue-fix', 'Add a turn-back siding');
+    fix.type = 'button';
+    fix.title = 'Swap a straight on the loop for a switch with a short siding and buffer stop, so trapped trains can back out and leave';
+    fix.addEventListener('click', () => {
+      const env = getEnvironment(this.dom.environment());
+      const blocked = (l: Layout) => [...(offArea(l, env)?.uids ?? []), ...(inWater(l, env)?.uids ?? [])];
+      const [found] = turnBackFixes(this.editor.layout, issue.trap!, { blocked });
+      if (!found) {
+        this.editor.flash('There’s no straight on that loop with room for a siding beside it. Try a turntable, or a switch that leads back out.');
+        return;
+      }
+      this.editor.apply(found.layout, found.uids, `${found.label}: trapped trains can back into it and come out the other way round.`);
+    });
+    return fix;
   }
 
   /** Look at one issue: fly there and select what it's about. */

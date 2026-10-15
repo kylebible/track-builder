@@ -145,8 +145,9 @@ export function renderGeneratePanel(panel: HTMLElement, state: GeneratePanelStat
     else if (o.loop && !s.closed) text += '. It couldn’t be closed here, so it’s left open.';
     else if (o.loop && s.uids.length < o.pieces * 0.85) text += `. A loop of ${o.pieces} doesn’t fit here; this is the biggest that did.`;
     else if (lacking) text += '. Not everything asked for fit.';
+    if (s.trapped) text += ' Every way that joins up makes a train trap: the layout check shows how to fix it.';
     result.textContent = text;
-    if (short || missed || (o.loop && !s.closed)) result.dataset.state = 'problem';
+    if (short || missed || (o.loop && !s.closed) || s.trapped) result.dataset.state = 'problem';
   }
 
   const actions = document.createElement('div');

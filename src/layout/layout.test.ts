@@ -6,6 +6,9 @@ import { History } from './history';
 import {
   addPiece,
   canExtend,
+  clearSpotFor,
+  copyPieces,
+  pastePieces,
   dragContext,
   EMPTY_LAYOUT,
   extendFrom,
@@ -265,5 +268,45 @@ describe('history', () => {
     h.undo();
     h.push(addPiece(EMPTY_LAYOUT, 'curve-large', IDENTITY).layout);
     expect(h.canRedo).toBe(false);
+  });
+});
+
+describe('copy and paste', () => {
+  it('a pasted section keeps its joints, gets new uids and sits clear of the original', () => {
+    const { layout, uids } = build('straight-long', ['curve-large', 'curve-large', 'switch-curved']);
+    const clip = copyPieces(layout, new Set(uids));
+    const shift = clearSpotFor(layout, clip);
+    const pasted = pastePieces(layout, clip, shift);
+    expect(pasted.uids).toHaveLength(4);
+    expect(new Set([...uids, ...pasted.uids]).size).toBe(8);
+    // Three joints in each copy, and none between them.
+    expect(findJoints(pasted.layout)).toHaveLength(6);
+    expect(sectionOf(pasted.layout, pasted.uids[0])).toEqual(new Set(pasted.uids));
+  });
+
+  it('pasting raised track keeps it up at its level', () => {
+    const { layout, uids } = build('straight-long', ['straight-long']);
+    const raised = raisePieces(layout, new Set(uids), LEVEL_HEIGHT)!;
+    const pasted = pastePieces(raised, copyPieces(raised, new Set(uids)), { x: 0, y: 500, angle: 0 });
+    for (const uid of pasted.uids) expect(pasted.layout.pieces.find((p) => p.uid === uid)!.z).toBe(LEVEL_HEIGHT);
+  });
+
+  it('pastes centred on a clear spot that is asked for', () => {
+    const { layout, uids } = build('straight-long', []);
+    const clip = copyPieces(layout, new Set(uids));
+    const shift = clearSpotFor(layout, clip, { x: 1000, y: 1000 });
+    const pasted = pastePieces(layout, clip, shift);
+    const ends = openEnds(pasted.layout).filter((e) => pasted.uids.includes(e.uid));
+    const mid = { x: (ends[0].connector.pose.x + ends[1].connector.pose.x) / 2, y: (ends[0].connector.pose.y + ends[1].connector.pose.y) / 2 };
+    expect(mid.x).toBeCloseTo(1000, 6);
+    expect(mid.y).toBeCloseTo(1000, 6);
+  });
+
+  it('steps aside when the spot asked for is taken', () => {
+    const { layout, uids } = build('straight-long', ['straight-long']);
+    const clip = copyPieces(layout, new Set(uids));
+    const shift = clearSpotFor(layout, clip, { x: 100, y: 0 });
+    expect(Math.hypot(shift.x - 0, shift.y)).toBeGreaterThan(200);
+    expect(findJoints(pastePieces(layout, clip, shift).layout)).toHaveLength(2);
   });
 });
