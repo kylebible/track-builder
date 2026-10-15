@@ -171,6 +171,39 @@ describe('train jobs', () => {
     expect(work).toBeNull();
   });
 
+  it('an empty depot does not hide a missing goods source', () => {
+    const sim = new TrainSim(withPlaces('power-station', 'depot'));
+    site(sim, 'power-station').stock.coal = 0;
+    const coalNeed = () => needs(sim.economy, () => true, true).find((n) => n.what === 'coal' && n.uid === site(sim, 'power-station').uid)!;
+    expect(coalNeed().message).toContain('no coal mine');
+    expect(coalNeed().urgent).toBe(true);
+    site(sim, 'depot').stock.coal = 6;
+    expect(coalNeed().message).not.toContain('no coal mine');
+    expect(coalNeed().urgent).toBe(false);
+  });
+
+  it('a train actually unloads surplus into storage, fetches it back, and delivers it when needed', () => {
+    const sim = new TrainSim(withPlaces('coal-mine', 'depot', 'power-station'));
+    sim.useSupplies = false;
+    sim.economy.shiftScale = Infinity;
+    const mine = site(sim, 'coal-mine');
+    const depot = site(sim, 'depot');
+    const power = site(sim, 'power-station');
+    mine.stock.coal = 0;
+    mine.place = { ...mine.place, perMinute: {} };
+    power.stock.coal = power.place.holds!.coal!;
+    power.place = { ...power.place, perMinute: {} };
+    const train = sim.addTrain([car('battery-engine'), car('hopper', { units: 6 })], { edgeKey: 'p1:0', s: 108, reversed: false }, 'Coal', 'coal');
+    if (typeof train === 'string') throw new Error(train);
+    sim.setAutoroute(true);
+    sim.setThrottle(train.id, 1);
+    expect(runUntil(sim, 60, () => depot.stock.coal === 6)).toBe(true);
+    power.stock.coal = 0;
+    expect(runUntil(sim, 90, () => (power.stock.coal ?? 0) >= 6)).toBe(true);
+    expect(depot.stock.coal).toBe(0);
+    expect(train.wrecked).toBe(false);
+  });
+
   it('a coal train keeps the coaling stage stocked from the mine', () => {
     const sim = new TrainSim(withPlaces('coal-mine', null, 'coaling-stage'));
     site(sim, 'coaling-stage').stock.coal = 0;

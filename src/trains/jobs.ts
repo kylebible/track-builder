@@ -35,6 +35,15 @@ export const JOBS: readonly JobDef[] = [
 const byId = new Map(JOBS.map((j) => [j.id, j]));
 export const getJob = (id: JobId): JobDef => byId.get(id)!;
 
+/** A producer can make goods; a storage depot can only supply what it already holds. */
+export const suppliesGoods = (site: Site, kind: CargoKind): boolean =>
+  site.place.store ? unitsOf(site, kind) > 0 : !!(site.place.loads?.includes(kind) || site.place.swaps?.includes(kind));
+
+/** A store takes surplus from producers, but is not a destination for another store's goods. */
+export const takesGoods = (site: Site, kind: CargoKind, sites: readonly Site[]): boolean =>
+  !!(site.place.unloads?.includes(kind) || site.place.swaps?.includes(kind)) &&
+  (!site.place.store || sites.some((s) => !s.place.store && suppliesGoods(s, kind)));
+
 /** The job that carries a cargo. */
 export const JOB_FOR: Record<CargoKind, JobId> = {
   coal: 'coal', water: 'water', milk: 'farm', animals: 'farm', logs: 'timber', crates: 'goods', cars: 'goods', mail: 'mail', passengers: 'workers',
@@ -264,7 +273,7 @@ export interface Need {
 export function needs(economy: Economy, haveJob: (job: JobId) => boolean, hasStation: boolean): Need[] {
   const out: Need[] = [];
   const sites = [...economy.sites.values()];
-  const makers = (kind: CargoKind) => sites.some((s) => s.place.loads?.includes(kind) || (kind === 'mail' && s.place.id === 'post-office'));
+  const makers = (kind: CargoKind) => sites.some((s) => suppliesGoods(s, kind));
   const PLACE_FOR: Partial<Record<CargoKind, string>> = { coal: 'coal mine', water: 'pump house', milk: 'farm', animals: 'farm', logs: 'lumber camp', crates: 'sawmill' , cars: 'toy factory' };
   for (const s of sites) {
     const name = s.place.name;

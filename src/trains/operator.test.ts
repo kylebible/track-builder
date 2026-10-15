@@ -38,6 +38,17 @@ describe('running the jobs by themselves', () => {
     expect(sim.trains).toHaveLength(0);
   });
 
+  it('does not send freight trains to collect goods from an empty storage depot', () => {
+    const sim = new TrainSim(withPlaces('station', 'depot'));
+    expect([...sim.operator.wanted().keys()]).toEqual(['workers']);
+    sim.economy.all('depot')[0].stock.coal = 6;
+    expect([...sim.operator.wanted().keys()]).toEqual(['workers']);
+    // Stored goods can supply a real consumer even when there is no mine.
+    const supplied = new TrainSim(withPlaces('station', 'depot', 'power-station'));
+    supplied.economy.all('depot')[0].stock.coal = 6;
+    expect([...supplied.operator.wanted().keys()].sort()).toEqual(['coal', 'workers']);
+  });
+
   it('puts on trains for the jobs the places have, one at a time, no more than the track has room for', () => {
     const sim = new TrainSim(withPlaces('coal-mine', 'station', 'coaling-stage'));
     sim.operator.setOn(true);
