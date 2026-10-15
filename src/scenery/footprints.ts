@@ -32,6 +32,7 @@ export const MODEL_FOOTPRINTS: Record<string, Footprint> = {
   'sawmill': [-90, 90, 26, 120],
   'toy-factory': [-85, 85, 26, 130],
   'goods-shed': [-95, 95, 26, 110],
+  'depot': [-100, 100, 23, 138],
   'whistle-board': [-8, 8, 18, 42],
   'slow-board': [-8, 8, 17, 43],
 };

@@ -579,7 +579,6 @@ const BUILDERS: Record<EnvironmentId, () => THREE.Group> = {
 export class EnvironmentScene {
   private readonly built = new Map<EnvironmentId, THREE.Group>();
   private shown: THREE.Group | null = null;
-  private look: EnvironmentLook | null = null;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -599,7 +598,6 @@ export class EnvironmentScene {
     this.shown = group;
 
     const look = LOOKS[id];
-    this.look = look;
     this.scene.background = new THREE.Color(look.background);
     this.scene.fog = new THREE.Fog(look.background, look.fog[0], look.fog[1]);
     this.hemisphere.color.set(look.hemisphere[0]);
@@ -609,18 +607,18 @@ export class EnvironmentScene {
   }
 
   /**
-   * Push the fog back when the camera is far from what it looks at, so a
-   * big layout framed whole doesn't fade away; call once a frame.
+   * Let the water drift; call once a frame with the time in ms. With how far
+   * the camera stands from what it looks at, the fog pulls back as it climbs,
+   * so a big layout seen whole isn't lost in it.
    */
-  reach(distance: number): void {
+  tick(time: number, viewDistance = 0): void {
     const fog = this.scene.fog;
-    if (!(fog instanceof THREE.Fog) || !this.look) return;
-    fog.near = Math.max(this.look.fog[0], distance * 0.9);
-    fog.far = Math.max(this.look.fog[1], distance + 3000);
-  }
-
-  /** Let the water drift; call once a frame with the time in ms. */
-  tick(time: number): void {
+    if (fog instanceof THREE.Fog && this.shown) {
+      const look = LOOKS[this.shown.name.replace('environment:', '') as EnvironmentId];
+      const back = Math.max(0, viewDistance - 3000);
+      fog.near = look.fog[0] + back;
+      fog.far = look.fog[1] + back * 1.4;
+    }
     if (!water?.map) return;
     water.map.offset.set(Math.sin(time / 9000) * 0.02, time / 400000);
   }

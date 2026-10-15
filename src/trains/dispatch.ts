@@ -1,6 +1,7 @@
 import { poseAt } from '../geometry/path';
 import { distance, type Vec2 } from '../geometry/pose';
 import * as D from '../pieces/dimensions';
+import { defOf } from '../layout/layout';
 import { edgeHeight, type Edge, type TrackNetwork } from './network';
 import type { Train, TrainSim } from './sim';
 import { findTraps, wayKey, type TrapReport } from './traps';
@@ -27,6 +28,12 @@ export const DISPATCH = {
   marginMm: 120,
   /** Stops this far short of a piece another train holds, or the end of the track. */
   gapMm: 14,
+  /**
+   * Stops this far short of a curved switch another train holds: where two tracks
+   * come together they run close for a while, and a long car swinging round
+   * the curve beside them would catch a train standing at the very end.
+   */
+  foulMm: 130,
   /** A way through a piece another train holds counts as this much longer, mm. */
   busyCost: 2000,
   /** Reserves no further than this through to the next switch, mm. */
@@ -127,6 +134,9 @@ export class RouteGraph {
   readonly live: Set<string>;
   /** Pieces with a switch point: where lines split or join. */
   readonly switchUids: Set<string>;
+  /** Switches whose branch curves away: a train standing near one fouls the other line. */
+  readonly foulUids: Set<string>;
+
   private trapReport: TrapReport | null = null;
 
   /**
@@ -141,6 +151,16 @@ export class RouteGraph {
     this.live = this.findLive();
     this.findConflicts();
     this.switchUids = new Set(network.switches().map((sw) => sw.uid));
+    this.foulUids = new Set(
+      network.layout.pieces
+        .filter((p) => {
+          if (!this.switchUids.has(p.uid)) return false;
+          const ends = defOf(p).connectors.map((c) => c.pose.angle);
+          // Every end square with the first (a parallel switch's) or not.
+          return ends.some((a) => Math.abs(Math.sin(a - ends[0])) > 0.1);
+        })
+        .map((p) => p.uid),
+    );
   }
 
   private findConflicts(): void {
@@ -557,7 +577,9 @@ export class Dispatcher {
     const under = new Map<number, Set<string>>();
     for (const t of trains) {
       const { front, back } = span(t);
-      const on = t.route.segments.filter((s) => s.u0 + s.edge.length > back - 2 && s.u0 < front + 2);
+      // And a switch it stands close enough to foul: nothing else may cross it there.
+      const near = (uid: string) => (this.graph.foulUids.has(uid) ? DISPATCH.foulMm - 10 : 2);
+      const on = t.route.segments.filter((s) => s.u0 + s.edge.length > back - near(s.edge.uid) && s.u0 < front + near(s.edge.uid));
       const uids = new Set(on.map((s) => s.edge.uid));
       under.set(t.id, uids);
       for (const uid of uids) this.holds.set(uid, t.id);
@@ -635,8 +657,9 @@ export class Dispatcher {
     // single track, where one coming the other way could meet it head on.
     const speed = Math.max(...train.vehicles.map((v) => Math.abs(v.v)));
     const stopping = (speed * speed) / (2 * DISPATCH.brake) + speed * 0.1;
-    // Never less than it takes to stop: lining up for work at its destination can carry it past the spot.
-    const need = Math.max(stopping + DISPATCH.gapMm, Math.min(stopping + DISPATCH.marginMm, travel + 20));
+    // Never less than it takes to stop: lining up for work at its destination can carry it past the spot,
+    // and the cars that work there can take the front on by up to a train's length: hold that too.
+    const need = Math.max(stopping + DISPATCH.gapMm, Math.min(stopping + DISPATCH.marginMm, travel + 20 + (front - back)));
     const sticky = new Map<string, number>();
     let h: Heading = start;
     let d = remaining;
@@ -672,7 +695,7 @@ export class Dispatcher {
         // nose to nose with it halfway along, so it can come off the line there and pass.
         const back = gate && this.coming(holder, pick) && gate.d - DISPATCH.gapMm >= (speed * speed) / (2 * DISPATCH.brake) ? gate : null;
         if (back) for (const uid of order.splice(back.from)) reserved.delete(uid);
-        this.stopAt(control, f, dir, back ? back.d - DISPATCH.gapMm : d - this.standOff(train, h, pick));
+        this.stopAt(control, f, dir, back ? back.d - DISPATCH.gapMm : d - Math.max(this.standOff(train, h, pick), this.graph.foulUids.has(pick.edge.uid) ? DISPATCH.foulMm : DISPATCH.gapMm));
         train.waitReason = `Waiting for ${this.sim.train(holder)?.name ?? 'another train'}`;
         break;
       }
