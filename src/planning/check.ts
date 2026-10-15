@@ -300,7 +300,7 @@ export function trapIssues(layout: Layout): Issue[] {
   return layoutTraps(layout).traps.map((trap) => {
     const entry = trap.entries[0];
     const way = entry.ways !== 2 ? 'go one of its ways' : entry.index === 0 ? 'go straight on' : 'take the branch';
-    const more = trap.entries.length > 1 ? ` (and at ${plural(trap.entries.length - 1, 'other switch')})` : '';
+    const more = trap.entries.length > 1 ? ` (and at ${trap.entries.length === 2 ? 'one other switch' : `${trap.entries.length - 1} other switches`})` : '';
     return {
       kind: 'trap' as const,
       at: entry.at,
