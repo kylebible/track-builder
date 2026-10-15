@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { poseAt } from '../geometry/path';
 import type { Vec2 } from '../geometry/pose';
 import type { Layout } from '../layout/layout';
+import { MODE, onBasicMode } from '../pieces/basic';
 import * as D from '../pieces/dimensions';
 import { toWorld } from '../render/pieceMesh';
 import { cabPose, travelWay } from './cab';
@@ -10,6 +11,9 @@ import { edgeGrade, edgeHeight } from './network';
 import { TrainSim, type StuckKind, type Train, type VehicleGeometry } from './sim';
 import { AXLE_HEIGHT, buildVehicle, showLoad } from './trainMesh';
 import { AccessoryView } from './accessoryView';
+import { EconomyView } from './economyView';
+import { TrainList } from './trainList';
+import { freshAboard, getJob, JOBS, tiredAboard, type JobId } from './jobs';
 import { Synth } from '../sound/synth';
 import { TrainSounds } from '../sound/trainSounds';
 import './trains.css';
@@ -36,6 +40,24 @@ export interface ViewControls {
 }
 
 const SPEEDS = [1, 2, 4] as const;
+const KEEP_COUPLED_KEY = 'track-builder:keep-coupled';
+const HANDS_OFF_KEY = 'track-builder:jobs-run-themselves';
+
+function loadFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function saveFlag(key: string, on: boolean): void {
+  try {
+    localStorage.setItem(key, on ? '1' : '0');
+  } catch {
+    // Private browsing: the setting just isn't kept.
+  }
+}
 const LEVER_REACH = 24;
 /** How far down the chosen way the lever's stripe runs. */
 const STRIPE_MM = 110;
@@ -81,6 +103,10 @@ const SHORT: Record<StuckKind, string> = {
   'no-coal': 'Out of coal',
   'flat-battery': 'Battery flat',
 };
+
+/** The glow round a train hovered in the list: a box the size of each car. */
+const HALO_GEOMETRY = new THREE.BoxGeometry(1, 1, 1);
+const HALO_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xffc23d, transparent: true, opacity: 0.4, depthWrite: false });
 
 /** How long a whistle's "Toot!" shows, ms. */
 const BUBBLE_MS = 1600;
@@ -173,6 +199,20 @@ export class Trains {
   private readonly vehiclesRoot = new THREE.Group();
   private readonly leversRoot = new THREE.Group();
   private readonly markersRoot = new THREE.Group();
+  /** Glows round the train hovered in the sidebar's list. */
+  private readonly haloRoot = new THREE.Group();
+  /** The sidebar's list of trains. */
+  readonly list: TrainList;
+  /** The train lit up from the list, if any. */
+  highlighted: number | null = null;
+  /** The train the view follows, if any. */
+  following: number | null = null;
+  /** The train whose controls are open in the sidebar's list, if any. */
+  selected: number | null = null;
+  /** Shows the sidebar's list of trains; set by the page. */
+  onShowList: (() => void) | null = null;
+  /** Moves the view to a spot; set by the page. */
+  onFocus: ((at: Vec2) => void) | null = null;
   private readonly meshes = new Map<string, THREE.Group>();
   private readonly raycaster = new THREE.Raycaster();
   /** The track top, where dragged vehicles are carried. */
@@ -208,6 +248,7 @@ export class Trains {
   private readonly bubbles: { el: HTMLElement; at: THREE.Vector3; until: number }[] = [];
   private eventsSeen = 0;
   private readonly deliveries: HTMLElement;
+  private readonly economyView: EconomyView;
   private readonly autorouteBox: HTMLInputElement;
   private leverVersion = 0;
 
@@ -225,8 +266,36 @@ export class Trains {
     this.viewSize = measure();
     new ResizeObserver(() => (this.viewSize = measure())).observe(container);
     this.sim = new TrainSim(this.layout);
+    // Basic mode has real magnets; otherwise they're forgiving.
+    this.sim.realMagnets = MODE.basic;
+    onBasicMode((basic) => (this.sim.realMagnets = basic));
+    this.sim.keepCoupled = loadFlag(KEEP_COUPLED_KEY);
     this.accessories = new AccessoryView(this.sim, host.pieceObjects);
-    this.root.add(this.vehiclesRoot, this.leversRoot, this.markersRoot, this.accessories.root);
+    this.root.add(this.vehiclesRoot, this.leversRoot, this.markersRoot, this.haloRoot, this.accessories.root);
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    this.list = new TrainList({
+      get trains() {
+        return self.sim.trains;
+      },
+      statusText: (t) => this.statusText(t),
+      loadText: (t) => this.loadText(t),
+      destText: (t) => this.destText(t),
+      goTo: (id) => this.goTo(id),
+      get following() {
+        return self.following;
+      },
+      get selected() {
+        return self.selected;
+      },
+      select: (id) => this.select(id),
+      highlight: (id) => (this.highlighted = id),
+      setThrottle: (id, throttle) => {
+        this.sim.setThrottle(id, throttle);
+        if (throttle) this.setPaused(false);
+      },
+      openPanel: () => this.setOpen(true),
+    });
     scene.add(this.root);
 
     this.toggle = el('button', { id: 'trains-button', title: 'Trains: drag engines and cars onto the track (Y)', type: 'button' });
@@ -259,6 +328,20 @@ export class Trains {
     );
     const supplies = el('input', { type: 'checkbox', checked: this.sim.useSupplies, onchange: () => (this.sim.useSupplies = supplies.checked) });
     this.deliveries = el('p', { class: 'tr-deliveries' });
+    const keepCoupled = el('input', {
+      type: 'checkbox',
+      checked: this.sim.keepCoupled,
+      onchange: () => saveFlag(KEEP_COUPLED_KEY, (this.sim.keepCoupled = keepCoupled.checked)),
+    });
+    this.sim.operator.setOn(loadFlag(HANDS_OFF_KEY));
+    this.economyView = new EconomyView(this.sim, this.hud, camera, container, {
+      addJobTrain: (job) => this.addJobTrain(job),
+      runByItself: (on) => {
+        this.sim.operator.setOn(on);
+        saveFlag(HANDS_OFF_KEY, on);
+        if (on) this.setPaused(false);
+      },
+    });
     this.autorouteBox = el('input', { type: 'checkbox', checked: this.sim.autoroute, onchange: () => this.sim.setAutoroute(this.autorouteBox.checked) });
     this.panel = el(
       'section',
@@ -268,16 +351,19 @@ export class Trains {
       this.tiles,
       el('div', { class: 'tr-row' }, this.pauseButton, el('div', { class: 'seg' }, ...this.speedButtons), el('button', { class: 'tr-btn', type: 'button', textContent: 'Reset', title: 'Put every train back where it was built, stopped', onclick: () => this.reset() })),
       el('label', { class: 'tr-check', title: 'Steam engines burn water and coal and battery engines use charge. Top them up at a water tower, coaling stage or charging post.' }, supplies, ' Engines use up water, coal and charge'),
+      el('label', { class: 'tr-check', title: 'Magnets never let go on their own, however long the train or tight the bend, so job trains and long trains stay in one piece. Off, they pull or slide apart like real ones (more readily in Basic mode).' }, keepCoupled, ' Keep trains coupled'),
       el('label', { class: 'tr-check', title: 'Each train reserves the track ahead of it and sets the switches its way. A train waits short of track another train is on instead of running into it, and takes the free side of a passing loop.' }, this.autorouteBox, ' Autoroute: trains set switches and wait for each other'),
       this.deliveries,
+      this.economyView.section,
+      el('h3', { textContent: 'Tips' }),
       el('ul', { class: 'tr-hint' },
-        el('li', { innerHTML: '<b>Tap a car</b> on the track to turn it round. Red and blue ends are the magnets: red pulls blue.' }),
+        el('li', { innerHTML: 'With this panel open, <b>tap a car</b> on the track to turn it round. Red and blue ends are the magnets: red pulls blue. With it shut, tapping a train opens it in the sidebar’s Trains list.' }),
         el('li', { innerHTML: '<b>Drag a car</b> to lift it off. Drop it off the track to take it away.' }),
         el('li', { innerHTML: 'Each train has its own controls. Tap a switch’s <b>yellow knob</b> to change its way.' }),
         el('li', { innerHTML: '<b>Tap a signal</b> to turn it red or green. Trains stop at stations, and under the cargo loader and by the crane to load and unload open wagons. The lifting bridge’s knob raises it.' }),
         el('li', { innerHTML: '<b>Ride along</b> (C) watches from the cab. Drag to look around; Esc gets off.' }),
         el('li', { innerHTML: '<b>Go to</b> on a train’s card sends it to a station or trackside place by the shortest way, setting switches as it goes. It backs up if that’s quicker.' }),
-        el('li', { innerHTML: 'Put <b>trackside</b> places from the parts palette over a straight: trains stop at water towers, mines and more when there’s work for them.' }),
+        el('li', { innerHTML: 'Put <b>trackside</b> places from the parts palette over a straight: trains stop at water towers, mines and more when there’s work for them. <b>Jobs</b> above says what each place needs.' }),
       ),
     );
     container.append(this.hud, this.panel, this.toast);
@@ -349,6 +435,16 @@ export class Trains {
     this.eventsSeen = 0;
   }
 
+  private addJobTrain(job: JobId): void {
+    const train = this.sim.addJobTrain(job);
+    if (typeof train === 'string') {
+      this.say(train);
+      return;
+    }
+    this.setPaused(false);
+    this.say(`${train.name} is on its way. ${getJob(job).blurb}`);
+  }
+
   private say(message: string): void {
     this.toast.textContent = message;
     this.toast.hidden = false;
@@ -361,7 +457,7 @@ export class Trains {
 
   // ---- each train's controls -----------------------------------------------
 
-  private statusText(t: Train): string {
+  statusText(t: Train): string {
     const status = t.status;
     if (status.kind === 'stuck') return SHORT[status.stuck];
     if (status.kind === 'running') return `${Math.round(status.speed)} mm/s`;
@@ -388,8 +484,9 @@ export class Trains {
       { class: 'tr-card' },
       el('div', { class: 'tr-card-head' }, el('b', { textContent: t.name }), el('span', { class: 'tr-card-status' })),
       el('div', { class: 'tr-card-load' }),
+      t.vehicles.some((v) => v.def.motor) ? this.jobRow(t) : '',
       el('div', { class: 'tr-card-work', hidden: true }, el('span'), el('i', {}, el('i'))),
-      this.destinationPicker(t),
+      t.job === 'free' ? this.destinationPicker(t) : '',
       el('div', { class: 'tr-card-row' },
         t.wrecked
           ? act('Put back on the rails', 'Put it back where it was built', () => this.restore(t), 'wide')
@@ -402,6 +499,25 @@ export class Trains {
         act('✕', 'Take the train off the track', () => this.sim.removeTrain(t.id), 'danger'),
       ),
     );
+  }
+
+  /** The job picker, and where the train is heading for it. */
+  private jobRow(t: Train): HTMLElement {
+    const select = el(
+      'select',
+      { class: 'tr-job', title: 'What this train is for. With a job it picks its own stops and sets the switches.', onchange: () => this.sim.setJob(t.id, select.value as JobId) },
+      ...JOBS.map((j) => el('option', { value: j.id, textContent: `${j.icon} ${j.name}`, selected: j.id === t.job, title: j.blurb })),
+    );
+    return el('div', { class: 'tr-card-job' }, select, el('span', { class: 'tr-card-dest' }));
+  }
+
+  /** Where a job train is heading, for its card. */
+  destText(t: Train): string {
+    if (t.job === 'free') return '';
+    if (!this.sim.useEconomy) return 'Places need nothing';
+    if (!t.destination) return 'Nothing to do';
+    const site = this.sim.economy.site(t.destination);
+    return site ? `→ ${site.place.name}` : '';
   }
 
   /** "Go to…": send the train to a station or a place beside the track. */
@@ -437,7 +553,7 @@ export class Trains {
   }
 
   /** Stores and cargo, for the card: "Water 60% · Coal 80% · 5 passengers". */
-  private loadText(t: Train): string {
+  loadText(t: Train): string {
     const parts: string[] = [];
     const stores = new Map<string, number>();
     t.consist.forEach((entry) => {
@@ -456,9 +572,17 @@ export class Trains {
       const kind = getStock(entry.stockId).cargo?.kind;
       if (kind) cargo.set(kind, (cargo.get(kind) ?? 0) + (entry.units ?? 0));
     }
+    if (t.job === 'workers' && cargo.has('passengers')) {
+      // Workers rather than passengers.
+      const fresh = freshAboard(t.consist);
+      const tired = tiredAboard(t.consist);
+      cargo.set('passengers', cargo.get('passengers')! - fresh - tired);
+      if (fresh) parts.push(`${fresh} going to work`);
+      if (tired) parts.push(`${tired} tired, going home`);
+    }
     const carried = [...cargo].filter(([, n]) => n);
     if (carried.length) for (const [kind, n] of carried) parts.push(cargoCount(kind, n));
-    else if (cargo.size) parts.push('Cars empty');
+    else if (cargo.size && parts.every((p) => !/going/.test(p))) parts.push('Cars empty');
     return parts.join(' · ');
   }
 
@@ -601,38 +725,33 @@ export class Trains {
   }
 
   /** Keep a card floating over each train, and its buttons current. */
+  /**
+   * The open train's controls: in its row in the sidebar's list, or, riding
+   * along, pinned to the foot of the view. No cards float over trains.
+   */
   private drawCards(): void {
-    const rect = this.viewSize;
     const seen = new Set<number>();
+    if (this.selected !== null && !this.sim.train(this.selected)) this.selected = null;
+    const shown = this.ride ? this.ride.trainId : this.selected;
     for (const t of this.sim.trains) {
-      seen.add(t.id);
+      if (t.id !== shown) continue;
       const riding = this.ride?.trainId === t.id;
+      const home = riding ? this.hud : this.list.slot(t.id);
+      if (!home) continue;
+      seen.add(t.id);
       const dest = t.dispatch?.dest.kind === 'place' ? t.dispatch.dest.uid : '';
-      const key = `${t.throttle}/${t.wrecked}/${t.name}/${t.vehicles.some((v) => v.def.motor)}/${riding}/${dest}/${this.sim.destinations().length}`;
+      const key = `${t.throttle}/${t.wrecked}/${t.name}/${t.vehicles.some((v) => v.def.motor)}/${riding}/${dest}/${this.sim.destinations().length}/${t.job}`;
       let entry = this.cards.get(t.id);
-      if (!entry || entry.key !== key) {
+      if (!entry || entry.key !== key || entry.card.parentElement !== home) {
         const card = this.makeCard(t);
-        if (entry) entry.card.replaceWith(card);
-        else this.hud.append(card);
+        entry?.card.remove();
+        home.append(card);
         entry = { card, key };
         this.cards.set(t.id, entry);
       }
       const { card } = entry;
       card.classList.toggle('pinned', riding);
-      if (this.ride) {
-        // Riding along: the ridden train's controls sit at the foot of the view, the rest stay out of it.
-        card.hidden = !riding;
-        card.style.transform = '';
-      } else {
-        // Over the middle of the train, above its tallest roof.
-        const xs = t.vehicles.map((v) => v.geo.center.x);
-        const ys = t.vehicles.map((v) => v.geo.center.y);
-        const mid = toWorld((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...t.vehicles.map((v) => v.geo.z + v.def.height)) + AXLE_HEIGHT + 14);
-        const p = mid.project(this.camera);
-        const visible = p.z < 1 && Math.abs(p.x) < 1.1 && Math.abs(p.y) < 1.1;
-        card.hidden = !visible;
-        if (visible) card.style.transform = `translate(${((p.x + 1) / 2) * rect.width}px, ${((1 - p.y) / 2) * rect.height}px) translate(-50%, -100%)`;
-      }
+      card.classList.toggle('in-list', !riding);
       card.classList.toggle('stuck', t.status.kind === 'stuck');
       const load = card.querySelector<HTMLElement>('.tr-card-load')!;
       const loadText = this.loadText(t);
@@ -646,6 +765,11 @@ export class Trains {
         const span = work.querySelector('span')!;
         if (span.textContent !== doing.summary) span.textContent = doing.summary;
         work.querySelector<HTMLElement>('i i')!.style.width = `${doing.total ? Math.round((100 * doing.done) / doing.total) : 100}%`;
+      }
+      const heading = card.querySelector<HTMLElement>('.tr-card-dest');
+      if (heading) {
+        const text = this.destText(t);
+        if (heading.textContent !== text) heading.textContent = text;
       }
       const status = card.querySelector<HTMLElement>('.tr-card-status')!;
       status.textContent = this.statusText(t);
@@ -789,10 +913,14 @@ export class Trains {
     }
     const press = this.press;
     if (press && e.pointerId === press.pointerId) {
-      // A tap on a vehicle turns it round.
       this.press = null;
-      const error = this.sim.turnVehicle(press.trainId, press.index);
-      if (error) this.say(error);
+      // Building trains (the panel open), a tap turns a car round; otherwise it opens the train in the sidebar.
+      if (this.open) {
+        const error = this.sim.turnVehicle(press.trainId, press.index);
+        if (error) this.say(error);
+      } else {
+        this.select(press.trainId);
+      }
       return;
     }
     const carry = this.carry;
@@ -890,6 +1018,60 @@ export class Trains {
 
   // ---- every frame ---------------------------------------------------------
 
+  /** Open a train's controls in the sidebar and go to it, or close them. */
+  select(id: number | null): void {
+    this.selected = id;
+    if (id === null) return;
+    this.goTo(id);
+    this.onShowList?.();
+    this.list.update();
+    this.list.reveal(id);
+  }
+
+  /** Fly the view to a train and follow it as it runs. */
+  goTo(id: number): void {
+    const at = this.centreOf(id);
+    if (!at) return;
+    this.following = id;
+    this.onFocus?.(at);
+  }
+
+  /** Where the followed train is now, or null when there's none to follow. */
+  followPoint(): THREE.Vector3 | null {
+    if (this.following === null) return null;
+    const train = this.sim.train(this.following);
+    const at = this.centreOf(this.following);
+    if (!train || !at || this.ride) {
+      this.following = null;
+      return null;
+    }
+    return toWorld(at.x, at.y, Math.min(...train.vehicles.map((v) => v.geo.z)));
+  }
+
+  private centreOf(id: number): Vec2 | null {
+    const train = this.sim.train(id);
+    if (!train?.vehicles.length) return null;
+    const xs = train.vehicles.map((v) => v.geo.center.x);
+    const ys = train.vehicles.map((v) => v.geo.center.y);
+    return { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
+  }
+
+  /** A soft glow round each car of the train hovered in the list. */
+  private drawHalo(time: number): void {
+    this.haloRoot.clear();
+    const train = this.highlighted === null ? undefined : this.sim.train(this.highlighted);
+    if (!train) return;
+    HALO_MATERIAL.opacity = 0.32 + 0.14 * Math.sin(time / 180);
+    for (const v of train.vehicles) {
+      const halo = new THREE.Mesh(HALO_GEOMETRY, HALO_MATERIAL);
+      halo.scale.set(v.def.length + 14, v.def.height + AXLE_HEIGHT + 14, v.def.width + 14);
+      halo.position.copy(toWorld(v.geo.center.x, v.geo.center.y, v.geo.z + (v.def.height + AXLE_HEIGHT) / 2 - 4));
+      halo.rotation.set(0, v.geo.heading, 0);
+      halo.rotateZ(v.geo.pitch);
+      this.haloRoot.add(halo);
+    }
+  }
+
   tick(time: number): void {
     const dt = this.lastTime === null ? 0 : (time - this.lastTime) / 1000;
     this.lastTime = time;
@@ -904,11 +1086,15 @@ export class Trains {
     if (this.autorouteBox.checked !== this.sim.autoroute) this.autorouteBox.checked = this.sim.autoroute;
     this.sounds.update(this.sim, !this.paused);
     this.drawTrains(time);
+    this.drawHalo(time);
+    // Only while the sidebar shows it.
+    if (this.list.el.offsetParent) this.list.update();
     if (this.ride) this.placeCab(dt);
     this.drawCards();
     this.drawPlaces(time);
     this.updateLeverVisibility();
     this.accessories.update(this.layout, time, this.leversRoot.visible);
+    this.economyView.update(time, !this.ride && (this.open || this.sim.trains.length > 0));
     const notices = this.sim.notices;
     if (notices.length && notices[notices.length - 1].time !== this.noticesSeen) {
       this.noticesSeen = notices[notices.length - 1].time;

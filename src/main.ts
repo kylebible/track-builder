@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Editor } from './builder/editor';
+import { onBasicMode } from './pieces/basic';
 import type { Vec2 } from './geometry/pose';
 import { codeFromHash, decodeLayout, LayoutFileError } from './planning/file';
 import { PlanningPanel } from './planning/panel';
@@ -11,6 +12,7 @@ import { DEFAULT_ENVIRONMENT, getEnvironment, inWater, offArea, type Environment
 import { EnvironmentPicker } from './environments/picker';
 import { EnvironmentScene } from './environments/scene';
 import { TemplatePicker } from './templates/picker';
+import { Tour, markTourSeen, tourSeen } from './tour/tour';
 import './style.css';
 
 const container = document.getElementById('app')!;
@@ -140,11 +142,15 @@ planning = new PlanningPanel(editor, {
   onTemplates: () => templatesPanel.showPopover(),
 });
 planning.update(editor.layout);
+// Basic mode adds a check for pieces Brio doesn't sell.
+onBasicMode(() => planning?.update(editor.layout));
 
 const templatesPanel = document.getElementById('templates-panel')!;
 new TemplatePicker(templatesPanel, (template) => {
   const hadOwn = editor.layout.pieces.length > 0;
   editor.load(template.build());
+  // A template too big for the table comes with the scene it's laid out for.
+  if (template.environment) setEnvironment(template.environment);
   templatesPanel.hidePopover();
   editor.flash(hadOwn ? `Started from the ${template.name.toLowerCase()}. Undo brings back yours.` : `Started from the ${template.name.toLowerCase()}.`);
   fitView();
@@ -169,6 +175,50 @@ async function openSharedLayout(): Promise<void> {
 window.addEventListener('hashchange', openSharedLayout);
 
 const trains = new Trains(scene, camera, editor, container, document.getElementById('toolbar')!, orbit);
+trains.onFocus = focusOn;
+
+// The sidebar swaps between the parts palette and the list of trains.
+const trainTab = document.getElementById('train-tab')!;
+trainTab.append(trains.list.el);
+const tabs = { track: document.getElementById('tab-track')!, trains: document.getElementById('tab-trains')! };
+const tabCount = tabs.trains.querySelector<HTMLElement>('.tab-count')!;
+function showTab(which: 'track' | 'trains'): void {
+  tabs.track.setAttribute('aria-selected', String(which === 'track'));
+  tabs.trains.setAttribute('aria-selected', String(which === 'trains'));
+  document.getElementById('palette')!.hidden = which !== 'track';
+  trainTab.hidden = which !== 'trains';
+  if (which === 'trains') trains.list.update();
+  try {
+    localStorage.setItem('sidebar-tab', which);
+  } catch {
+    // Private windows can refuse; the tab just isn't remembered.
+  }
+}
+trains.onShowList = () => showTab('trains');
+tabs.track.onclick = () => showTab('track');
+tabs.trains.onclick = () => showTab('trains');
+try {
+  if (localStorage.getItem('sidebar-tab') === 'trains') showTab('trains');
+} catch {
+  // Nothing remembered.
+}
+// Dragging the view round lets go of a followed train.
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (e.buttons) trains.following = null;
+});
+let followed: THREE.Vector3 | null = null;
+/** Which train `followed` was, so going to another one doesn't carry over the gap between them. */
+let followedId: number | null = null;
+
+// A pump house in a scene with a river or lake has to be by the water.
+trains.sim.economy.waterNear = (at, reach) => {
+  const water = getEnvironment(environment).water;
+  if (!water) return null;
+  for (let r = 0; r <= reach; r += 50) {
+    for (let a = 0; a < 16; a++) if (water.contains({ x: at.x + r * Math.cos((a * Math.PI) / 8), y: at.y + r * Math.sin((a * Math.PI) / 8) })) return true;
+  }
+  return false;
+};
 
 const hemisphere = new THREE.HemisphereLight(0xffffff, 0xcfc4b0, 1.5);
 scene.add(hemisphere);
@@ -211,6 +261,25 @@ const ease = (t: number) => 1 - Math.pow(1 - t, 3);
 renderer.setAnimationLoop((time) => {
   // Riding along, the train places the camera.
   if (trains.riding) flight = null;
+  // Keep a followed train in the middle, flying there or not.
+  const follow = trains.followPoint();
+  if (follow && followed && trains.following === followedId) {
+    const delta = follow.clone().sub(followed);
+    if (flight) {
+      flight.toTarget.add(delta);
+      flight.toCamera.add(delta);
+    } else {
+      orbit.target.add(delta);
+      camera.position.add(delta);
+    }
+  }
+  followed = follow;
+  followedId = trains.following;
+  const count = String(trains.sim.trains.length || '');
+  if (tabCount.textContent !== count) {
+    tabCount.textContent = count;
+    tabCount.hidden = !count;
+  }
   if (flight) {
     const t = Math.min(1, (performance.now() - flight.start) / FLIGHT_MS);
     orbit.target.lerpVectors(flight.fromTarget, flight.toTarget, ease(t));
@@ -223,6 +292,15 @@ renderer.setAnimationLoop((time) => {
   environmentScene.tick(time);
   renderer.render(scene, camera);
 });
+
+const tour = new Tour();
+button('take-tour').onclick = () => {
+  document.getElementById('help')!.hidePopover();
+  tour.start();
+};
+// Shown once, to someone with nothing built yet; a returning builder has seen enough.
+if (restored) markTourSeen();
+else if (!tourSeen()) tour.start();
 
 if (codeFromHash(location.hash)) openSharedLayout();
 else if (editor.layout.pieces.length) fitView();

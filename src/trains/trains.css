@@ -75,3 +75,82 @@ body.carrying-train, body.carrying-train * { cursor: grabbing !important; }
 body.riding .tr-toast { bottom: 96px; }
 /* The build hints don't apply from the cab. */
 body.riding #status { display: none; }
+/* Jobs: a train's job on its card, and what each place needs (economyView.ts). */
+.tr-card-job { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.tr-job { font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.tr-card-dest { color: var(--muted); }
+.ec-jobs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.ec-job { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px; background: #fff; border: 1px solid var(--line); border-radius: 10px; font-size: 11px !important; font-weight: 600 !important; }
+.ec-job span { font-size: 18px; line-height: 1; }
+.ec-job:hover { border-color: var(--line-strong); box-shadow: var(--shadow); }
+.ec-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; color: var(--muted); }
+.ec-cars { width: 44px; font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; }
+.ec-needs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ec-needs li { display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-radius: 8px; background: #fff8e6; line-height: 1.3; }
+.ec-needs li.urgent { background: #fdf1ef; }
+.ec-needs li.ec-none { background: transparent; color: var(--muted); padding: 0; }
+.ec-needs li > span:nth-child(2) { flex: 1; }
+.ec-needs .tr-btn { padding: 3px 7px; white-space: nowrap; }
+.ec-icon { font-size: 15px; }
+.ec-how { margin-top: 10px; }
+.ec-how summary { cursor: pointer; font-weight: 600; }
+.ec-key { display: inline-block; width: 10px; height: 10px; border-radius: 3px; border: 2px solid #8fc79f; vertical-align: -1px; }
+.ec-key.low { border-color: #e9b04a; }
+.ec-key.need { border-color: #d33a2c; }
+.ec-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #2b8a4b; vertical-align: 0; }
+.ec-dot.empty { background: transparent; box-shadow: inset 0 0 0 1.5px #9a968c; }
+.ec-badge { position: absolute; left: 0; top: 0; pointer-events: auto; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 3px 6px; background: rgba(255, 253, 248, 0.92); border: 2px solid #8fc79f; border-radius: 10px; box-shadow: 0 2px 8px rgba(60, 40, 10, 0.16); font-size: 11px; white-space: nowrap; user-select: none; -webkit-user-select: none; }
+.ec-badge[hidden] { display: none; }
+.ec-badge.low { border-color: #e9b04a; }
+.ec-badge.need { border-color: #d33a2c; animation: ec-pulse 1.4s ease-in-out infinite; }
+@keyframes ec-pulse { 50% { box-shadow: 0 0 0 4px rgba(211, 58, 44, 0.25), 0 2px 8px rgba(60, 40, 10, 0.16); } }
+.ec-good { display: flex; align-items: center; gap: 2px; }
+.ec-good b { font-size: 13px; font-weight: 400; }
+.ec-good.off { opacity: 0.35; }
+.ec-bar { display: block; width: 22px; height: 5px; border-radius: 3px; background: #e6e0d4; overflow: hidden; }
+.ec-bar > i { display: block; height: 100%; background: #2b8a4b; }
+.ec-bar.warn > i { background: #e9b04a; }
+.ec-bar.bad { box-shadow: inset 0 0 0 1px #d33a2c; }
+.ec-bar.bad > i { background: #d33a2c; }
+.ec-crew { display: flex; align-items: center; gap: 2px; }
+.ec-tired { font-size: 11px; margin-left: 1px; }
+.ec-tag { display: flex; gap: 1px; padding: 1px 4px; border-radius: 6px; background: #d33a2c; color: #fff; font-weight: 700; font-size: 12px; }
+.ec-info { position: absolute; left: 0; top: 0; pointer-events: auto; width: 250px; margin-top: -34px; padding: 8px 10px; background: var(--panel, #fffdf8); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 28px rgba(60, 40, 10, 0.22); font-size: 12px; line-height: 1.4; white-space: normal; z-index: 3; }
+.ec-info p { margin: 4px 0; }
+.ec-info .ec-warn { color: #a8281c; font-weight: 600; }
+.ec-info-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+.ec-info .tr-row { margin-top: 6px; }
+.ec-info button { font: inherit; cursor: pointer; }
+
+/* ---- the sidebar's Trains tab --------------------------------------------- */
+
+.train-list { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow-y: auto; padding: 8px 12px 24px; }
+.tl-list { display: flex; flex-direction: column; gap: 6px; }
+.tl-row { display: flex; flex-direction: column; gap: 8px; padding: 8px 8px 8px 10px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; transition: border-color 120ms, box-shadow 120ms; }
+.tl-row:hover, .tl-row:focus-visible { border-color: #f0b429; box-shadow: 0 0 0 2px #ffe3a1; outline: none; }
+.tl-row.following { border-color: var(--accent); }
+.tl-row.stuck { background: #fdf1ef; border-color: #f2b2a8; }
+.tl-icon { font-size: 20px; width: 26px; text-align: center; flex: none; }
+.tl-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.tl-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; }
+.tl-head b { flex: none; white-space: nowrap; }
+.tl-status { font-size: 12px; color: var(--muted); white-space: nowrap; flex: 1; min-width: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; }
+.tl-row.stuck .tl-status { color: #b23a2a; font-weight: 600; }
+.tl-row.waiting .tl-status { color: #a26a00; }
+.tl-detail { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-detail:empty { display: none; }
+.tl-run { flex: none; width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: #faf6ee; cursor: pointer; font-size: 12px; color: var(--ink); }
+.tl-run:hover:not(:disabled) { background: #f1eadd; }
+.tl-run:disabled { opacity: 0.4; cursor: default; }
+.tl-empty { padding: 16px 4px; color: var(--muted); font-size: 13px; }
+.tl-empty[hidden] { display: none; }
+.tl-empty p { margin: 0 0 10px; }
+.tl-open { padding: 8px 12px; border-radius: 9px; border: 1px solid var(--line-strong); background: #fff; font-weight: 600; cursor: pointer; }
+.tl-top { display: flex; align-items: center; gap: 10px; }
+.tl-row.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.04); cursor: default; }
+.tl-row.selected .tl-top { cursor: pointer; }
+.tl-more[hidden] { display: none; }
+/* The open train's controls, in its row rather than floating over the train. */
+.tr-card.in-list { position: static; margin: 0; padding: 8px 0 0; background: none; backdrop-filter: none; border: 0; border-top: 1px solid var(--line); border-radius: 0; box-shadow: none; white-space: normal; transform: none; }
+.tr-card.in-list .tr-card-head, .tr-card.in-list .tr-card-load { display: none; }
+.tr-card.in-list .tr-card-row { flex-wrap: wrap; }

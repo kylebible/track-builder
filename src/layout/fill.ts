@@ -1,6 +1,7 @@
 import { DEFAULT_PLAY, jointError, placeToMate, type Play } from '../geometry/joint';
 import { pathLength, poseAt } from '../geometry/path';
 import { applyPose, IDENTITY, normalizeAngle, rotationAbout, type Pose, type Vec2 } from '../geometry/pose';
+import { MODE, offered } from '../pieces/basic';
 import { CATALOG, getPiece } from '../pieces/catalog';
 import * as D from '../pieces/dimensions';
 import type { Gender, PieceDef } from '../pieces/types';
@@ -96,11 +97,13 @@ export interface Way {
   outGender: Gender;
 }
 
-let movesCache: TrackMove[] | null = null;
+/** Worked out once for each mode: Basic mode uses only real Brio pieces. */
+const movesCache = new Map<boolean, TrackMove[]>();
 
 /** Every shape a plain two-ended track piece can take, worked out from the catalog. */
 export function trackMoves(): TrackMove[] {
-  if (movesCache) return movesCache;
+  const cached = movesCache.get(MODE.basic);
+  if (cached) return cached;
   const found = new Map<string, TrackMove>();
   const keyOf = (step: Pose, dz: number) => [step.x, step.y, step.angle * 1000, dz].map((n) => Math.round(n * 10)).join(',');
   const wayKey = new Map<string, string>();
@@ -108,7 +111,7 @@ export function trackMoves(): TrackMove[] {
     if (base.category !== 'straight' && base.category !== 'curve' && base.category !== 'ramp') continue;
     if (base.connectors.length !== 2 || base.paths.length !== 1) continue;
     // Plain, common track only: not bridge spans, helixes, bumpy track, every bend of a bendy track, or rare pieces.
-    if (base.bridge || base.structure || base.paths[0].bumps || base.bend !== undefined || base.noFill) continue;
+    if (base.bridge || base.structure || base.paths[0].bumps || base.bend !== undefined || base.noFill || !offered(base)) continue;
     for (const flipped of [false, true]) {
       const def: PieceDef = defOf({ pieceId: base.id, flipped });
       for (const attach of def.connectors) {
@@ -136,7 +139,8 @@ export function trackMoves(): TrackMove[] {
     const w = move.ways[0];
     move.reverse = index.get(wayKey.get(`${w.pieceId}:${w.flipped}:${w.out}`)!)!;
   }
-  return (movesCache = list);
+  movesCache.set(MODE.basic, list);
+  return list;
 }
 
 /** A chain of moves grown out from one end, as a linked list back to its start. */
@@ -332,9 +336,28 @@ export function* searchFills(layout: Layout, from: EndRef, to: EndRef, options: 
   const ends = [a.connector.pose, b.connector.pose];
   const free = (p: Vec2, z: number) =>
     !occupied.near({ p, z }, CLEAR_MM) && (!endPieces.near({ p, z }, CLEAR_MM) || ends.some((e) => Math.hypot(e.x - p.x, e.y - p.y) < 70));
+  // Where track can go at all (on the table, out of the water), asked of a scrap of track at each
+  // point, so chains don't wander off where no run built from them could be offered.
+  const placeable = new Map<number, boolean>();
+  const allowedAt = (pose: Pose, z: number): boolean => {
+    if (!options.blocked) return true;
+    const k = cellKey(pose.x / 10, pose.y / 10, pose.angle / (Math.PI / 8), z);
+    let ok = placeable.get(k);
+    if (ok === undefined) {
+      const probe = { uid: 'probe', pieceId: 'straight-mini', flipped: false, pose: applyPose(pose, { x: -D.MINI_STRAIGHT / 2, y: 0, angle: 0 }), z };
+      ok = [...options.blocked({ pieces: [probe] })].length === 0;
+      placeable.set(k, ok);
+    }
+    return ok;
+  };
   /** The ends are checked as exactly as chains are kept; points between, at about the height. */
   const clearMove = (p: Chain, move: TrackMove, pose: Pose, z: number) =>
-    free(pose, z) && move.along.every((q) => free(applyPose(p.pose, q), (p.z + z) / 2));
+    free(pose, z) &&
+    allowedAt(pose, z) &&
+    move.along.every((q) => {
+      const at = applyPose(p.pose, q);
+      return free(at, (p.z + z) / 2) && allowedAt(at, (p.z + z) / 2);
+    });
   const clearChain = (c: Chain): boolean => {
     if (c.clear === undefined) {
       const p = c.parent;

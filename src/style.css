@@ -30,6 +30,15 @@ button { font: inherit; color: inherit; }
 .brand svg { width: 28px; height: 28px; flex: none; }
 .brand h1 { font-size: 17px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
 #palette { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+#palette[hidden], #train-tab[hidden] { display: none; }
+#train-tab { display: flex; flex-direction: column; min-height: 0; flex: 1; border-top: 1px solid var(--line); }
+.side-tabs { display: flex; gap: 2px; margin: 0 16px 8px; background: #f1eadd; border-radius: 9px; padding: 3px; }
+.side-tabs button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 4px; border: 0; border-radius: 7px; background: transparent; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.side-tabs button:hover { color: var(--ink); }
+.side-tabs button[aria-selected='true'] { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(60, 40, 10, 0.15); }
+.side-tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tab-count { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 11px; line-height: 18px; box-sizing: border-box; }
+.tab-count[hidden] { display: none; }
 
 .settings { display: grid; gap: 8px; padding: 4px 16px 12px; border-bottom: 1px solid var(--line); }
 .setting { display: grid; gap: 4px; }
@@ -43,6 +52,8 @@ button { font: inherit; color: inherit; }
 .pieces { overflow-y: auto; padding: 4px 16px 24px; flex: 1; }
 .pieces h2 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 14px 0 6px; }
 .palette-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+/* Basic mode hides what Brio doesn't sell; beats the display rules below. */
+.pieces [hidden] { display: none !important; }
 .tile { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 6px 6px 8px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; text-align: center; transition: border-color 120ms, box-shadow 120ms, transform 120ms, opacity 120ms; }
 .tile:hover { border-color: var(--line-strong); box-shadow: var(--shadow); transform: translateY(-1px); }
 .tile:active { transform: translateY(0); }
@@ -174,7 +185,7 @@ body.dragging-piece, body.dragging-piece * { cursor: grabbing !important; }
   :root { --sidebar: 0px; --dock: 172px; }
   #sidebar { top: auto; right: 0; width: auto; height: var(--dock); border-right: none; border-top: 1px solid var(--line); box-shadow: 0 -4px 16px rgba(60, 40, 10, 0.06); }
   .brand { display: none; }
-  .settings { grid-template-columns: 1fr 1.4fr; gap: 8px; padding: 8px 10px; }
+  .settings { grid-template-columns: 1fr 1fr 1.4fr; gap: 6px; padding: 8px 10px; }
   .setting-label { display: none; }
   .seg button { font-size: 12px; padding: 6px 2px; }
   .pieces { display: flex; gap: 8px; overflow-x: auto; overflow-y: hidden; padding: 8px 10px; }
@@ -244,6 +255,30 @@ body.dragging-piece, body.dragging-piece * { cursor: grabbing !important; }
 .scene-text { display: grid; gap: 1px; min-width: 0; padding: 0 2px; }
 .scene-text b { font-size: 13px; }
 .scene-text small { font-size: 11.5px; line-height: 1.3; color: var(--muted); }
+
+/* ---- first-run tour ---------------------------------------------------- */
+
+#tour { position: fixed; inset: 0; width: auto; height: auto; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; background: transparent; overflow: hidden; color: var(--ink); }
+#tour.dim { background: rgba(40, 28, 10, 0.35); }
+.tour-ring { position: absolute; border-radius: var(--radius); box-shadow: 0 0 0 3px var(--accent), 0 0 0 100vmax rgba(40, 28, 10, 0.35); pointer-events: none; transition: left 220ms ease, top 220ms ease, width 220ms ease, height 220ms ease; }
+.tour-ring[hidden] { display: none; }
+.tour-card { position: absolute; width: min(320px, calc(100vw - 16px)); box-sizing: border-box; padding: 14px 16px 12px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); box-shadow: 0 10px 40px rgba(60, 40, 10, 0.25); font-size: 14px; line-height: 1.45; transition: left 220ms ease, top 220ms ease; }
+.tour-card h2 { margin: 0 0 4px; font-size: 17px; letter-spacing: -0.01em; }
+.tour-body { margin: 0; color: var(--muted); }
+.tour-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.tour-count { margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tour-skip { padding: 2px 4px; border: 0; background: none; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.tour-skip:hover { color: var(--ink); }
+.tour-foot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 12px; }
+.tour-foot .action { justify-content: center; min-width: 72px; }
+.tour-foot .action[hidden] { display: none; }
+.tour-card button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The empty-table card says the same as the tour's middle cards. */
+body.touring #empty { visibility: hidden; }
+#help .take-tour { margin: 0 0 12px; }
+@media (prefers-reduced-motion: reduce) {
+  .tour-ring, .tour-card { transition: none; }
+}
 
 /* ---- generate a section ------------------------------------------------ */
 

@@ -54,13 +54,18 @@ describe('places beside the track', () => {
     for (const def of STOCK) if (def.cargo) expect(def.cargo.capacity).toBeGreaterThan(0);
   });
 
-  it('a water tower fills a steam engine and a water tank car, and has nothing for a battery engine', () => {
+  it('a water tower fills a steam engine and empties a water tank car, and has nothing for a battery engine', () => {
     const tower = getPlace('water-tower')!;
-    const work = planWork(tower, [car('steam-engine', { water: 0.3 }), car('tender'), car('water-tank')])!;
+    const work = planWork(tower, [car('steam-engine', { water: 0.3 }), car('tender'), car('water-tank', { units: 8 })])!;
     expect(work.queues[0]).toEqual([{ action: 'refill', what: 'water', amount: 1 }]);
     expect(work.queues[1]).toEqual([]);
-    expect(work.queues[2]).toEqual([{ action: 'load', what: 'water', amount: 8 }]);
+    expect(work.queues[2]).toEqual([{ action: 'unload', what: 'water', amount: 8 }]);
     expect(planWork(tower, [car('battery-engine'), car('coach')])).toBeNull();
+  });
+
+  it('a pump house fills water tank cars', () => {
+    const work = planWork(getPlace('pump-house')!, [car('steam-engine'), car('water-tank')])!;
+    expect(work.queues[1]).toEqual([{ action: 'load', what: 'water', amount: 8 }]);
   });
 
   it('a sawmill takes logs off one car and puts crates on another', () => {
