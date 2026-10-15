@@ -39,6 +39,7 @@ import {
 } from '../layout/layout';
 import { flexContext, flexDrag, type FlexContext, type FlexResult } from '../layout/flex';
 import { describeFill, searchFills, type Fill } from '../layout/fill';
+import { layoutTraps, newTrapEntries, type TrapEntry } from '../trains/traps';
 import { DEFAULT_SECTION, generateSection, type SectionOptions } from '../layout/generate';
 import { renderGeneratePanel, type GeneratePanelState } from './generatePanel';
 import { Palette } from './palette';
@@ -111,6 +112,11 @@ interface Filling {
   index: number;
   /** Still looking for more ways, a slice at a time. */
   searching: boolean;
+  /**
+   * Joining these two ends makes a train trap, whichever way the gap is
+   * filled (that only depends on which ends join): null until a way is found.
+   */
+  traps: TrapEntry[] | null;
 }
 
 /** A section being generated: its settings and the one previewed. */
@@ -232,6 +238,12 @@ export class Editor {
   /** Replace the whole layout, as one step that undo can take back. */
   load(layout: Layout): void {
     this.commit(layout, NONE);
+  }
+
+  /** Put in a change worked out elsewhere (a fix from the check), as one step, selecting the pieces it touched. */
+  apply(layout: Layout, uids: Iterable<string>, message?: string): void {
+    this.commit(layout, { kind: 'pieces', uids: new Set(uids) });
+    if (message) this.flash(message);
   }
 
   /** Frame the whole layout in the view. */
@@ -501,7 +513,7 @@ export class Editor {
       return;
     }
     this.endGenerate();
-    this.filling = { from: s.end, to: null, options: [], index: 0, searching: false };
+    this.filling = { from: s.end, to: null, options: [], index: 0, searching: false, traps: null };
     this.refresh();
   }
 
@@ -515,7 +527,7 @@ export class Editor {
     if (sameEnd(to, filling.from)) return;
     const layout = this.layout;
     const search = searchFills(layout, filling.from, to, { blocked: this.dom.blocked });
-    const current: Filling = { ...filling, to, options: [], index: 0, searching: true };
+    const current: Filling = { ...filling, to, options: [], index: 0, searching: true, traps: null };
     this.filling = current;
     const step = () => {
       // Stopped, or another end tapped, or the layout changed under it.
@@ -526,6 +538,7 @@ export class Editor {
       const shown = current.options[current.index];
       if (next.value.length !== current.options.length) {
         current.options = next.value;
+        if (!current.traps && current.options.length) current.traps = newTrapEntries(layoutTraps(layout), layoutTraps(current.options[0].layout));
         current.index = Math.max(0, shown ? current.options.indexOf(shown) : 0);
       }
       if (next.done) {
@@ -699,6 +712,12 @@ export class Editor {
           ? 'One way fits. It is shown on the track.'
           : `${f.options.length} ways fit. Pick one to see it on the track.`;
     head.append(title);
+    if (f.traps?.length) {
+      const warn = document.createElement('p');
+      warn.className = 'fill-warning';
+      warn.textContent = 'Joining these ends makes a train trap: trains that go one way at a switch get shut in a loop. Join another end, or use it and fix the trap from the layout check.';
+      head.append(warn);
+    }
     const list = document.createElement('div');
     list.className = 'fills';
     f.options.forEach((fill, i) => {
