@@ -1203,9 +1203,19 @@ export class TrainSim {
       if (train.dispatch && (train.dispatch.state === 'travelling' || train.dispatch.state === 'waiting')) return;
       train.backingOff = false;
     }
-    const going = train.dispatch && train.dispatch.state !== 'arrived' && train.dispatch.dest.kind === 'place' ? train.dispatch.dest.uid : null;
+    const going = train.dispatch && train.dispatch.state !== 'arrived' && train.dispatch.state !== 'no-route' && train.dispatch.dest.kind === 'place' ? train.dispatch.dest.uid : null;
     const dest = nextStop(train.job, train.consist, this.economy, this.stations, (uid) => this.dispatcher.distanceTo(train, uid, { ahead: true }), train.lastStop);
     train.destination = dest;
+    if (!dest) {
+      // Work it can only get to by backing up: it's shut in a loop it can't
+      // leave going this way round (a train trap), or up a line with no way
+      // on. Back out to it, rather than go round and round for ever.
+      const back = nextStop(train.job, train.consist, this.economy, this.stations, (uid) => this.dispatcher.distanceTo(train, uid), train.lastStop);
+      if (back && (back === going || !this.routeTo(train.id, { kind: 'place', uid: back }, { keepRunning: true }))) {
+        train.destination = back;
+        return;
+      }
+    }
     if (dest === going) return;
     if (!dest) {
       // Nothing to do: on round to the next station, keeping to the main line rather than

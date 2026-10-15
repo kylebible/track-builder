@@ -147,6 +147,8 @@ body.dragging-piece, body.dragging-piece * { cursor: grabbing !important; }
 .issue svg { width: 16px; height: 16px; margin-top: 1px; }
 .issue.problem svg { color: var(--danger); }
 .issue.open svg { color: var(--hole); fill: var(--hole); }
+.issues li:has(.issue-fix) { display: grid; gap: 4px; }
+.issue-fix { justify-self: start; margin-left: 33px; }
 .issue:focus-visible, .action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .actions { display: grid; gap: 4px; }
@@ -217,6 +219,7 @@ body.dragging-piece, body.dragging-piece * { cursor: grabbing !important; }
 .fill-option { display: grid; gap: 1px; width: 100%; padding: 7px 9px; border: 1px solid transparent; border-radius: 9px; background: #faf6ee; text-align: left; font-size: 13px; line-height: 1.35; cursor: pointer; transition: background 120ms, border-color 120ms; }
 .fill-option:hover { background: #f1eadd; }
 .fill-option[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-soft); }
+.fill-warning { margin: 6px 0 0; padding: 6px 8px; border-radius: 8px; background: #fbe6e3; color: var(--danger); font-size: 12.5px; line-height: 1.35; }
 .fill-option small { color: var(--muted); font-size: 12px; }
 .fill-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .fill-actions { display: flex; gap: 6px; margin-top: 10px; }

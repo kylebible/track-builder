@@ -1,6 +1,7 @@
 import type { Vec2 } from '../geometry/pose';
 import type { Edge, TrackNetwork } from './network';
 import type { Train, TrainSim } from './sim';
+import { findTraps, wayKey, type TrapReport } from './traps';
 
 // Autorouting: trains that set the switches ahead of themselves and wait for
 // each other instead of colliding. Each piece of track is a block. Every
@@ -104,10 +105,21 @@ export class RouteGraph {
   readonly live: Set<string>;
   /** Pieces with a switch point: where lines split or join. */
   readonly switchUids: Set<string>;
+  private trapReport: TrapReport | null = null;
 
   constructor(readonly network: TrackNetwork) {
     this.live = this.findLive();
     this.switchUids = new Set(network.switches().map((sw) => sw.uid));
+  }
+
+  /** Loops a train can be shut in, and the ways into them (see traps.ts), worked out when first asked. */
+  get traps(): TrapReport {
+    return (this.trapReport ??= findTraps(this));
+  }
+
+  /** Whether going on from `from` to `to` runs into a train trap. */
+  intoTrap(from: Heading, to: Heading): boolean {
+    return this.traps.entering.has(wayKey(headingKey(from), headingKey(to)));
   }
 
   /** The ways on from the end of a heading, or how the track ends there. */
@@ -566,7 +578,7 @@ export class Dispatcher {
       if (next.length > 1) {
         const key = next[0].switchKey!;
         const planned = path && path[k] && headingKey(path[k]) === headingKey(h) && path[k + 1] ? next.find((w) => headingKey(w) === headingKey(path![k + 1])) : undefined;
-        pick = planned ?? next[control.sticky.get(key) ?? this.chooseClear(train, next, key)] ?? next[0];
+        pick = planned ?? next[control.sticky.get(key) ?? this.chooseClear(train, h, next, key)] ?? next[0];
       }
       // Round a loop to its own track.
       if (reserved.has(pick.edge.uid) && d >= need) break;
@@ -644,12 +656,21 @@ export class Dispatcher {
     return best;
   }
 
-  /** At a facing switch with no plan: the lever's way if it's clear, or another way that's clear and leads on. */
-  private chooseClear(train: Train, next: Way[], key: string): number {
+  /**
+   * At a facing switch with no plan: the lever's way if it's clear, or
+   * another way that's clear and leads on. Never into a train trap when
+   * there's another way that isn't one.
+   */
+  private chooseClear(train: Train, from: Heading, next: Way[], key: string): number {
     const lever = (this.sim.levers.get(key) ?? 0) % next.length;
-    if (this.isClear(train, next[lever])) return lever;
-    const other = next.findIndex((w, i) => i !== lever && this.graph.live.has(headingKey(w)) && this.isClear(train, w));
-    return other >= 0 ? other : lever;
+    const trap = (w: Way) => this.graph.intoTrap(from, w);
+    const free = (w: Way) => !trap(w) && this.graph.live.has(headingKey(w));
+    if (!trap(next[lever]) && this.isClear(train, next[lever])) return lever;
+    const other = next.findIndex((w, i) => i !== lever && free(w) && this.isClear(train, w));
+    if (other >= 0) return other;
+    // The lever's way is a trap and every other way is busy: wait for one of those instead.
+    const waitFor = trap(next[lever]) ? next.findIndex(free) : -1;
+    return waitFor >= 0 ? waitFor : lever;
   }
 
   /** Whether the way on from `h`, following the levers, is free of other trains for a little way. */
