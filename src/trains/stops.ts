@@ -116,8 +116,8 @@ export const PLACES: readonly PlaceDef[] = [
     explain: 'When every place that takes a load is full, a job train leaves it here instead of standing about loaded. When somewhere runs short, a train fetches it back.',
   },
   {
-    id: 'car-sidings', name: 'Car sidings', spares: true, blurb: 'Spare cars wait here for an engine.',
-    explain: 'Spare cars wait on this road. When the jobs want another train, an engine comes out of the engine shed, backs onto them and takes them to work.',
+    id: 'car-sidings', name: 'Car sidings', spares: true, blurb: 'Wagons wait here between jobs, keeping their cargo aboard.',
+    explain: 'Mark a dead-end road ending at a buffer stop. With jobs running by themselves, idle freight trains back their wagons in and uncouple. Loaded wagons keep their cargo until a destination runs low; empty wagons wait for fresh work. An engine from the engine shed comes to fetch them. Leave enough clear track for the wagons and room beyond the junction to reverse.',
   },
   { id: 'whistle-board', name: 'Whistle board', pass: 'whistle', blurb: 'Engines whistle as they pass.', explain: 'Engines whistle as they pass. No train needs to stop.' },
   { id: 'slow-board', name: 'Slow board', pass: 'slow', blurb: 'Trains slow down past it.', explain: 'Trains slow down past it. No train needs to stop.' },

@@ -190,6 +190,8 @@ export class Operator {
     const out = new Map<JobId, number>();
     const has = (job: JobId) => sim.trains.some((t) => t.job === job);
     const now = needs(sim.economy, has, sim.stations.length > 0);
+    const parked = sim.yard.readyJobs();
+    const hasSidings = sim.places.some((p) => p.place.spares);
     for (const job of JOBS) {
       if (job.id === 'free') continue;
       if (job.id === 'workers') {
@@ -198,10 +200,13 @@ export class Operator {
         continue;
       }
       // A job is worth a train only where something makes its goods and somewhere takes them.
-      const makes = sites.some((s) => job.goods.some((k) => suppliesGoods(s, k)));
+      const makes = parked.has(job.id) || sites.some((s) => job.goods.some((k) => suppliesGoods(s, k)));
       const takes = sites.some((s) => job.goods.some((k) => takesGoods(s, k, sites)));
       const fuel = job.id === 'coal' && sites.some((s) => s.place.id === 'coaling-stage' || s.place.id === 'power-station');
       if (!makes || !(takes || fuel)) continue;
+      // Once wagons can be put away, do not replace an idle train with a
+      // fresh one while all the loads or all the destinations are unavailable.
+      if (hasSidings && job.id !== 'mail' && !sim.yard.hasWork(job.id)) continue;
       const short = now.filter((n) => n.job === job.id).length;
       out.set(job.id, Math.min(OPERATOR.maxPerJob, 1 + Math.floor(short / 4)));
     }
@@ -223,31 +228,26 @@ export class Operator {
     // Not while anyone is held up: another train would only add to it.
     if ([...this.since.values()].some((s) => s.what === 'wait' && sim.time - s.at > 8)) return;
     const count = (job: JobId) => working.filter((t) => t.job === job).length;
-    let pick: JobId | null = null;
-    let gap = 0;
-    for (const [job, want] of this.wanted()) {
-      // Shortest of trains for its share first; workers break ties, since everything stops without them.
-      const short = (want - count(job)) / want + (job === 'workers' ? 0.01 : 0);
-      if (want > count(job) && short > gap) {
-        gap = short;
-        pick = job;
+    // Shortest of trains for its share first; workers break ties. If the
+    // first job's rake is blocked, another job can still clear the road.
+    const requests = [...this.wanted()].filter(([job, want]) => want > count(job))
+      .sort(([a, na], [b, nb]) => ((nb - count(b)) / nb + (b === 'workers' ? 0.01 : 0)) - ((na - count(a)) / na + (a === 'workers' ? 0.01 : 0)));
+    for (const [pick] of requests) {
+      const fetching = sim.yard.fetch(pick);
+      if (fetching) {
+        this.addClock = OPERATOR.addGapSeconds;
+        sim.notice(fetching, `${fetching.name} came out of the engine shed to fetch spare ${JOBS.find((j) => j.id === pick)!.name.toLowerCase()} cars from the sidings.`, fetching.vehicles[0].geo.center);
+        return;
       }
-    }
-    if (!pick) return;
-    // An engine out of the shed for spare cars in the sidings, if there are some for the job.
-    const fetching = sim.yard.fetch(pick);
-    if (fetching) {
+      // Wait for parked wagons instead of manufacturing replacements.
+      if (sim.yard.hasShed && sim.yard.spares().has(pick)) continue;
+      const train = sim.addJobTrain(pick);
+      if (typeof train === 'string') continue;
       this.addClock = OPERATOR.addGapSeconds;
-      sim.notice(fetching, `${fetching.name} came out of the engine shed to fetch spare ${JOBS.find((j) => j.id === pick)!.name.toLowerCase()} cars from the sidings.`, fetching.vehicles[0].geo.center);
+      sim.notice(train, `${train.name} put on: the ${JOBS.find((j) => j.id === pick)!.name.toLowerCase()} jobs needed another train.`, train.vehicles[0].geo.center);
       return;
     }
-    const train = sim.addJobTrain(pick);
-    if (typeof train === 'string') {
-      this.addClock = OPERATOR.noRoomSeconds;
-      return;
-    }
-    this.addClock = OPERATOR.addGapSeconds;
-    sim.notice(train, `${train.name} put on: the ${JOBS.find((j) => j.id === pick)!.name.toLowerCase()} jobs needed another train.`, train.vehicles[0].geo.center);
+    if (requests.length) this.addClock = OPERATOR.noRoomSeconds;
   }
 
   /** Notice a job train in trouble, and sort it out once it has been in trouble a little while. */
