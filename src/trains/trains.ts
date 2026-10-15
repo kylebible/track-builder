@@ -41,6 +41,7 @@ export interface ViewControls {
 
 const SPEEDS = [1, 2, 4] as const;
 const KEEP_COUPLED_KEY = 'track-builder:keep-coupled';
+const HANDS_OFF_KEY = 'track-builder:jobs-run-themselves';
 
 function loadFlag(key: string): boolean {
   try {
@@ -332,7 +333,15 @@ export class Trains {
       checked: this.sim.keepCoupled,
       onchange: () => saveFlag(KEEP_COUPLED_KEY, (this.sim.keepCoupled = keepCoupled.checked)),
     });
-    this.economyView = new EconomyView(this.sim, this.hud, camera, container, { addJobTrain: (job) => this.addJobTrain(job) });
+    this.sim.operator.setOn(loadFlag(HANDS_OFF_KEY));
+    this.economyView = new EconomyView(this.sim, this.hud, camera, container, {
+      addJobTrain: (job) => this.addJobTrain(job),
+      runByItself: (on) => {
+        this.sim.operator.setOn(on);
+        saveFlag(HANDS_OFF_KEY, on);
+        if (on) this.setPaused(false);
+      },
+    });
     this.autorouteBox = el('input', { type: 'checkbox', checked: this.sim.autoroute, onchange: () => this.sim.setAutoroute(this.autorouteBox.checked) });
     this.panel = el(
       'section',
