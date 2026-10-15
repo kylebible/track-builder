@@ -275,6 +275,13 @@ need it, waits while the work is done, and carries on:
 - **Storage depot** keeps goods nobody has room for yet. A job train goes
   there only when every place that takes its load is full, and fetches it
   back once somewhere runs short; trains going past leave it alone.
+- **Car sidings** (a blue board) mark a dead-end road where spare cars
+  wait. When the jobs run by themselves, the sidings fill with short rakes of
+  cars, one job each. When a job wants another train and the rake nearest the
+  way out is for it, an engine comes out of the **engine shed** instead: it
+  runs onto the shed's turntable, which turns it to face the way out, backs
+  onto the rake, couples up and goes to work (`src/trains/yard.ts`).
+  Turntables turn by themselves for any train autoroute sends across them.
 - **Whistle board**: engines whistle as they pass. **Slow board**: trains
   slow down past it.
 

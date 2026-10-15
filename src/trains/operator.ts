@@ -83,6 +83,8 @@ export class Operator {
     this.jammed = this.flowing = 0;
     this.since.clear();
     this.sim.economy.shiftScale = on ? this.shiftScale() : 1;
+    // Spare cars into the sidings, for engines from the shed to fetch.
+    if (on && !this.sim.yard.stocked) this.sim.yard.stock();
   }
 
   /** The track changed: size things afresh. */
@@ -229,6 +231,13 @@ export class Operator {
       }
     }
     if (!pick) return;
+    // An engine out of the shed for spare cars in the sidings, if there are some for the job.
+    const fetching = sim.yard.fetch(pick);
+    if (fetching) {
+      this.addClock = OPERATOR.addGapSeconds;
+      sim.notice(fetching, `${fetching.name} came out of the engine shed to fetch spare ${JOBS.find((j) => j.id === pick)!.name.toLowerCase()} cars from the sidings.`, fetching.vehicles[0].geo.center);
+      return;
+    }
     const train = sim.addJobTrain(pick);
     if (typeof train === 'string') {
       this.addClock = OPERATOR.noRoomSeconds;

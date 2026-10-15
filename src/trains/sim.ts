@@ -11,6 +11,7 @@ import { doWork, getPlace, planWork, workSeconds, workSpan, type PlaceDef, type 
 import { Economy, type Site } from './economy';
 import { carrying, freshAboard, getJob, JOB_POWER, JOB_TRAIN, jobConsist, nextStop, type JobId } from './jobs';
 import { Operator } from './operator';
+import { Yard } from './yard';
 import { ACCESSORY, findAccessories, onRoute, type Accessory, type AccessoryKind, type Job } from './accessories';
 import { Dispatcher, type Arrival, type Destination, type DestinationPoint, type Dispatch, type RouteOptions } from './dispatch';
 import { findTurntables, headingToward, lineAt, lineToward, turn, turnPoint, TURNTABLE, type Turntable, type TurntableState } from './turntable';
@@ -300,6 +301,10 @@ export interface Train {
   waitReason: string | null;
   /** A job train backing away from a climb it couldn't make or a train it was stuck behind. */
   backingOff: boolean;
+  /** An engine on its way to fetch spare cars (see yard.ts): the yard, not its job, says where it goes. */
+  errand: boolean;
+  /** Parked cars, by train id, it is backing onto to couple up: it may run right up to them. */
+  coupleTo: number | null;
 }
 
 const ZERO_DRAG = (): Drag => ({ rolling: 0, curve: 0, joint: 0, jointAt: null, buffer: 0, slope: 0, brake: 0 });
@@ -390,6 +395,8 @@ export class TrainSim {
   readonly dispatcher: Dispatcher;
   /** Runs the jobs by itself when switched on: adds trains where they're needed and gets stuck ones going. */
   readonly operator: Operator;
+  /** Spare cars in the sidings, and engines out of the shed fetching them. */
+  readonly yard: Yard;
   /**
    * Climbs job trains have stalled on, by heading (`edgeKey>end`), with how
    * much pull per newton of weight the train that stalled had. Trains no
@@ -402,6 +409,7 @@ export class TrainSim {
     this.findAccessories();
     this.dispatcher = new Dispatcher(this);
     this.operator = new Operator(this);
+    this.yard = new Yard(this);
   }
 
   /** Most pull a train's engines can give, per newton of its weight. */
@@ -615,6 +623,8 @@ export class TrainSim {
       dispatch: null,
       waitReason: null,
       backingOff: false,
+      errand: false,
+      coupleTo: null,
     };
     options.speeds?.forEach((v, i) => (train.vehicles[i].v = v));
     this.trains.push(train);
@@ -725,6 +735,7 @@ export class TrainSim {
       this.replace(train, train.placement, false);
     }
     for (const state of this.tables.values()) Object.assign(state, { angle: state.target, from: state.target, riders: [] });
+    this.yard.stop();
     this.notices.length = 0;
     this.events.length = 0;
     for (const k of Object.keys(this.delivered)) delete this.delivered[k as CargoKind];
@@ -840,7 +851,11 @@ export class TrainSim {
             const along = dot(d, dir);
             const across = Math.abs(d.x * dir.y - d.y * dir.x);
             if (along > 1.5 || along < -25 || across > 8) continue;
-            this.merge(a, endA, b, Math.cos(routeHeading(va) - routeHeading(vb)) > 0);
+            const sameWay = Math.cos(routeHeading(va) - routeHeading(vb)) > 0;
+            // The train with engines carries on, with its name and job, and the cars join it.
+            const motor = (t: Train) => t.vehicles.some((v) => v.def.motor);
+            if (motor(b) && !motor(a)) this.merge(b, endB, a, sameWay);
+            else this.merge(a, endA, b, sameWay);
             return;
           }
         }
@@ -862,6 +877,7 @@ export class TrainSim {
         : this.rebuild(a, [...a.consist, ...order], (front + back - lengthB) / 2, [...speedsA, ...speedsB]);
     if (result !== null) return;
     a.throttle = throttle;
+    if (a.coupleTo === b.id) a.coupleTo = null;
     this.removeTrain(b.id);
   }
 
@@ -943,6 +959,7 @@ export class TrainSim {
     const steps = Math.round(Math.min(seconds, 0.1) / PHYSICS.dt);
     if (this.useEconomy) this.economy.tick(steps * PHYSICS.dt);
     if (this.useEconomy) this.operator.tick(steps * PHYSICS.dt);
+    if (this.useEconomy) this.yard.tick();
     this.jobClock -= steps * PHYSICS.dt;
     if (this.jobClock <= 0) {
       this.jobClock = JOB_SECONDS;
@@ -1201,7 +1218,7 @@ export class TrainSim {
 
   /** Pick where a job train goes next, and send it there by autoroute. */
   private runJob(train: Train): void {
-    if (train.job === 'free' || train.wrecked || !train.vehicles.some((v) => v.def.motor)) return;
+    if (train.job === 'free' || train.errand || train.wrecked || !train.vehicles.some((v) => v.def.motor)) return;
     // Up against a buffer stop: back out and carry on the other way.
     if (train.status.kind === 'stuck' && train.status.stuck === 'buffer' && train.throttle) {
       train.throttle = train.throttle === 1 ? -1 : 1;
@@ -1575,15 +1592,57 @@ export class TrainSim {
     if (!table || !state) return null;
     const line = lineToward(table, point, state.target, middleSteps);
     if (lineAt(table, state.target) === line) return null;
-    const still = state.angle === state.target;
+    return this.startTurn(table, state, headingToward(table, line, state.angle));
+  }
+
+  /**
+   * Turn a turntable's bridge to `line`, as the yard does for trains it
+   * sends across: the short way, or, given a train riding on the bridge,
+   * whichever way round leaves the train's engine facing `toward` (a plan
+   * point). Returns an error message, or null once it is turning or lined up.
+   */
+  lineUp(uid: string, line: number, rider?: { train: Train; toward: Vec2 }): string | null {
+    const table = this.turntables.find((t) => t.uid === uid);
+    const state = this.tables.get(uid);
+    if (!table || !state || !table.lines[line]) return 'There’s no turntable there.';
+    let target = headingToward(table, line, state.angle);
+    const engine = rider?.train.vehicles.find((v) => v.def.motor);
+    if (rider && engine) {
+      // How far the engine has to swing round to face the way out.
+      const want = normalizeAngle(Math.atan2(rider.toward.y - table.center.y, rider.toward.x - table.center.x) - engine.geo.heading);
+      const a = table.lines[line].angle;
+      let best: { t: number; score: number } | null = null;
+      for (let k = -3; k <= 3; k++) {
+        const t = a + k * Math.PI;
+        const score = Math.abs(normalizeAngle(t - state.angle - want)) * 100 + Math.abs(t - state.angle);
+        if (!best || score < best.score) best = { t, score };
+      }
+      target = best!.t;
+    }
+    if (Math.abs(target - state.target) < 1e-9) return null;
+    return this.startTurn(table, state, target);
+  }
+
+  /** Whether a train stands on, or partly on, a turntable's bridge. */
+  onTurntable(uid: string): boolean {
     const lines = this.accessories.filter((a) => a.kind === 'turntable' && a.uid === uid);
+    return this.trains.some((train) => {
+      const { front, back } = span(train);
+      return lines.some((acc) => onRoute(train.route, acc).some(([a, z]) => z > back + TURNTABLE.gapMm / 2 && a < front - TURNTABLE.gapMm / 2));
+    });
+  }
+
+  private startTurn(table: Turntable, state: TurntableState, target: number): string | null {
+    const still = state.angle === state.target;
+    const lines = this.accessories.filter((a) => a.kind === 'turntable' && a.uid === table.uid);
     const riders: number[] = [];
     for (const train of this.trains) {
       if (state.riders.includes(train.id)) continue;
       const { front, back } = span(train);
       for (const acc of lines) {
         for (const [a, z] of onRoute(train.route, acc)) {
-          if (z <= back || a >= front) continue;
+          // Just touching the edge of the pit doesn't count.
+          if (z <= back + TURNTABLE.gapMm / 2 || a >= front - TURNTABLE.gapMm / 2) continue;
           const aboard = still && !train.wrecked && back >= a - 1 && front <= z + 1 && acc.line === lineAt(table, state.angle);
           if (!aboard) return `${train.name} is partly on the turntable. Turn it once the train is clear, or all the way on.`;
           riders.push(train.id);
@@ -1591,7 +1650,7 @@ export class TrainSim {
       }
     }
     if (still) Object.assign(state, { from: state.angle, riders });
-    state.target = headingToward(table, line, state.angle);
+    state.target = target;
     return null;
   }
 

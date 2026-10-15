@@ -644,9 +644,11 @@ export class Dispatcher {
     for (const other of this.sim.trains) {
       if (other === train || !under.get(other.id)!.has(start.edge.uid)) continue;
       const ahead = this.ahead(train, dir, f, other);
-      if (ahead !== null && (control.stopFront === null || ahead - DISPATCH.gapMm < (control.stopFront - f) * dir)) {
-        control.stopFront = f + (ahead - DISPATCH.gapMm) * dir;
-        train.waitReason = `Waiting for ${other.name}`;
+      // Parked cars it is fetching: run right up to them, so the magnets catch.
+      const gap = other.id === train.coupleTo ? -3 : DISPATCH.gapMm;
+      if (ahead !== null && (control.stopFront === null || ahead - gap < (control.stopFront - f) * dir)) {
+        control.stopFront = f + (ahead - gap) * dir;
+        if (other.id !== train.coupleTo) train.waitReason = `Waiting for ${other.name}`;
       }
     }
 
@@ -689,7 +691,13 @@ export class Dispatcher {
       }
       // Round a loop to its own track.
       if (reserved.has(pick.edge.uid) && d >= need) break;
-      const holder = this.holds.get(pick.edge.uid);
+      const held = this.holds.get(pick.edge.uid);
+      // Backing onto cars to fetch them: they're as far as it goes.
+      if (held !== undefined && held === train.coupleTo) break;
+      // The cars it is backing onto hold their track, but it is going there to join them.
+      const holder = held === train.coupleTo ? undefined : held;
+      // A turntable turns its bridge for the train that has it, once nobody else is on it.
+      if (this.turnedAway(pick.edge) && (holder === undefined || holder === train.id) && !this.sim.onTurntable(pick.edge.uid)) this.sim.lineUp(pick.edge.uid, pick.edge.index);
       if (holder !== undefined && holder !== train.id) {
         // A train coming the other way: wait before the switch that leads onto this line, not
         // nose to nose with it halfway along, so it can come off the line there and pass.
@@ -700,7 +708,8 @@ export class Dispatcher {
         break;
       }
       // Track newly taken on must also be clear of trains standing beside it, hanging over it where lines meet.
-      const blocker = holder === undefined ? (this.besideHeld(train, pick.edge.uid) ?? this.fouledBy(train, pick.edge)) : null;
+      const near = holder === undefined ? (this.besideHeld(train, pick.edge.uid) ?? this.fouledBy(train, pick.edge)) : null;
+      const blocker = near === train.coupleTo ? null : near;
       if (blocker !== null) {
         this.stopAt(control, f, dir, d - this.standOff(train, h, pick));
         train.waitReason = `Waiting for ${this.sim.train(blocker)?.name ?? 'another train'}`;
@@ -860,8 +869,11 @@ export class Dispatcher {
    * holds it back.
    */
   room(train: Train, dir: number): number | null {
+    if (!dir) return null;
     const c = this.controls.get(train.id);
-    if (!c || !dir || c.dir !== dir) return null;
+    // Just sent somewhere new, or turned round: it waits for the next look ahead
+    // rather than running a step blind, past a piece another train holds.
+    if (!c || c.dir !== dir) return train.wrecked ? null : 0;
     const { front, back } = span(train);
     const f = dir > 0 ? front : back;
     let d = Infinity;
