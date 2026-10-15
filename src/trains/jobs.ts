@@ -51,13 +51,11 @@ export const JOB_TRAIN = { cars: 3, engine: 'steam-engine', tender: 'tender' };
  */
 export const JOB_POWER = { carsPerEngine: 8, most: 1.5 };
 
-/** A new train for a job: engine, tender, and its cars. */
-export function jobConsist(job: JobId, cars = JOB_TRAIN.cars): ConsistEntry[] {
+/** A new train for a job: engine and tender (two of each when double-headed), and its cars. */
+export function jobConsist(job: JobId, cars = JOB_TRAIN.cars, engines = 1): ConsistEntry[] {
   const def = getJob(job);
-  const out: ConsistEntry[] = [
-    { stockId: JOB_TRAIN.engine, reversed: false },
-    { stockId: JOB_TRAIN.tender, reversed: false },
-  ];
+  const out: ConsistEntry[] = [];
+  for (let i = 0; i < engines; i++) out.push({ stockId: JOB_TRAIN.engine, reversed: false }, { stockId: JOB_TRAIN.tender, reversed: false });
   const kinds = def.cars.length ? def.cars : ['coach'];
   for (let i = 0; i < cars; i++) out.push({ stockId: kinds[i % kinds.length], reversed: false });
   return out;
