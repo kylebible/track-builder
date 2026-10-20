@@ -11,14 +11,14 @@ import { edgeGrade, edgeHeight } from './network';
 import { TrainSim, type Notice, type StuckKind, type Train, type VehicleGeometry } from './sim';
 import { AXLE_HEIGHT, buildVehicle, showLoad } from './trainMesh';
 import { AccessoryView } from './accessoryView';
-import { EconomyView } from './economyView';
-import { TrainList } from './trainList';
+import { EconomyView, toggle } from './economyView';
+import { ICON, TrainList, type TrainView } from './trainList';
 import { freshAboard, getJob, JOBS, tiredAboard, type JobId } from './jobs';
 import { Synth } from '../sound/synth';
 import { TrainSounds } from '../sound/trainSounds';
 import './trains.css';
 
-// Trains on the layout. Drag engines and cars from the Trains panel onto the
+// Trains on the layout. Drag engines and cars from the Trains tab onto the
 // track: dropped by the end of a train they couple on, anywhere else they
 // start a new train. On the track, drag a vehicle to lift it off (into
 // another spot, or off the track to remove it) and tap one to turn it round.
@@ -88,9 +88,6 @@ const attachMaterial = new THREE.MeshBasicMaterial({ color: 0x1f9d55, transparen
 const attachGeometry = new THREE.TorusGeometry(10, 2.2, 10, 40);
 const pinMaterial = new THREE.MeshStandardMaterial({ color: 0x2a7fd4, emissive: 0x1a4f88, emissiveIntensity: 0.4, roughness: 0.4 });
 const pinGeometry = new THREE.ConeGeometry(8, 22, 20).rotateX(Math.PI);
-
-/** An eye: watch from the train. */
-const RIDE_ICON = '<svg viewBox="0 0 24 24"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>';
 
 const SHORT: Record<StuckKind, string> = {
   'ran-off': 'Ran off the end',
@@ -211,8 +208,10 @@ export class Trains {
   following: number | null = null;
   /** The train whose controls are open in the sidebar's list, if any. */
   selected: number | null = null;
-  /** Shows the sidebar's list of trains; set by the page. */
+  /** Shows the sidebar's Trains tab; set by the page. */
   onShowList: (() => void) | null = null;
+  /** Shows the sidebar's Track tab instead; set by the page. */
+  onHideList: (() => void) | null = null;
   /** Moves the view to a spot; set by the page. */
   onFocus: ((at: Vec2) => void) | null = null;
   private readonly meshes = new Map<string, THREE.Group>();
@@ -220,7 +219,6 @@ export class Trains {
   /** The track top, where dragged vehicles are carried. */
   private readonly trackTop = new THREE.Plane(new THREE.Vector3(0, 1, 0), -D.TRACK_HEIGHT);
 
-  private open = false;
   private paused = false;
   private speed: (typeof SPEEDS)[number] = 1;
   private layout: Layout;
@@ -236,8 +234,6 @@ export class Trains {
   readonly sounds: TrainSounds;
   private ride: Ride | null = null;
 
-  private readonly panel: HTMLElement;
-  private readonly toggle: HTMLButtonElement;
   private readonly muteButton: HTMLButtonElement;
   private readonly tiles: HTMLElement;
   private readonly pauseButton: HTMLButtonElement;
@@ -285,9 +281,7 @@ export class Trains {
         return self.sim.trains;
       },
       statusText: (t) => this.statusText(t),
-      loadText: (t) => this.loadText(t),
-      destText: (t) => this.destText(t),
-      goTo: (id) => this.goTo(id),
+      briefText: (t) => this.briefText(t),
       get following() {
         return self.following;
       },
@@ -300,20 +294,19 @@ export class Trains {
         this.sim.setThrottle(id, throttle);
         if (throttle) this.setPaused(false);
       },
-      openPanel: () => this.setOpen(true),
+      get urgentNeeds() {
+        return self.economyView?.urgentCount ?? 0;
+      },
+      onView: (view) => this.viewChanged(view),
     });
     scene.add(this.root);
 
-    this.toggle = el('button', { id: 'trains-button', title: 'Trains: drag engines and cars onto the track (Y)', type: 'button' });
-    this.toggle.innerHTML =
-      '<svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="14" rx="3"/><path d="M4 11h16"/><circle cx="8.5" cy="14" r=".5"/><circle cx="15.5" cy="14" r=".5"/><path d="m8 17-2 4"/><path d="m16 17 2 4"/></svg><span>Trains</span>';
-    this.toggle.onclick = () => this.setOpen(!this.open);
     this.sounds = new TrainSounds(new Synth(), camera);
     this.muteButton = el('button', { id: 'sound-button', type: 'button', onclick: () => this.setMuted(!this.sounds.synth.muted) });
     // Beside the view buttons, which stay pushed to the right.
-    toolbar.insertBefore(el('div', { class: 'group' }, this.toggle, this.muteButton), toolbar.lastElementChild);
+    toolbar.insertBefore(el('div', { class: 'group' }, this.muteButton), toolbar.lastElementChild);
 
-    this.pauseButton = el('button', { class: 'tr-btn', type: 'button', onclick: () => this.setPaused(!this.paused) });
+    this.pauseButton = el('button', { class: 'tp-pause', type: 'button', onclick: () => this.setPaused(!this.paused) });
     this.speedButtons = SPEEDS.map((s) => el('button', { type: 'button', textContent: `${s}×`, title: `Run at ${s}× speed`, onclick: () => this.setSpeed(s) }));
     this.toast = el('div', { class: 'tr-toast', hidden: true });
     this.hud = el('div', { class: 'tr-hud' });
@@ -326,14 +319,14 @@ export class Trains {
     const powered = (def: StockDef) => def.motor || def.supplies;
     this.tiles = el(
       'div',
-      {},
-      el('h3', { textContent: 'Engines' }),
+      { class: 'tp-stock' },
+      el('h4', { textContent: 'Engines' }),
       el('div', { class: 'tr-stock' }, ...STOCK.filter(powered).map(tile)),
-      el('h3', { textContent: 'Cars' }),
+      el('h4', { textContent: 'Cars' }),
       el('div', { class: 'tr-stock' }, ...STOCK.filter((d) => !powered(d)).map(tile)),
     );
     const supplies = el('input', { type: 'checkbox', checked: this.sim.useSupplies, onchange: () => (this.sim.useSupplies = supplies.checked) });
-    this.deliveries = el('p', { class: 'tr-deliveries' });
+    this.deliveries = el('p', { class: 'tp-deliveries' });
     const keepCoupled = el('input', {
       type: 'checkbox',
       checked: this.sim.keepCoupled,
@@ -349,30 +342,52 @@ export class Trains {
       },
     });
     this.autorouteBox = el('input', { type: 'checkbox', checked: this.sim.autoroute, onchange: () => this.sim.setAutoroute(this.autorouteBox.checked) });
-    this.panel = el(
-      'section',
-      { id: 'trains', hidden: true, ariaLabel: 'Trains' },
-      el('header', {}, el('h2', { textContent: 'Trains' }), el('button', { class: 'tr-close', type: 'button', title: 'Close', textContent: '×', onclick: () => this.setOpen(false) })),
-      el('p', { class: 'tr-lead', textContent: 'Drag engines and cars onto the track. Drop one by the end of a train to couple it on.' }),
-      this.tiles,
-      el('div', { class: 'tr-row' }, this.pauseButton, el('div', { class: 'seg' }, ...this.speedButtons), el('button', { class: 'tr-btn', type: 'button', textContent: 'Reset', title: 'Put every train back where it was built, stopped', onclick: () => this.reset() })),
-      el('label', { class: 'tr-check', title: 'Steam engines burn water and coal and battery engines use charge. Top them up at a water tower, coaling stage or charging post.' }, supplies, ' Engines use up water, coal and charge'),
-      el('label', { class: 'tr-check', title: 'Magnets never let go on their own, however long the train or tight the bend, so job trains and long trains stay in one piece. Off, they pull or slide apart like real ones (more readily in Basic mode).' }, keepCoupled, ' Keep trains coupled'),
-      el('label', { class: 'tr-check', title: 'Each train reserves the track ahead of it and sets the switches its way. A train waits short of track another train is on instead of running into it, and takes the free side of a passing loop.' }, this.autorouteBox, ' Autoroute: trains set switches and wait for each other'),
-      this.deliveries,
-      this.economyView.section,
-      el('h3', { textContent: 'Tips' }),
-      el('ul', { class: 'tr-hint' },
-        el('li', { innerHTML: 'With this panel open, <b>tap a car</b> on the track to turn it round. Red and blue ends are the magnets: red pulls blue. With it shut, tapping a train opens it in the sidebar’s Trains list.' }),
-        el('li', { innerHTML: '<b>Drag a car</b> to lift it off. Drop it off the track to take it away.' }),
-        el('li', { innerHTML: 'Each train has its own controls. Tap a switch’s <b>yellow knob</b> to change its way.' }),
-        el('li', { innerHTML: '<b>Tap a signal</b> to turn it red or green. Trains stop at stations, and under the cargo loader and by the crane to load and unload open wagons. The lifting bridge’s knob raises it.' }),
-        el('li', { innerHTML: '<b>Ride along</b> (C) watches from the cab. Drag to look around; Esc gets off.' }),
-        el('li', { innerHTML: '<b>Go to</b> on a train’s card sends it to a station or trackside place by the shortest way, setting switches as it goes. It backs up if that’s quicker.' }),
-        el('li', { innerHTML: 'Put <b>trackside</b> places from the parts palette over a straight: trains stop at water towers, mines and more when there’s work for them. <b>Jobs</b> above says what each place needs.' }),
+    // The Trains tab: run controls along the top, then the trains, adding them, or settings.
+    this.list.bar.prepend(
+      this.pauseButton,
+      el('div', { class: 'seg tp-speed', role: 'group', ariaLabel: 'Speed' }, ...this.speedButtons),
+      el('button', { class: 'tp-icon-btn', type: 'button', title: 'Reset: put every train back where it was built, stopped', innerHTML: ICON.reset, onclick: () => this.reset() }),
+    );
+    this.list.addBody.append(
+      el('section', { class: 'tp-section' },
+        el('h3', { textContent: 'Ready-made job trains' }),
+        el('p', { class: 'tp-lead', textContent: 'One tap puts a train on. It carries its own goods, picks its stops by what places need, and sets the switches.' }),
+        this.economyView.jobs,
+        this.economyView.carsRow,
+      ),
+      el('section', { class: 'tp-section' },
+        el('h3', { textContent: 'What places need' }),
+        this.economyView.needList,
+      ),
+      el('section', { class: 'tp-section' },
+        el('h3', { textContent: 'Build your own' }),
+        el('p', { class: 'tp-lead', innerHTML: 'Drag engines and cars onto the track. Drop one by the end of a train to couple it on. While this is open, <b>tap a car</b> on the track to turn it round.' }),
+        this.tiles,
       ),
     );
-    container.append(this.hud, this.panel, this.toast);
+    this.list.settingsBody.append(
+      el('section', { class: 'tp-section tp-toggles' },
+        this.economyView.autoToggle,
+        this.economyView.economyToggle,
+        toggle(supplies, 'Engines use up water, coal and charge', 'Top them up at a water tower, coaling stage or charging post.'),
+        toggle(keepCoupled, 'Keep trains coupled', 'Magnets never let go on their own. Off, long trains pull apart on tight bends like real ones.'),
+        toggle(this.autorouteBox, 'Autoroute', 'Trains set the switches and wait for each other instead of running into one another.'),
+      ),
+      this.deliveries,
+      el('details', { class: 'tp-more' },
+        el('summary', { textContent: 'Tips' }),
+        el('ul', { class: 'tr-hint' },
+          el('li', { innerHTML: '<b>Tap a train</b> on the track to open its controls here. Hover one in the list to light it up.' }),
+          el('li', { innerHTML: '<b>Drag a car</b> to lift it off. Drop it off the track to take it away. Red and blue ends are the magnets: red pulls blue.' }),
+          el('li', { innerHTML: 'Tap a switch’s <b>yellow knob</b> to change its way. <b>Tap a signal</b> to turn it red or green. The lifting bridge’s knob raises it.' }),
+          el('li', { innerHTML: 'Trains stop at stations, under the cargo loader and by the crane. Put <b>trackside places</b> from the parts palette over a straight to give them work.' }),
+          el('li', { innerHTML: '<b>Go to</b> sends a train to a place by the shortest way, setting switches as it goes. It backs up if that’s quicker.' }),
+          el('li', { innerHTML: '<b>Ride</b> (C) watches from the cab. Drag to look around; Esc gets off. Space pauses every train.' }),
+        ),
+      ),
+      this.economyView.how,
+    );
+    container.append(this.hud, this.toast);
 
     // Window capture runs before the editor's handlers on the canvas.
     window.addEventListener('pointerdown', (e) => this.pointerDown(e), { capture: true });
@@ -381,7 +396,7 @@ export class Trains {
     window.addEventListener('pointercancel', (e) => this.cancel(e));
     window.addEventListener('keydown', (e) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.ctrlKey || e.metaKey || e.altKey) return;
-      if (e.key === 'y' || e.key === 'Y') this.setOpen(!this.open);
+      if (e.key === 'y' || e.key === 'Y') (this.list.el.offsetParent ? this.onHideList : this.onShowList)?.();
       else if (e.key === 'm' || e.key === 'M') this.setMuted(!this.sounds.synth.muted);
       else if (e.key === 'c' || e.key === 'C') this.toggleRide();
       else if (e.key === 'Escape' && this.carry) this.drop(false);
@@ -395,28 +410,32 @@ export class Trains {
     this.setPaused(false);
     this.setMuted(this.sounds.synth.muted);
     this.drawLevers();
-    this.setOpen(false);
   }
 
   // ---- panel ---------------------------------------------------------------
 
-  private setOpen(open: boolean): void {
-    this.open = open;
-    this.panel.hidden = !open;
-    this.toggle.setAttribute('aria-pressed', String(open));
-    if (open && !this.thumbnails) {
+  /**
+   * Building trains: the Trains tab is showing Add a train. A tap on a car
+   * then turns it round rather than opening its train's controls.
+   */
+  private get open(): boolean {
+    return this.list.view === 'add' && this.list.el.offsetParent !== null;
+  }
+
+  private viewChanged(view: TrainView): void {
+    if (view === 'add' && !this.thumbnails) {
       this.thumbnails = renderThumbnails();
       for (const tile of this.tiles.querySelectorAll<HTMLElement>('.tr-tile')) {
         const url = this.thumbnails.get(tile.dataset.stock!);
         if (url) tile.querySelector('.tr-thumb')!.replaceChildren(el('img', { src: url, alt: '', draggable: false }));
       }
     }
-    this.updateLeverVisibility();
   }
 
   private setPaused(paused: boolean): void {
     this.paused = paused;
-    this.pauseButton.textContent = paused ? '▶ Run' : '❚❚ Pause';
+    this.pauseButton.innerHTML = paused ? `${ICON.play}<span>Run</span>` : `${ICON.pause}<span>Pause</span>`;
+    this.pauseButton.classList.toggle('paused', paused);
     this.pauseButton.title = paused ? 'Run the trains (Space)' : 'Pause every train (Space)';
   }
 
@@ -495,37 +514,45 @@ export class Trains {
   }
 
   private makeCard(t: Train): HTMLElement {
-    const drive = (label: string, title: string, throttle: 1 | 0 | -1) =>
+    const motor = t.vehicles.some((v) => v.def.motor);
+    const drive = (html: string, title: string, throttle: 1 | 0 | -1) =>
       el('button', {
         type: 'button',
-        textContent: label,
+        innerHTML: html,
         title,
-        disabled: t.wrecked,
-        className: t.throttle === throttle && !t.wrecked ? 'on' : '',
+        disabled: t.wrecked || !motor,
+        ariaPressed: String(t.throttle === throttle),
         onclick: () => {
           this.sim.setThrottle(t.id, throttle);
           if (throttle) this.setPaused(false);
         },
       });
-    const act = (label: string, title: string, onclick: () => void, cls = '') => el('button', { type: 'button', class: cls, textContent: label, title, onclick });
+    /** A small labelled button: icon over a word, or just the icon when riding along. */
+    const act = (icon: string, label: string, title: string, onclick: () => void, cls = '') =>
+      el('button', { type: 'button', class: `tr-act ${cls}`, title, innerHTML: `${icon}<span>${label}</span>`, onclick });
+    const riding = this.ride?.trainId === t.id;
     return el(
       'div',
       { class: 'tr-card' },
       el('div', { class: 'tr-card-head' }, el('b', { textContent: t.name }), el('span', { class: 'tr-card-status' })),
-      el('div', { class: 'tr-card-load' }),
-      t.vehicles.some((v) => v.def.motor) ? this.jobRow(t) : '',
       el('div', { class: 'tr-card-work', hidden: true }, el('span'), el('i', {}, el('i'))),
-      t.job === 'free' ? this.destinationPicker(t) : '',
+      el('div', { class: 'tr-card-load' }),
+      t.wrecked
+        ? el('button', { type: 'button', class: 'tr-restore', textContent: 'Put back on the rails', title: 'Put it back where it was built', onclick: () => this.restore(t) })
+        : el('div', { class: 'seg drive' },
+          drive(`${ICON.back}<span>Back</span>`, 'Engines in reverse', -1),
+          drive(`${ICON.stop}<span>Stop</span>`, 'Engines off', 0),
+          drive(`<span>Go</span>${ICON.play}`, 'Engines forward', 1),
+        ),
+      el('div', { class: 'tr-card-fields' }, motor ? this.jobRow(t) : '', t.job === 'free' ? this.destinationPicker(t) : ''),
       el('div', { class: 'tr-card-row' },
-        t.wrecked
-          ? act('Put back on the rails', 'Put it back where it was built', () => this.restore(t), 'wide')
-          : el('div', { class: 'seg drive' }, drive('◀', 'Engines in reverse', -1), drive('■', 'Engines off', 0), drive('▶', 'Engines forward', 1)),
-        t.wrecked ? '' : act('⇄', 'Turn the whole train round', () => this.turnTrain(t)),
-        t.wrecked || !t.vehicles.some((v) => v.def.motor) ? '' : this.whistleButton(t),
-        this.ride?.trainId === t.id
-          ? act('Get off', 'Back to the overhead view (Esc)', () => this.leaveCab(), 'ride on')
-          : el('button', { type: 'button', class: 'ride', title: 'Ride along: watch from the cab (C)', innerHTML: RIDE_ICON, onclick: () => this.enterCab(t.id) }),
-        act('✕', 'Take the train off the track', () => this.sim.removeTrain(t.id), 'danger'),
+        riding ? '' : act(ICON.follow, 'Follow', 'Keep the view on this train as it runs', () => (this.following = this.following === t.id ? null : t.id), 'follow'),
+        t.wrecked ? '' : act(ICON.turn, 'Turn', 'Turn the whole train round', () => this.turnTrain(t)),
+        t.wrecked || !motor ? '' : act(ICON.whistle, 'Whistle', 'Blow the whistle', () => this.sounds.whistle(t, undefined, true)),
+        riding
+          ? act(ICON.ride, 'Get off', 'Back to the overhead view (Esc)', () => this.leaveCab(), 'ride on')
+          : act(ICON.ride, 'Ride', 'Ride along: watch from the cab (C)', () => this.enterCab(t.id), 'ride'),
+        act(ICON.remove, 'Remove', 'Take the train off the track', () => this.sim.removeTrain(t.id), 'danger'),
       ),
     );
   }
@@ -537,7 +564,7 @@ export class Trains {
       { class: 'tr-job', title: 'What this train is for. With a job it picks its own stops and sets the switches.', onchange: () => this.sim.setJob(t.id, select.value as JobId) },
       ...JOBS.map((j) => el('option', { value: j.id, textContent: `${j.icon} ${j.name}`, selected: j.id === t.job, title: j.blurb })),
     );
-    return el('div', { class: 'tr-card-job' }, select, el('span', { class: 'tr-card-dest' }));
+    return el('label', { class: 'tr-field' }, el('span', { textContent: 'Job' }), select);
   }
 
   /** Where a job train is heading, for its card. */
@@ -574,11 +601,11 @@ export class Trains {
           this.setPaused(false);
         },
       },
-      el('option', { value: '', textContent: t.dispatch ? 'Stop going there' : 'Go to…' }),
+      el('option', { value: '', textContent: t.dispatch ? 'Stop going there' : 'Anywhere' }),
       ...places.map((p) => el('option', { value: p.uid, textContent: p.name })),
     );
     select.value = current;
-    return el('div', { class: 'tr-card-row' }, select);
+    return el('label', { class: 'tr-field' }, el('span', { textContent: 'Go to' }), select);
   }
 
   /** Stores and cargo, for the card: "Water 60% · Coal 80% · 5 passengers". */
@@ -613,6 +640,25 @@ export class Trains {
     if (carried.length) for (const [kind, n] of carried) parts.push(cargoCount(kind, n));
     else if (cargo.size && parts.every((p) => !/going/.test(p))) parts.push('Cars empty');
     return parts.join(' · ');
+  }
+
+  /**
+   * One line for a train's row: where it's heading and what it's carrying,
+   * with stores only once they're running low.
+   */
+  briefText(t: Train): string {
+    const parts: string[] = [];
+    const dest = t.dispatch?.dest.kind === 'place' ? this.sim.destinations().find((p) => p.uid === (t.dispatch!.dest as { uid: string }).uid)?.name : undefined;
+    const heading = dest ? `→ ${dest}` : this.destText(t);
+    if (heading) parts.push(heading);
+    for (const part of this.loadText(t).split(' · ')) {
+      const store = /^(Water|Coal|Battery) (\d+)%$/.exec(part);
+      if (!store) {
+        if (part) parts.push(part);
+      } else if (Number(store[2]) < 30) parts.push(`${store[1]} low`);
+    }
+    if (!parts.length) parts.push(t.vehicles.some((v) => v.def.motor) ? (t.job === 'free' ? 'Free running' : '') : 'No engine');
+    return parts.filter(Boolean).join(' · ');
   }
 
   /** Bubbles over engines passing signs, and the tally of deliveries. */
@@ -651,12 +697,6 @@ export class Trains {
     const text = delivered.length ? `Delivered: ${delivered.map(([k, n]) => cargoCount(k, n)).join(', ')}.` : '';
     if (this.deliveries.textContent !== text) this.deliveries.textContent = text;
     this.deliveries.hidden = !text;
-  }
-
-  private whistleButton(t: Train): HTMLButtonElement {
-    const b = el('button', { type: 'button', class: 'whistle', title: 'Blow the whistle', onclick: () => this.sounds.whistle(t, undefined, true) });
-    b.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>';
-    return b;
   }
 
   private turnTrain(t: Train): void {
@@ -795,11 +835,7 @@ export class Trains {
         if (span.textContent !== doing.summary) span.textContent = doing.summary;
         work.querySelector<HTMLElement>('i i')!.style.width = `${doing.total ? Math.round((100 * doing.done) / doing.total) : 100}%`;
       }
-      const heading = card.querySelector<HTMLElement>('.tr-card-dest');
-      if (heading) {
-        const text = this.destText(t);
-        if (heading.textContent !== text) heading.textContent = text;
-      }
+      card.querySelector('.follow')?.setAttribute('aria-pressed', String(this.following === t.id));
       const status = card.querySelector<HTMLElement>('.tr-card-status')!;
       status.textContent = this.statusText(t);
       status.title = t.status.kind === 'stuck' ? t.status.message : '';

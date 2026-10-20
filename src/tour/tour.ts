@@ -34,8 +34,8 @@ export const STEPS: TourStep[] = [
   },
   {
     title: 'Run a train',
-    body: 'Open Trains and drag an engine onto the track. Tap a switch’s lever to send it the other way.',
-    anchor: ['#trains-button'],
+    body: 'Open the Trains tab and add a ready-made train, or drag an engine onto the track. Tap a switch’s lever to send it the other way.',
+    anchor: ['#tab-trains'],
   },
   {
     title: 'Check it',
