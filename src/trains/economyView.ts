@@ -23,6 +23,12 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLEl
   return node;
 };
 
+/** A switch with what it does under it, for the Trains tab's settings. */
+export function toggle(input: HTMLInputElement, label: string, detail: string): HTMLElement {
+  input.classList.add('tp-switch-input');
+  return el('label', { class: 'tp-toggle' }, el('span', { class: 'tp-toggle-text' }, el('b', { textContent: label }), el('small', { textContent: detail })), input, el('span', { class: 'tp-switch', ariaHidden: 'true' }));
+}
+
 /** How often the needs list and badges' contents are worked out, ms. */
 const REFRESH_MS = 400;
 
@@ -34,9 +40,16 @@ export interface EconomyHost {
 }
 
 export class EconomyView {
-  /** The Jobs part of the Trains panel. */
-  readonly section: HTMLElement;
-  private readonly needList: HTMLElement;
+  /** One button per job, each putting a ready-made train on. */
+  readonly jobs: HTMLElement;
+  /** How many cars a ready-made train gets. */
+  readonly carsRow: HTMLElement;
+  /** What places need, with a button to add the train that sorts it out. */
+  readonly needList: HTMLElement;
+  readonly economyToggle: HTMLElement;
+  readonly autoToggle: HTMLElement;
+  /** How places and stops work, folded away. */
+  readonly how: HTMLElement;
   private readonly badges = new Map<string, { el: HTMLElement; key: string }>();
   private info: { uid: string; el: HTMLElement } | null = null;
   private lastRefresh = 0;
@@ -60,34 +73,32 @@ export class EconomyView {
     this.needList = el('ul', { class: 'ec-needs' });
     const add = (job: (typeof JOBS)[number]) =>
       el('button', { type: 'button', class: 'ec-job', title: `Add a ${job.name.toLowerCase()} train. ${job.blurb}`, onclick: () => host.addJobTrain(job.id) }, el('span', { textContent: job.icon }), job.name);
-    this.section = el(
-      'div',
-      { class: 'ec' },
-      el('h3', { textContent: 'Jobs' }),
-      el('p', { class: 'tr-lead', textContent: 'A train with a job carries its own goods, picks its next stop by what places need, and throws the switches to get there. Pick one on a train’s card, or add a ready-made one:' }),
-      el('div', { class: 'ec-jobs' }, ...JOBS.filter((j) => j.id !== 'free').map(add)),
-      el('label', { class: 'ec-row' }, 'Engine, tender and ', this.carsInput, ' cars'),
-      el('label', { class: 'tr-check', title: 'Places make goods only while staffed, and keep what trains bring. Off, every place has everything and needs nobody.' }, on, ' Places need goods and workers'),
-      el('label', {
-        class: 'tr-check',
-        title: 'Puts on job trains for whatever places need, as many as the track has room for. Couples on another engine when one stalls, lifts off trains that come off the rails or jam, and tops up any that run dry. Workers stay longer on big layouts.',
-      }, auto, ' Run the jobs by themselves'),
-      el('h3', { textContent: 'Needs' }),
-      this.needList,
-      el('details', { class: 'ec-how' },
-        el('summary', { textContent: 'How stops work' }),
-        el('ul', { class: 'tr-hint' },
-          el('li', { innerHTML: 'Each place keeps a store. Mines, farms, camps and the pump house <b>make</b> goods; towers, stages, markets and sheds <b>take</b> them in. Tap a place’s badge for what it does.' }),
-          el('li', { innerHTML: 'Places need <b>workers</b>. They tire after a few minutes and wait to go home; a <b>workers train</b> takes them to the station and brings fresh ones.' }),
-          el('li', { innerHTML: 'Steam engines refill at a <b>water tower</b> and <b>coaling stage</b>, which can run dry. Charging posts need a <b>power station</b> with coal.' }),
-          el('li', { innerHTML: '<b>Car sidings</b> mark a buffered dead-end road. With jobs running by themselves, idle freight wagons park there with their cargo aboard. An engine from the shed fetches them when they are needed again. Tap the badge to see the wagons and cargo waiting.' }),
-          el('li', { innerHTML: 'Badges: <span class="ec-key ok"></span> fine, <span class="ec-key low"></span> low with a train on it, <span class="ec-key need"></span> needs a train you haven’t got. <span class="ec-dot"></span> worker at work, <span class="ec-dot empty"></span> empty place, 😴 tired and waiting.' }),
-        ),
+    this.jobs = el('div', { class: 'ec-jobs' }, ...JOBS.filter((j) => j.id !== 'free').map(add));
+    this.carsRow = el('label', { class: 'ec-row' }, 'Cars behind the engine and tender', this.carsInput);
+    this.economyToggle = toggle(on, 'Places need goods and workers', 'Places make goods only while staffed, and keep what trains bring. Off, every place has everything.');
+    this.autoToggle = toggle(
+      auto,
+      'Run the jobs by themselves',
+      'Puts on job trains for whatever places need, helps stalled ones with another engine, and lifts off trains that jam.',
+    );
+    this.how = el('details', { class: 'tp-more' },
+      el('summary', { textContent: 'How stops and places work' }),
+      el('ul', { class: 'tr-hint' },
+        el('li', { innerHTML: 'Each place keeps a store. Mines, farms, camps and the pump house <b>make</b> goods; towers, stages, markets and sheds <b>take</b> them in. Tap a place’s badge for what it does.' }),
+        el('li', { innerHTML: 'Places need <b>workers</b>. They tire after a few minutes and wait to go home; a <b>workers train</b> takes them to the station and brings fresh ones.' }),
+        el('li', { innerHTML: 'Steam engines refill at a <b>water tower</b> and <b>coaling stage</b>, which can run dry. Charging posts need a <b>power station</b> with coal.' }),
+        el('li', { innerHTML: '<b>Car sidings</b> mark a buffered dead-end road. With jobs running by themselves, idle freight wagons park there with their cargo aboard. An engine from the shed fetches them when they are needed again. Tap the badge to see the wagons and cargo waiting.' }),
+        el('li', { innerHTML: 'Badges: <span class="ec-key ok"></span> fine, <span class="ec-key low"></span> low with a train on it, <span class="ec-key need"></span> needs a train you haven’t got. <span class="ec-dot"></span> worker at work, <span class="ec-dot empty"></span> empty place, 😴 tired and waiting.' }),
       ),
     );
     window.addEventListener('pointerdown', (e) => {
       if (this.info && !(e.target as Element).closest?.('.ec-info, .ec-badge')) this.closeInfo();
     });
+  }
+
+  /** How many places need a train nobody has put on. */
+  get urgentCount(): number {
+    return this.current.filter((n) => n.urgent && n.job).length;
   }
 
   /** Redraw the badges over every place, and the needs list. */

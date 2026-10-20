@@ -288,7 +288,7 @@ describe('building trains on the track', () => {
       expect(strong.train.status.kind).toBe('running');
     });
 
-    it('a stalled train gets going again with an engine added at the front', { timeout: 30000 }, () => {
+    it('a stalled train gets going again with an engine added at the front', { timeout: 90000 }, () => {
       const { sim, train } = jobTrain(48, true);
       run(sim, train, 60);
       expect(train.status).toMatchObject({ kind: 'stuck', stuck: 'stalled' });

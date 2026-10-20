@@ -192,6 +192,8 @@ function showTab(which: 'track' | 'trains'): void {
   tabs.trains.setAttribute('aria-selected', String(which === 'trains'));
   document.getElementById('palette')!.hidden = which !== 'track';
   trainTab.hidden = which !== 'trains';
+  // On a phone the dock grows to fit a train's controls.
+  document.body.classList.toggle('trains-tab', which === 'trains');
   if (which === 'trains') trains.list.update();
   try {
     localStorage.setItem('sidebar-tab', which);
@@ -200,6 +202,7 @@ function showTab(which: 'track' | 'trains'): void {
   }
 }
 trains.onShowList = () => showTab('trains');
+trains.onHideList = () => showTab('track');
 tabs.track.onclick = () => showTab('track');
 tabs.trains.onclick = () => showTab('trains');
 try {
