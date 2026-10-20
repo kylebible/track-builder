@@ -235,6 +235,20 @@ describe('generating a section', () => {
     }
   });
 
+  it('gives a loop going out to car sidings a dead-end road for them, with a buffer stop', () => {
+    for (const seed of [1, 2, 3]) {
+      const section = generateSection(EMPTY_LAYOUT, { ...plainRun, pieces: 16, switches: 1, closed: 1, loopTo: ['car-sidings'], seed })!;
+      expect(section.loops).toBe(1);
+      expect(section.visits).toBe(1);
+      const pieces = added(section.layout, section.uids);
+      expect(pieces.filter((p) => p.pieceId === 'car-sidings')).toHaveLength(1);
+      // Two switches for the loop and one into the yard, whose road ends at a buffer stop.
+      expect(pieces.filter((p) => getPiece(p.pieceId).category === 'switch')).toHaveLength(3);
+      expect(pieces.filter((p) => getPiece(p.pieceId).category === 'buffer')).toHaveLength(1);
+      expectSound(section.layout);
+    }
+  });
+
   it('mixes in other kinds of track when asked, and only plain track when not', () => {
     const kinds = (variety: SectionOptions['variety']) =>
       new Set(
