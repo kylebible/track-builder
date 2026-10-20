@@ -115,7 +115,7 @@ function loopTo(index: number, value: string, onPick: (id: string) => void): HTM
     return o;
   };
   select.append(option('Just a loop', ''));
-  const stores = LOOP_STOPS.filter((id) => getPlace(id)?.store);
+  const stores = LOOP_STOPS.filter((id) => getPlace(id)?.store || getPlace(id)?.spares);
   for (const [label, ids] of [['Job stops', LOOP_STOPS.filter((id) => !stores.includes(id))], ['Yards', stores]] as const) {
     const shown = ids.filter((id) => offered(getPiece(id)));
     if (!shown.length) continue;

@@ -7,7 +7,7 @@ import * as D from '../pieces/dimensions';
 import type { Gender } from '../pieces/types';
 import { checkLayout } from '../planning/check';
 import { CRANE } from '../scenery/models';
-import { PLACES } from '../trains/stops';
+import { getPlace, PLACES } from '../trains/stops';
 import { layoutTraps, newTrapEntries } from '../trains/traps';
 import { estimate, findFills, trackMoves, type Fill, type TrackMove, type Way } from './fill';
 import { addPiece, baseOf, defOf, findPiece, sameEnd, worldEnd, type EndRef, type Layout } from './layout';
@@ -69,8 +69,10 @@ export const DEFAULT_SECTION: SectionOptions = {
   seed: 1,
 };
 
-/** Job stops a loop can go out to: any place trains do work at. */
+/** Job stops a loop can go out to: any place trains do work at, and car sidings, laid as a yard off the loop. */
 export const LOOP_STOPS: readonly string[] = PLACES.filter((p) => p.id !== 'pump-house').map((p) => p.id);
+/** Straights in a yard's dead-end road, before its buffer stop. */
+const YARD_ROAD = 2;
 
 export const MAX_SECTION_PIECES = 120;
 /** As many stops as there could be room for: one on every other piece of the longest section. */
@@ -122,7 +124,8 @@ export const STOPS: readonly StopDef[] = [
   { id: 'cargo-loader', how: 'seat' },
   { id: 'crane', how: 'beside', offset: (CRANE.minReach + CRANE.maxReach) / 2 },
   // Not the pump house: it only works by a river or lake, which the generator can't promise.
-  ...PLACES.filter((p) => p.id !== 'station' && p.id !== 'pump-house').map((p): StopDef => ({ id: p.id, how: 'seat' })),
+  // Not car sidings either: they need a dead end, which only a loop's yard gets (see Attempt.yard).
+  ...PLACES.filter((p) => p.id !== 'station' && p.id !== 'pump-house' && !p.spares).map((p): StopDef => ({ id: p.id, how: 'seat' })),
 ];
 
 const CATALOG_IDS = new Set(CATALOG.map((p) => p.id));
@@ -646,7 +649,8 @@ class Attempt {
     this.loopsToJoin.length = 0;
     this.leaving = [];
     for (const [from, to, pair] of ends) {
-      const stop = STOPS.find((st) => st.id === opts.loopTo?.[pair] && LOOP_STOPS.includes(st.id) && offered(getPiece(st.id)));
+      const id = opts.loopTo?.[pair] ?? '';
+      const stop: StopDef | undefined = LOOP_STOPS.includes(id) && offered(getPiece(id)) ? { id, how: 'seat' } : undefined;
       if (to && this.joinLoop(from, to, play, budgetMs, stop)) {
         this.loops++;
         continue;
@@ -684,6 +688,7 @@ class Attempt {
 
   /** Seat a job stop on a straight laid on from `from`, kept apart from the stops along the line. Where to carry on from, or null. */
   private visit(from: EndRef, stop: StopDef): EndRef | null {
+    if (getPlace(stop.id)?.spares) return this.yard(from, stop);
     const end = this.end;
     const laid = this.laid;
     this.end = from;
@@ -692,6 +697,39 @@ class Attempt {
     this.end = end;
     this.laid = laid;
     return ok ? out : null;
+  }
+
+  /**
+   * A yard off a loop: a switch trailing for trains coming round, so an
+   * engine can pass it and back in, with a dead-end road to a buffer stop
+   * off its branch and the stop's sign beside the road. Where the loop
+   * carries on from, or null.
+   */
+  private yard(from: EndRef, stop: StopDef): EndRef | null {
+    const g = this.gender(from);
+    const base = weighted(LOOP_SWITCHES.filter(([b]) => offered(getPiece(b))), this.rand);
+    const straights = trackMoves().filter((m) => m.kind === 'straight' && m.dz === 0 && m.length >= D.LONG_STRAIGHT - 1);
+    for (const flipped of shuffle([false, true], this.rand)) {
+      const id = [base, `${base}-peg`].find((v) => getPiece(v).connectors.find((c) => c.id === 'branch0')!.gender !== g);
+      if (!id || !offered(getPiece(id))) continue;
+      const was = this.snapshot();
+      const seats = this.seats.length;
+      const uid = this.place(from, id, flipped, 'branch0');
+      let road: string | null = null;
+      let end: EndRef | null = uid ? { uid, connectorId: 'branch1' } : null;
+      for (let i = 0; end && i < YARD_ROAD; i++) {
+        const laid = this.plain(end, shuffle(straights, this.rand));
+        road ??= laid?.uid ?? null;
+        end = laid?.out ?? null;
+      }
+      if (uid && road && end && this.place(end, this.gender(end) === 'peg' ? 'buffer' : 'buffer-peg', false)) {
+        this.seats.push({ uid: road, stop, visit: true });
+        return { uid, connectorId: 'trunk' };
+      }
+      this.seats.length = seats;
+      this.restore(was);
+    }
+    return null;
   }
 
   /**
